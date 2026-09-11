@@ -1,0 +1,81 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          XCODE=""
+          for p in \
+            /Applications/Xcode_26.3.app \
+            /Applications/Xcode_26.2.app \
+            /Applications/Xcode_26.1.1.app \
+            /Applications/Xcode_26.0.1.app \
+            /Applications/Xcode_26.app \
+            /Applications/Xcode_16.4.app \
+            /Applications/Xcode_16.3.app \
+            /Applications/Xcode_16.2.app; do
+            if [ -d "$p" ]; then XCODE="$p"; break; fi
+          done
+          if [ -z "$XCODE" ]; then
+            XCODE=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1 || true)
+          fi
+          if [ -z "$XCODE" ]; then
+            echo "Xcode not found. Installed:"
+            ls /Applications | grep -i xcode || true
+            exit 1
+          fi
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Build unsigned (iphoneos)
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project SeHuaTang.xcodeproj \
+            -scheme SeHuaTang \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES=YES \
+            build
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP=$(find DerivedData/Build/Products -path '*/Release-iphoneos/*.app' | head -1)
+          echo "APP=$APP"
+          test -n "$APP" && test -d "$APP"
+          rm -rf Payload
+          mkdir Payload
+          cp -R "$APP" Payload/
+          find Payload -name '*.xcent' -delete || true
+          find Payload -name 'embedded.mobileprovision' -delete || true
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Payload/SeHuaTang.app/Info.plist)
+          BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Payload/SeHuaTang.app/Info.plist)
+          NAME="SeHuaTang-unsigned-${VERSION}-${BUILD}.ipa"
+          zip -qry "$NAME" Payload
+          ls -lh "$NAME"
+          echo "IPA_NAME=$NAME" >> "$GITHUB_ENV"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SeHuaTang-unsigned-ipa
+          path: SeHuaTang-unsigned-*.ipa
+          if-no-files-found: error

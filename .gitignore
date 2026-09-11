@@ -1,0 +1,17 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.perspectivev3
+*.ipa
+Payload/
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
