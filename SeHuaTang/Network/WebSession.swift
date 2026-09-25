@@ -47,6 +47,7 @@ final class WebSession: NSObject, ObservableObject {
             let work = DispatchWorkItem { [weak self] in
                 Task { @MainActor in
                     guard let self, let c = self.waiters.removeValue(forKey: id) else { return }
+                    self.webView.stopLoading()
                     c.resume(throwing: URLError(.timedOut))
                 }
             }

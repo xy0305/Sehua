@@ -17,7 +17,18 @@ struct RootView: View {
             .tabItem { Label("我的", systemImage: "person.crop.circle") }
         }
         .tint(ForumChrome.blue)
+        .background {
+            HiddenWebView()
+                .frame(width: 1, height: 1)
+                .opacity(0.01)
+                .allowsHitTesting(false)
+        }
     }
+}
+
+struct HiddenWebView: UIViewRepresentable {
+    func makeUIView(context: Context) -> WKWebView { WebSession.shared.webView }
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
 
 struct ChallengeBanner: View {
