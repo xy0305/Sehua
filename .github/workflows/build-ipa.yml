@@ -66,12 +66,10 @@ jobs:
           cp -R "$APP" Payload/
           find Payload -name '*.xcent' -delete || true
           find Payload -name 'embedded.mobileprovision' -delete || true
-          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Payload/SeHuaTang.app/Info.plist)
-          BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Payload/SeHuaTang.app/Info.plist)
-          if [ "$VERSION" = '$(MARKETING_VERSION)' ] || [ -z "$VERSION" ]; then
-            VERSION=$(sed -n 's/.*MARKETING_VERSION = \([0-9.]*\);/\1/p' SeHuaTang.xcodeproj/project.pbxproj | head -1)
-            BUILD=$(sed -n 's/.*CURRENT_PROJECT_VERSION = \([0-9]*\);/\1/p' SeHuaTang.xcodeproj/project.pbxproj | head -1)
-          fi
+          VERSION=$(sed -n 's/.*MARKETING_VERSION = \([0-9.]*\);/\1/p' SeHuaTang.xcodeproj/project.pbxproj | head -1)
+          BUILD=$(sed -n 's/.*CURRENT_PROJECT_VERSION = \([0-9]*\);/\1/p' SeHuaTang.xcodeproj/project.pbxproj | head -1)
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Payload/SeHuaTang.app/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" Payload/SeHuaTang.app/Info.plist
           if [ "$VERSION" = '$(MARKETING_VERSION)' ] || [ -z "$VERSION" ]; then
             VERSION=$(sed -n 's/.*MARKETING_VERSION = \([0-9.]*\);/\1/p' SeHuaTang.xcodeproj/project.pbxproj | head -1)
             BUILD=$(sed -n 's/.*CURRENT_PROJECT_VERSION = \([0-9]*\);/\1/p' SeHuaTang.xcodeproj/project.pbxproj | head -1)
