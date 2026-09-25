@@ -167,6 +167,12 @@ struct ForumTopBar: View {
     }
 }
 
+extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
+
 extension LoadState {
     var errorMessage: String? {
         if case .failed(let message) = self { return message }
