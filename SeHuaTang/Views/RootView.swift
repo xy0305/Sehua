@@ -6,19 +6,8 @@ struct RootView: View {
     @State private var tab = 0
 
     var body: some View {
-        TabView(selection: $tab) {
-            NavigationStack { ForumHomeView() }
-                .tabItem { Label("论坛", systemImage: "square.grid.2x2.fill") }
-                .tag(0)
-            NavigationStack { SearchView() }
-                .tabItem { Label("搜索", systemImage: "magnifyingglass") }
-                .tag(1)
-            NavigationStack { MineView() }
-                .tabItem { Label("我的", systemImage: "person.crop.circle") }
-                .tag(2)
-        }
-        .background {
-            HiddenWebView().frame(width: 1, height: 1).opacity(0.01).allowsHitTesting(false)
+        NavigationStack {
+            ForumShellView()
         }
     }
 }
