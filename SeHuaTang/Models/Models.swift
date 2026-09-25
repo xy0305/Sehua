@@ -94,6 +94,8 @@ struct PortalPage {
     var notices: [SiteNotice]
     var sections: [PortalSection]
 }
+
+enum LoadState: Equatable {
     case idle
     case loading
     case failed(String)
