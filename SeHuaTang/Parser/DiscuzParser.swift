@@ -1,6 +1,56 @@
 import Foundation
 
 enum DiscuzParser {
+    static func parsePortal(_ html: String, base: URL) -> PortalPage {
+        var notices: [SiteNotice] = []
+        var seenNotice = Set<Int>()
+        if let box = HTML.firstMatch(#"class="n5_ggmk[\s\S]*?</ul>"#, in: html) {
+            let hrefs = HTML.allMatches(#"<a href="([^"]*tid=\d+[^"]*)"[^>]*>([\s\S]*?)</a>"#, in: box, group: 1)
+            let titles = HTML.allMatches(#"<a href="([^"]*tid=\d+[^"]*)"[^>]*>([\s\S]*?)</a>"#, in: box, group: 2)
+            let dates = HTML.allMatches(#"<i>([^<]*)</i>"#, in: box, group: 1)
+            for (i, pair) in zip(hrefs, titles).enumerated() {
+                guard let tid = HTML.queryInt("tid", in: pair.0), seenNotice.insert(tid).inserted else { continue }
+                let title = HTML.stripTags(pair.1)
+                if title.isEmpty || SiteConfig.isAdText(title) { continue }
+                let date = i < dates.count ? dates[i] : ""
+                notices.append(SiteNotice(id: tid, title: title, dateText: date))
+            }
+        }
+
+        var sections: [PortalSection] = []
+        let blocks = html.components(separatedBy: "n5_hdlbmk")
+        for (index, raw) in blocks.dropFirst().enumerated() {
+            let block = String(raw.prefix(20000))
+            let title = HTML.stripTags(HTML.firstMatch(#"class="n5_tbzxbt[^"]*"[^>]*>([\s\S]*?)</div>"#, in: block) ?? "")
+                .replacingOccurrences(of: "更多", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if title.isEmpty || SiteConfig.isAdText(title) { continue }
+            let more = HTML.firstMatch(#"<a href="([^"]*)"[^>]*>更多</a>"#, in: block) ?? ""
+            var items: [PortalItem] = []
+            var seen = Set<Int>()
+            let lis = block.components(separatedBy: "<li")
+            for li in lis.dropFirst() {
+                let card = "<li" + li
+                guard let href = HTML.firstMatch(#"href="([^"]*tid=\d+[^"]*)""#, in: card),
+                      let tid = HTML.queryInt("tid", in: href), seen.insert(tid).inserted else { continue }
+                let itemTitle = HTML.stripTags(HTML.firstMatch(#"<h2>([\s\S]*?)</h2>"#, in: card) ?? "")
+                if itemTitle.isEmpty || SiteConfig.isAdText(itemTitle) { continue }
+                let views = HTML.firstMatch(#"class="yd">(\d+)"#, in: card) ?? ""
+                let meta = HTML.stripTags(HTML.firstMatch(#"<p>([\s\S]*?)</p>"#, in: card) ?? "")
+                let parts = meta.components(separatedBy: "/").map { $0.trimmingCharacters(in: .whitespaces) }
+                let author = parts.first ?? ""
+                let board = parts.count > 1 ? parts[1] : ""
+                let avatar = HTML.firstMatch(#"<img[^>]+src="(/uc_server/[^"]+)"#, in: card)
+                let avatarURL: URL? = avatar.flatMap { HTML.absURL($0, base: base) }
+                items.append(PortalItem(id: tid, title: itemTitle, author: author, board: board, views: views, avatarURL: avatarURL))
+            }
+            if !items.isEmpty {
+                sections.append(PortalSection(id: "\(index)-\(title)", title: title, moreHref: more, items: items))
+            }
+        }
+        return PortalPage(notices: notices, sections: sections)
+    }
+
     static func parseForumList(_ html: String) -> [ForumCategory] {
         var cats: [ForumCategory] = []
         let tabIDs = HTML.allMatches(#"<li id="a_tab(\d+)""#, in: html, group: 1)
@@ -89,7 +139,8 @@ enum DiscuzParser {
                 .replacingOccurrences(of: "发布", with: "")
                 .trimmingCharacters(in: .whitespaces)
             let avatar = HTML.firstMatch(#"<img[^>]+src="(/uc_server/[^"]+)"#, in: card)
-            let cover = HTML.firstMatch(#"data-original="(https?://[^"]+)"#, in: card)
+            let covers = HTML.allMatches(#"data-original="(https?://[^"]+)"#, in: card, group: 1)
+            let cover = covers.first
             let replies = HTML.stripTags(HTML.firstMatch(#"n5_hthfcs[\s\S]{0,180}?</i>\s*([^<]+)"#, in: card) ?? "")
             let likes = HTML.stripTags(HTML.firstMatch(#"n5_htdzcs[\s\S]{0,180}?</i>\s*([^<]+)"#, in: card) ?? "")
             let views = HTML.stripTags(HTML.firstMatch(#"n5_htsccs[\s\S]{0,180}?</i>\s*([^<]+)"#, in: card) ?? "")

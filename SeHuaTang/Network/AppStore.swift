@@ -18,6 +18,8 @@ final class AppStore: ObservableObject {
 
     @Published var searchHits: [SearchHit] = []
     @Published var searchState: LoadState = .idle
+    @Published var portal = PortalPage(notices: [], sections: [])
+    @Published var portalState: LoadState = .idle
 
     func loadForums() async {
         forumState = .loading
@@ -73,6 +75,21 @@ final class AppStore: ObservableObject {
     func loadMore() async {
         guard let fid = currentFID, threadHasNext, threadState != .loading else { return }
         await loadThreads(fid: fid, page: threadPage + 1, typeid: currentTypeID, order: currentOrder, append: true)
+    }
+
+    func loadPortal() async {
+        portalState = .loading
+        do {
+            let html = try await WebSession.shared.fetchHTML("portal.php?mod=index&mobile=2")
+            if DiscuzParser.looksLikeChallenge(html) {
+                portalState = .failed("需要过验证，请到「我的」打开网页登录")
+                return
+            }
+            portal = DiscuzParser.parsePortal(html, base: WebSession.shared.baseURL)
+            portalState = .idle
+        } catch {
+            portalState = .failed(error.localizedDescription)
+        }
     }
 
     func search(_ q: String) async {

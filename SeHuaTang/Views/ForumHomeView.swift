@@ -108,6 +108,7 @@ enum ForumChrome {
 struct ForumTopBar: View {
     let title: String
     var showsSegment = false
+    var segment = 1
     var showsBack = true
     var onRefresh: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
@@ -134,16 +135,26 @@ struct ForumTopBar: View {
             Spacer(minLength: 0)
             if showsSegment {
                 HStack(spacing: 0) {
-                    Text("话题")
-                        .frame(width: 68, height: 28)
-                        .background(Color.white.opacity(0.16))
-                    Text("版块")
-                        .frame(width: 68, height: 28)
-                        .background(Color.white)
-                        .foregroundStyle(ForumChrome.bar)
+                    NavigationLink {
+                        PortalView()
+                    } label: {
+                        Text("话题")
+                            .frame(width: 68, height: 28)
+                            .background(segment == 0 ? Color.white : Color.white.opacity(0.16))
+                            .foregroundStyle(segment == 0 ? ForumChrome.bar : .white)
+                    }
+                    .buttonStyle(.plain)
+                    NavigationLink {
+                        ForumHomeView()
+                    } label: {
+                        Text("版块")
+                            .frame(width: 68, height: 28)
+                            .background(segment == 1 ? Color.white : Color.white.opacity(0.16))
+                            .foregroundStyle(segment == 1 ? ForumChrome.bar : .white)
+                    }
+                    .buttonStyle(.plain)
                 }
                 .font(.system(size: 14))
-                .foregroundStyle(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.7), lineWidth: 1))
             } else {

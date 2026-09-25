@@ -47,24 +47,50 @@ struct ThreadDetailView: View {
                     authorBar(post)
                 }
 
-                if !d.magnets.isEmpty {
+                if !d.magnets.isEmpty || !d.attachments.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("下载").font(.system(size: 15, weight: .semibold))
-                        ForEach(d.magnets) { m in
+                        ForEach(d.magnets + d.attachments) { m in
                             HStack {
                                 Image(systemName: m.isMagnet ? "link" : "arrow.down.doc")
                                     .foregroundStyle(ForumChrome.blue)
-                                Text(m.isMagnet ? "磁力链接" : m.name).lineLimit(1)
+                                Text(m.isMagnet ? "磁力链接" : (m.isED2K ? "eD2k" : m.name)).lineLimit(1)
                                 Spacer()
                                 Button(copied ? "已复制" : "复制") {
                                     UIPasteboard.general.string = m.url.absoluteString
                                     copied = true
                                 }
                                 .font(.system(size: 13, weight: .semibold))
-                                Button("打开") { UIApplication.shared.open(m.url) }
+                                Button("打开") { SiteLinks.open(m.url) }
                                     .font(.system(size: 13, weight: .semibold))
                             }
                             .font(.system(size: 14))
+                        }
+                    }
+                    .padding(14)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal, 12)
+                }
+
+                if let body = d.posts.first?.htmlBody, !SiteLinks.links(in: body, base: session.baseURL).isEmpty {
+                    let links = SiteLinks.links(in: body, base: session.baseURL)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("链接").font(.system(size: 15, weight: .semibold))
+                        ForEach(links, id: \.absoluteString) { url in
+                            Button {
+                                SiteLinks.open(url)
+                            } label: {
+                                HStack {
+                                    Image(systemName: SiteLinks.staysInApp(url) ? "doc.text" : "safari")
+                                    Text(url.host ?? url.absoluteString).lineLimit(1)
+                                    Spacer()
+                                    Text(SiteLinks.staysInApp(url) ? "打开" : "浏览器")
+                                        .font(.system(size: 12, weight: .semibold))
+                                }
+                                .font(.system(size: 14))
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(14)

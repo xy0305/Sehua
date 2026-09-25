@@ -68,7 +68,32 @@ struct SearchHit: Identifiable, Hashable {
     var dateText: String
 }
 
-enum LoadState: Equatable {
+struct SiteNotice: Identifiable, Hashable {
+    let id: Int
+    var title: String
+    var dateText: String
+}
+
+struct PortalSection: Identifiable, Hashable {
+    let id: String
+    var title: String
+    var moreHref: String
+    var items: [PortalItem]
+}
+
+struct PortalItem: Identifiable, Hashable {
+    let id: Int
+    var title: String
+    var author: String
+    var board: String
+    var views: String
+    var avatarURL: URL?
+}
+
+struct PortalPage {
+    var notices: [SiteNotice]
+    var sections: [PortalSection]
+}
     case idle
     case loading
     case failed(String)
