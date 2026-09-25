@@ -110,22 +110,33 @@ private enum AssociatedKeys {
 extension WebSession: WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         clickAgeGateIfNeeded()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+        collectHTML(attempt: 0)
+    }
+
+    private func collectHTML(attempt: Int) {
+        let delay: TimeInterval = attempt == 0 ? 0.4 : 0.7
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }
             self.webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] result, _ in
                 let html = (result as? String) ?? ""
                 Task { @MainActor in
+                    guard let self else { return }
                     if DiscuzParser.looksLikeChallenge(html) {
-                        self?.needsChallenge = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                            self?.webView.evaluateJavaScript("document.documentElement.outerHTML") { r, _ in
-                                let h = (r as? String) ?? ""
-                                Task { @MainActor in self?.finish(h) }
-                            }
+                        self.needsChallenge = true
+                        if attempt < 8 {
+                            self.clickAgeGateIfNeeded()
+                            self.collectHTML(attempt: attempt + 1)
+                        } else {
+                            self.finish(html)
                         }
-                    } else {
-                        self?.finish(html)
+                        return
                     }
+                    let ready = html.contains("n5_htnrbt") || html.contains("class=\"btdb\"") || html.contains("n5_bbsbk")
+                    if !ready && attempt < 8 {
+                        self.collectHTML(attempt: attempt + 1)
+                        return
+                    }
+                    self.finish(html)
                 }
             }
         }

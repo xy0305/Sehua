@@ -73,8 +73,11 @@ enum DiscuzParser {
                   let tid = Int(tidS) else { continue }
             if !seenTID.insert(tid).inserted { continue }
 
+            if card.contains("id=\"links\"") || card.contains("class=\"show-text") { continue }
             let title = HTML.stripTags(
-                HTML.firstMatch(#"<h1>\s*<a[^>]*>([\s\S]*?)</a>"#, in: card) ?? ""
+                HTML.firstMatch(#"class="n5_htnrbt[^"]*"[^>]*>\s*<a[^>]*>([\s\S]*?)</a>"#, in: card)
+                    ?? HTML.firstMatch(#"<h1>\s*<a[^>]*>([\s\S]*?)</a>"#, in: card)
+                    ?? ""
             )
             if title.isEmpty { continue }
             if SiteConfig.isAdText(title) { continue }
