@@ -50,36 +50,49 @@ struct ForumHomeView: View {
                 NavigationLink {
                     ThreadListView(board: board)
                 } label: {
-                    HStack(alignment: .center, spacing: 8) {
-                        VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .center, spacing: 10) {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(ForumChrome.blue.opacity(0.85))
+                            .frame(width: 4, height: 36)
+                        VStack(alignment: .leading, spacing: 5) {
                             Text(board.name)
-                                .font(.system(size: 17))
-                                .foregroundStyle(Color(white: 0.12))
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(Color(white: 0.1))
                             if !board.meta.isEmpty {
                                 Text(board.meta)
                                     .font(.system(size: 12))
-                                    .foregroundStyle(Color(white: 0.62))
+                                    .foregroundStyle(Color(white: 0.55))
+                                    .lineLimit(1)
                             }
                         }
                         Spacer(minLength: 8)
                         if board.today > 0 {
                             Text("\(board.today)")
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color(white: 0.45))
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(ForumChrome.blue)
                                 .padding(.horizontal, 8)
-                                .frame(minWidth: 28, minHeight: 24)
-                                .overlay(Capsule().stroke(Color(white: 0.82), lineWidth: 1))
+                                .frame(minWidth: 28, minHeight: 22)
+                                .background(ForumChrome.blue.opacity(0.1))
+                                .clipShape(Capsule())
                         }
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color(white: 0.75))
                     }
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 8)
                 }
-                .listRowInsets(EdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 12))
-                .listRowSeparator(.visible)
-                .listRowBackground(Color.white)
+                .listRowInsets(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
+                .listRowSeparator(.hidden)
+                .listRowBackground(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                )
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .background(Color.white)
+            .background(ForumChrome.page)
         }
     }
 }

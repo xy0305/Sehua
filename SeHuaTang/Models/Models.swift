@@ -51,6 +51,7 @@ struct ThreadPost: Identifiable, Hashable {
 struct ThreadDetail {
     var tid: Int
     var title: String
+    var boardName: String = ""
     var fid: Int?
     var posts: [ThreadPost]
     var magnets: [ThreadAttachment]

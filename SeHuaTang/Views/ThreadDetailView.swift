@@ -7,125 +7,171 @@ struct ThreadDetailView: View {
     @EnvironmentObject var session: WebSession
     @State private var detail: ThreadDetail?
     @State private var state: LoadState = .idle
-    @State private var showWeb = false
+    @State private var copied = false
 
     var body: some View {
-        Group {
-            switch state {
-            case .loading, .idle:
-                if let detail {
-                    content(detail)
-                } else {
+        VStack(spacing: 0) {
+            ForumTopBar(title: detail?.boardName.isEmpty == false ? (detail?.boardName ?? "帖子") : "帖子")
+            Group {
+                if state == .loading && detail == nil {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let error = state.errorMessage, detail == nil {
+                    ContentUnavailableView {
+                        Label("加载失败", systemImage: "wifi.exclamationmark")
+                    } description: {
+                        Text(error)
+                    } actions: {
+                        Button("重试") { Task { await load() } }
+                    }
+                } else if let detail {
+                    content(detail)
                 }
-            case .failed(let msg):
-                ContentUnavailableView {
-                    Label("加载失败", systemImage: "wifi.exclamationmark")
-                } description: {
-                    Text(msg)
-                } actions: {
-                    Button("重试") { Task { await load() } }
-                    Button("用网页打开") { showWeb = true }
-                }
             }
+            .background(ForumChrome.page)
         }
-        .navigationTitle(detail?.title.isEmpty == false ? (detail?.title ?? title) : title)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showWeb = true } label: { Image(systemName: "safari") }
-            }
-        }
-        .sheet(isPresented: $showWeb) {
-            NavigationStack {
-                LoginWebView(url: session.url("forum.php?mod=viewthread&tid=\(tid)&mobile=2"), title: "原网页")
-            }
-        }
+        .background(ForumChrome.page)
+        .toolbar(.hidden, for: .navigationBar)
         .task { await load() }
     }
 
-    @ViewBuilder
     private func content(_ d: ThreadDetail) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(d.title.isEmpty ? title : d.title)
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(Color(white: 0.08))
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+
+                if let post = d.posts.first {
+                    authorBar(post)
+                }
+
                 if !d.magnets.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("下载").font(.headline)
+                        Text("下载").font(.system(size: 15, weight: .semibold))
                         ForEach(d.magnets) { m in
                             HStack {
                                 Image(systemName: m.isMagnet ? "link" : "arrow.down.doc")
-                                Text(m.isMagnet ? "磁力链接" : m.name)
-                                    .lineLimit(1)
+                                    .foregroundStyle(ForumChrome.blue)
+                                Text(m.isMagnet ? "磁力链接" : m.name).lineLimit(1)
                                 Spacer()
-                                Button("复制") {
+                                Button(copied ? "已复制" : "复制") {
                                     UIPasteboard.general.string = m.url.absoluteString
+                                    copied = true
                                 }
-                                .buttonStyle(.bordered)
-                                Button("打开") {
-                                    UIApplication.shared.open(m.url)
-                                }
-                                .buttonStyle(.borderedProminent)
+                                .font(.system(size: 13, weight: .semibold))
+                                Button("打开") { UIApplication.shared.open(m.url) }
+                                    .font(.system(size: 13, weight: .semibold))
                             }
-                            .font(.subheadline)
+                            .font(.system(size: 14))
                         }
                     }
-                    .padding()
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-
-                if !d.attachments.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("附件").font(.headline)
-                        ForEach(d.attachments) { a in
-                            Link(a.name, destination: a.url)
-                                .font(.subheadline)
-                        }
-                    }
-                }
-
-                if !d.images.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(d.images, id: \.self) { url in
-                                AsyncImage(url: url) { phase in
-                                    switch phase {
-                                    case .success(let img):
-                                        img.resizable().scaledToFill()
-                                    default:
-                                        Color(.tertiarySystemFill)
-                                    }
-                                }
-                                .frame(width: 160, height: 220)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                            }
-                        }
-                    }
+                    .padding(14)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal, 12)
                 }
 
                 ForEach(d.posts) { post in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text(post.author.isEmpty ? "楼主" : post.author)
-                                .font(.subheadline.weight(.semibold))
-                            Spacer()
-                            Text(post.dateText).font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 10) {
+                        if d.posts.first?.id != post.id {
+                            HStack {
+                                Text(post.author.isEmpty ? "回复" : post.author)
+                                    .font(.system(size: 14, weight: .semibold))
+                                Spacer()
+                                Text(post.dateText)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(Color(white: 0.5))
+                            }
                         }
                         Text(cleaned(post.plainText))
-                            .font(.body)
+                            .font(.system(size: 16))
+                            .foregroundStyle(Color(white: 0.12))
+                            .lineSpacing(6)
                             .textSelection(.enabled)
+                        if !post.images.isEmpty {
+                            imageStrip(post.images)
+                        }
                     }
-                    .padding(.vertical, 6)
-                    Divider()
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal, 12)
+                }
+
+                if d.posts.allSatisfy(\.images.isEmpty), !d.images.isEmpty {
+                    imageStrip(d.images)
+                        .padding(.horizontal, 12)
                 }
             }
-            .padding()
+            .padding(.bottom, 24)
+        }
+    }
+
+    private func authorBar(_ post: ThreadPost) -> some View {
+        HStack(spacing: 10) {
+            avatar(post.avatarURL)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(post.author.isEmpty ? "楼主" : post.author)
+                    .font(.system(size: 15, weight: .semibold))
+                if !post.dateText.isEmpty {
+                    Text(post.dateText)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color(white: 0.5))
+                }
+            }
+            Spacer()
+            Text("楼主")
+                .font(.system(size: 12))
+                .foregroundStyle(ForumChrome.blue)
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private func avatar(_ url: URL?) -> some View {
+        Group {
+            if let url {
+                AsyncImage(url: url) { phase in
+                    if case .success(let img) = phase {
+                        img.resizable().scaledToFill()
+                    } else {
+                        Color(white: 0.92)
+                    }
+                }
+            } else {
+                Image(systemName: "person.fill")
+                    .foregroundStyle(Color(white: 0.6))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(white: 0.93))
+            }
+        }
+        .frame(width: 40, height: 40)
+        .clipShape(Circle())
+    }
+
+    private func imageStrip(_ urls: [URL]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(urls, id: \.self) { url in
+                    AsyncImage(url: url) { phase in
+                        if case .success(let img) = phase {
+                            img.resizable().scaledToFill()
+                        } else {
+                            Color(white: 0.94)
+                        }
+                    }
+                    .frame(width: 160, height: 210)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+            }
         }
     }
 
     private func cleaned(_ s: String) -> String {
         var t = s
-        for k in SiteConfig.adKeywords {
+        for k in SiteConfig.adKeywords where t.contains(k) && t.count < 40 {
             t = t.replacingOccurrences(of: k, with: "")
         }
         return t.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -136,7 +182,7 @@ struct ThreadDetailView: View {
         do {
             let html = try await session.fetchHTML("forum.php?mod=viewthread&tid=\(tid)&mobile=2")
             if DiscuzParser.looksLikeChallenge(html) {
-                state = .failed("需要过验证，点右上角用网页打开")
+                state = .failed("需要过验证，到「我的」里打开网页")
                 return
             }
             detail = DiscuzParser.parseThreadDetail(html, tid: tid, base: session.baseURL)

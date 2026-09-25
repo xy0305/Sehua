@@ -113,11 +113,14 @@ enum DiscuzParser {
     }
 
     static func parseThreadDetail(_ html: String, tid: Int, base: URL) -> ThreadDetail {
+        let pageTitle = HTML.stripTags(HTML.firstMatch(#"<title>([\s\S]*?)</title>"#, in: html) ?? "")
+        let parts = pageTitle.components(separatedBy: " - ").map { $0.trimmingCharacters(in: .whitespaces) }
         let title = HTML.stripTags(
             HTML.firstMatch(#"<span class="dqym">([\s\S]*?)</span>"#, in: html)
-                ?? HTML.firstMatch(#"<title>([^-<]+)"#, in: html)
+                ?? parts.first
                 ?? ""
         )
+        let boardName = parts.count > 1 ? parts[1] : ""
 
         var magnets: [ThreadAttachment] = []
         var seenMag = Set<String>()
@@ -178,7 +181,7 @@ enum DiscuzParser {
             posts.append(ThreadPost(id: "op", author: "", authorID: nil, avatarURL: nil, dateText: "", htmlBody: "", plainText: String(plain.prefix(4000)), images: images))
         }
 
-        return ThreadDetail(tid: tid, title: title, fid: nil, posts: posts, magnets: magnets, attachments: attachments, images: images)
+        return ThreadDetail(tid: tid, title: title, boardName: boardName, fid: nil, posts: posts, magnets: magnets, attachments: attachments, images: images)
     }
 
     static func parseSearch(_ html: String) -> [SearchHit] {

@@ -13,6 +13,7 @@ final class AppStore: ObservableObject {
     @Published var threadState: LoadState = .idle
     @Published var currentFID: Int?
     @Published var currentTypeID: Int = 0
+    @Published var currentOrder = "dateline"
     @Published var boardTitle = ""
 
     @Published var searchHits: [SearchHit] = []
@@ -34,14 +35,15 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func loadThreads(fid: Int, page: Int = 1, typeid: Int = 0, append: Bool = false) async {
+    func loadThreads(fid: Int, page: Int = 1, typeid: Int = 0, order: String = "dateline", append: Bool = false) async {
         if !append {
             threadState = .loading
             if page == 1 { threads = [] }
         }
         currentFID = fid
         currentTypeID = typeid
-        var path = "forum.php?mod=forumdisplay&fid=\(fid)&page=\(page)&mobile=2"
+        currentOrder = order
+        var path = "forum.php?mod=forumdisplay&fid=\(fid)&page=\(page)&mobile=2&orderby=\(order)"
         if typeid > 0 {
             path += "&filter=typeid&typeid=\(typeid)"
         }
@@ -70,7 +72,7 @@ final class AppStore: ObservableObject {
 
     func loadMore() async {
         guard let fid = currentFID, threadHasNext, threadState != .loading else { return }
-        await loadThreads(fid: fid, page: threadPage + 1, typeid: currentTypeID, append: true)
+        await loadThreads(fid: fid, page: threadPage + 1, typeid: currentTypeID, order: currentOrder, append: true)
     }
 
     func search(_ q: String) async {
