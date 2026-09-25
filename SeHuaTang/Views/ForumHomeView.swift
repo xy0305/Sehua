@@ -1,78 +1,175 @@
 import SwiftUI
 
+/// 跟论坛手机版板块页同一套结构：深色顶栏、左侧分类、右侧板块。
 struct ForumHomeView: View {
     @EnvironmentObject var store: AppStore
     @State private var catIndex = 0
 
     var body: some View {
         VStack(spacing: 0) {
-            ChallengeBanner()
-            if store.categories.isEmpty {
-                ContentUnavailableView("暂无板块", systemImage: "square.grid.2x2")
+            ForumTopBar(title: "版块", showsSegment: true, showsBack: false)
+            if let error = store.forumState.errorMessage, store.categories.isEmpty {
+                ContentUnavailableView(error, systemImage: "wifi.exclamationmark")
             } else {
-                let cats = store.categories
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(cats.indices, id: \.self) { i in
-                            Button {
-                                catIndex = i
-                            } label: {
-                                Text(cats[i].name)
-                                    .font(.subheadline.weight(.semibold))
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 7)
-                                    .background(i == catIndex ? SiteTheme.accent : Color(.secondarySystemBackground))
-                                    .foregroundStyle(i == catIndex ? Color.white : Color.primary)
-                                    .clipShape(Capsule())
+                forumSplit
+            }
+        }
+        .background(ForumChrome.page)
+        .toolbar(.hidden, for: .navigationBar)
+        .task { await store.loadForums() }
+    }
+
+    private var forumSplit: some View {
+        let cats = store.categories
+        return HStack(alignment: .top, spacing: 0) {
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(cats.indices, id: \.self) { i in
+                        Button {
+                            catIndex = i
+                        } label: {
+                            Text(cats[i].name)
+                                .font(.system(size: 14, weight: i == catIndex ? .semibold : .regular))
+                                .foregroundStyle(i == catIndex ? ForumChrome.blue : Color(white: 0.35))
+                                .frame(maxWidth: .infinity, minHeight: 52)
+                                .background(i == catIndex ? Color.white : ForumChrome.side)
+                                .overlay(alignment: .leading) {
+                                    if i == catIndex {
+                                        Rectangle().fill(ForumChrome.blue).frame(width: 3)
+                                    }
+                                }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .frame(width: 98)
+            .background(ForumChrome.side)
+
+            List(cats[safe: catIndex]?.boards.filter { !$0.isAd } ?? []) { board in
+                NavigationLink {
+                    ThreadListView(board: board)
+                } label: {
+                    HStack(alignment: .center, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(board.name)
+                                .font(.system(size: 17))
+                                .foregroundStyle(Color(white: 0.12))
+                            if !board.meta.isEmpty {
+                                Text(board.meta)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(Color(white: 0.62))
                             }
-                            .buttonStyle(.plain)
+                        }
+                        Spacer(minLength: 8)
+                        if board.today > 0 {
+                            Text("\(board.today)")
+                                .font(.system(size: 13))
+                                .foregroundStyle(Color(white: 0.45))
+                                .padding(.horizontal, 8)
+                                .frame(minWidth: 28, minHeight: 24)
+                                .overlay(Capsule().stroke(Color(white: 0.82), lineWidth: 1))
                         }
                     }
-                    .padding(.horizontal, 16)
                     .padding(.vertical, 10)
                 }
-                List(cats[safe: catIndex]?.boards.filter { !$0.isAd } ?? []) { board in
-                    NavigationLink {
-                        ThreadListView(board: board)
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(board.name).font(.body.weight(.medium))
-                                if board.today > 0 {
-                                    Text("今日 \(board.today)").font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-                .listStyle(.plain)
+                .listRowInsets(EdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 12))
+                .listRowSeparator(.visible)
+                .listRowBackground(Color.white)
             }
-        }
-        .navigationTitle("色花堂")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await store.loadForums() }
-                } label: {
-                    if store.forumState == .loading {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
-            }
-        }
-        .task {
-            await store.loadForums()
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Color.white)
         }
     }
 }
 
-extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
+enum ForumChrome {
+    static let bar = Color(red: 0.22, green: 0.24, blue: 0.27)
+    static let blue = Color(red: 0.20, green: 0.52, blue: 0.86)
+    static let side = Color(red: 0.94, green: 0.94, blue: 0.95)
+    static let page = Color(red: 0.96, green: 0.96, blue: 0.97)
+    static let line = Color(red: 0.90, green: 0.91, blue: 0.92)
+}
+
+struct ForumTopBar: View {
+    let title: String
+    var showsSegment = false
+    var showsBack = true
+    var onRefresh: (() -> Void)?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Group {
+                if showsBack {
+                    Button { dismiss() } label: {
+                        HStack(spacing: 2) {
+                            Image(systemName: "chevron.left")
+                            Text("返回")
+                        }
+                        .font(.system(size: 16))
+                        .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(width: 72, alignment: .leading)
+
+            Spacer(minLength: 0)
+            if showsSegment {
+                HStack(spacing: 0) {
+                    Text("话题")
+                        .frame(width: 68, height: 28)
+                        .background(Color.white.opacity(0.16))
+                    Text("版块")
+                        .frame(width: 68, height: 28)
+                        .background(Color.white)
+                        .foregroundStyle(ForumChrome.bar)
+                }
+                .font(.system(size: 14))
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.7), lineWidth: 1))
+            } else {
+                Text(title)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+
+            if let onRefresh {
+                Button(action: onRefresh) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+            } else {
+                NavigationLink {
+                    SearchView()
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 48)
+        .background(ForumChrome.bar)
+    }
+}
+
+extension LoadState {
+    var errorMessage: String? {
+        if case .failed(let message) = self { return message }
+        return nil
     }
 }

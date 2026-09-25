@@ -27,7 +27,10 @@ enum DiscuzParser {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if title.isEmpty || SiteConfig.isAdText(title) { continue }
                 let num = Int(HTML.firstMatch(#"<span class="num">(\d+)</span>"#, in: body) ?? "0") ?? 0
-                boards.append(ForumBoard(id: fid, name: title, today: num))
+                let meta = HTML.stripTags(HTML.firstMatch(#"<i>([\s\S]*?)</i>"#, in: block.components(separatedBy: href).dropFirst().first ?? "") ?? "")
+                    .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                boards.append(ForumBoard(id: fid, name: title, today: num, meta: meta))
             }
             if !boards.isEmpty {
                 cats.append(ForumCategory(id: tid, name: HTML.stripTags(name), boards: boards))

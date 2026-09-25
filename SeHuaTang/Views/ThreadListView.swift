@@ -7,6 +7,9 @@ struct ThreadListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            ForumTopBar(title: board.name) {
+                Task { await store.loadThreads(fid: board.id, typeid: typeID) }
+            }
             if store.threadTypes.count > 1 {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -16,12 +19,15 @@ struct ThreadListView: View {
                                 Task { await store.loadThreads(fid: board.id, typeid: t.id) }
                             } label: {
                                 Text(t.name)
-                                    .font(.caption.weight(.semibold))
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(typeID == t.id ? SiteTheme.accent : Color(.secondarySystemBackground))
-                                    .foregroundStyle(typeID == t.id ? Color.white : Color.primary)
-                                    .clipShape(Capsule())
+                                    .font(.system(size: 15, weight: typeID == t.id ? .semibold : .regular))
+                                    .foregroundStyle(typeID == t.id ? ForumChrome.blue : Color(white: 0.25))
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 12)
+                                    .overlay(alignment: .bottom) {
+                                        if typeID == t.id {
+                                            Rectangle().fill(ForumChrome.blue).frame(height: 2)
+                                        }
+                                    }
                             }
                             .buttonStyle(.plain)
                         }
@@ -55,6 +61,7 @@ struct ThreadListView: View {
         }
         .navigationTitle(board.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .task {
             await store.loadThreads(fid: board.id)
         }

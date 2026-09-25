@@ -35,6 +35,7 @@ struct ForumBoard: Identifiable, Hashable {
     let id: Int
     let name: String
     var today: Int
+    var meta: String = ""
     var isAd: Bool { SiteConfig.adFIDs.contains(id) }
 }
 
