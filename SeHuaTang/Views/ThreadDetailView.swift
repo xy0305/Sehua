@@ -133,12 +133,8 @@ struct ThreadDetailView: View {
     private func avatar(_ url: URL?) -> some View {
         Group {
             if let url {
-                AsyncImage(url: url) { phase in
-                    if case .success(let img) = phase {
-                        img.resizable().scaledToFill()
-                    } else {
-                        Color(white: 0.92)
-                    }
+                SiteImage(url: url) {
+                    Color(white: 0.92)
                 }
             } else {
                 Image(systemName: "person.fill")
@@ -155,12 +151,8 @@ struct ThreadDetailView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(urls, id: \.self) { url in
-                    AsyncImage(url: url) { phase in
-                        if case .success(let img) = phase {
-                            img.resizable().scaledToFill()
-                        } else {
-                            Color(white: 0.94)
-                        }
+                    SiteImage(url: url) {
+                        Color(white: 0.94)
                     }
                     .frame(width: 160, height: 210)
                     .clipShape(RoundedRectangle(cornerRadius: 10))

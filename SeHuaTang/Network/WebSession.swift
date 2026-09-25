@@ -153,6 +153,7 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
                         return
                     }
                     let ready = html.contains("n5_htnrbt") || html.contains("class=\"btdb\"") || html.contains("n5_bbsbk")
+                        || html.contains("class=\"message\"") || html.contains("viewthread")
                     if !ready && attempt < 8 {
                         self.collectHTML(attempt: attempt + 1, gen: gen)
                         return

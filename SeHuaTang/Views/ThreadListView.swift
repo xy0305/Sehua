@@ -157,13 +157,8 @@ struct ThreadCard: View {
             }
 
             if let url = item.coverURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFill()
-                    default:
-                        Color(white: 0.94)
-                    }
+                SiteImage(url: url) {
+                    Color(white: 0.94)
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 168)
@@ -186,12 +181,8 @@ struct ThreadCard: View {
     private var avatar: some View {
         Group {
             if let url = item.avatarURL {
-                AsyncImage(url: url) { phase in
-                    if case .success(let img) = phase {
-                        img.resizable().scaledToFill()
-                    } else {
-                        Color(white: 0.92)
-                    }
+                SiteImage(url: url) {
+                    Color(white: 0.92)
                 }
             } else {
                 Image(systemName: "person.fill")
