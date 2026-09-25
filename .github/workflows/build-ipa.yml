@@ -68,6 +68,14 @@ jobs:
           find Payload -name 'embedded.mobileprovision' -delete || true
           VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Payload/SeHuaTang.app/Info.plist)
           BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Payload/SeHuaTang.app/Info.plist)
+          if [ "$VERSION" = '$(MARKETING_VERSION)' ] || [ -z "$VERSION" ]; then
+            VERSION=$(sed -n 's/.*MARKETING_VERSION = \([0-9.]*\);/\1/p' SeHuaTang.xcodeproj/project.pbxproj | head -1)
+            BUILD=$(sed -n 's/.*CURRENT_PROJECT_VERSION = \([0-9]*\);/\1/p' SeHuaTang.xcodeproj/project.pbxproj | head -1)
+          fi
+          if [ "$VERSION" = '$(MARKETING_VERSION)' ] || [ -z "$VERSION" ]; then
+            VERSION=$(sed -n 's/.*MARKETING_VERSION = \([0-9.]*\);/\1/p' SeHuaTang.xcodeproj/project.pbxproj | head -1)
+            BUILD=$(sed -n 's/.*CURRENT_PROJECT_VERSION = \([0-9]*\);/\1/p' SeHuaTang.xcodeproj/project.pbxproj | head -1)
+          fi
           NAME="SeHuaTang-unsigned-${VERSION}-${BUILD}.ipa"
           zip -qry "$NAME" Payload
           ls -lh "$NAME"
