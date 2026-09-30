@@ -134,6 +134,42 @@ struct ThreadDetailView: View {
             }
             .padding(.bottom, 24)
         }
+        .safeAreaInset(edge: .bottom) {
+            actionBar(d)
+        }
+    }
+
+    private func actionBar(_ d: ThreadDetail) -> some View {
+        HStack(spacing: 12) {
+            if let url = d.replyURL {
+                NavigationLink {
+                    LoginWebView(url: url, title: "回复")
+                } label: {
+                    Label("回复", systemImage: "bubble.left")
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                }
+            }
+            if let url = d.favoriteURL {
+                NavigationLink {
+                    LoginWebView(url: url, title: "收藏")
+                } label: {
+                    Label("收藏", systemImage: "star")
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                }
+            }
+            Button {
+                UIPasteboard.general.string = session.url("forum.php?mod=viewthread&tid=\(d.tid)&mobile=2").absoluteString
+                copied = true
+            } label: {
+                Label(copied ? "已复制" : "链接", systemImage: "link")
+                    .frame(maxWidth: .infinity, minHeight: 40)
+            }
+        }
+        .font(.system(size: 15, weight: .semibold))
+        .buttonStyle(.bordered)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial)
     }
 
     private func authorBar(_ post: ThreadPost) -> some View {
@@ -177,11 +213,16 @@ struct ThreadDetailView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(urls, id: \.self) { url in
-                    SiteImage(url: url) {
-                        Color(white: 0.94)
+                    NavigationLink {
+                        ImagePage(url: url)
+                    } label: {
+                        SiteImage(url: url) {
+                            Color(white: 0.94)
+                        }
+                        .frame(width: 160, height: 210)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
-                    .frame(width: 160, height: 210)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -208,5 +249,20 @@ struct ThreadDetailView: View {
         } catch {
             state = .failed(error.localizedDescription)
         }
+    }
+}
+
+private struct ImagePage: View {
+    let url: URL
+    var body: some View {
+        ScrollView([.horizontal, .vertical]) {
+            SiteImage(url: url, contentMode: .fit) {
+                ProgressView()
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .background(Color.black)
+        .navigationTitle("图片")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

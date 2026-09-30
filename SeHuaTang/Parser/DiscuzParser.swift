@@ -232,7 +232,11 @@ enum DiscuzParser {
             posts.append(ThreadPost(id: "op", author: "", authorID: nil, avatarURL: nil, dateText: "", htmlBody: "", plainText: String(plain.prefix(4000)), images: images))
         }
 
-        return ThreadDetail(tid: tid, title: title, boardName: boardName, fid: nil, posts: posts, magnets: magnets, attachments: attachments, images: images)
+        let favorite = HTML.firstMatch(#"ac=favorite&amp;type=thread[^"]*"#, in: html).map { "home.php?mod=spacecp&" + $0.replacingOccurrences(of: "&amp;", with: "&") }
+        let reply = HTML.firstMatch(#"mod=post&amp;action=reply&amp;fid=\d+&amp;tid=\d+[^"]*"#, in: html).map { "forum.php?" + $0.replacingOccurrences(of: "&amp;", with: "&") }
+        let replyCount = HTML.firstMatch(#"网友回复（(\d+)条）"#, in: html) ?? ""
+
+        return ThreadDetail(tid: tid, title: title, boardName: boardName, fid: nil, replyCount: replyCount, favoriteURL: favorite.flatMap { HTML.absURL($0, base: base) }, replyURL: reply.flatMap { HTML.absURL($0, base: base) }, posts: posts, magnets: magnets, attachments: attachments, images: images)
     }
 
     static func parseSearch(_ html: String) -> [SearchHit] {

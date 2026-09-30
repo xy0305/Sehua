@@ -53,6 +53,9 @@ struct ThreadDetail {
     var title: String
     var boardName: String = ""
     var fid: Int?
+    var replyCount: String = ""
+    var favoriteURL: URL?
+    var replyURL: URL?
     var posts: [ThreadPost]
     var magnets: [ThreadAttachment]
     var attachments: [ThreadAttachment]
