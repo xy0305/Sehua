@@ -114,6 +114,18 @@ final class WebSession: NSObject, ObservableObject {
         pump()
     }
 
+    func refreshAccount() {
+        webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] result, _ in
+            let html = (result as? String) ?? ""
+            Task { @MainActor in
+                guard let self else { return }
+                if let name = DiscuzParser.loggedInUsername(html) {
+                    self.username = name
+                }
+            }
+        }
+    }
+
     func clearCookies() {
         let store = WKWebsiteDataStore.default()
         store.fetchDataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes()) { recs in
