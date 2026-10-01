@@ -157,14 +157,17 @@ enum DiscuzParser {
         return ThreadListPage(threads: threads, types: types, page: page, hasNext: hasNext, boardName: boardName)
     }
 
-    static func parseThreadDetail(_ html: String, tid: Int, base: URL) -> ThreadDetail {
+    static func parseThreadDetail(_ html: String, tid: Int, base: URL, fallbackTitle: String = "") -> ThreadDetail {
         let pageTitle = HTML.stripTags(HTML.firstMatch(#"<title>([\s\S]*?)</title>"#, in: html) ?? "")
         let parts = pageTitle.components(separatedBy: " - ").map { $0.trimmingCharacters(in: .whitespaces) }
-        let title = HTML.stripTags(
-            HTML.firstMatch(#"<span class="dqym">([\s\S]*?)</span>"#, in: html)
-                ?? parts.first
+        // dqym and generic h1 are navigation/board labels, never thread subjects.
+        let subject = HTML.stripTags(
+            HTML.firstMatch(#"<[^>]+id=["']thread_subject["'][^>]*>([\s\S]*?)</[^>]+>"#, in: html)
+                ?? HTML.firstMatch(#"<h[12][^>]+class=["'][^"']*(?:thread_subject|post-title|thread-title)[^"']*["'][^>]*>([\s\S]*?)</h[12]>"#, in: html)
                 ?? ""
         )
+        let fallback = fallbackTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = !subject.isEmpty ? subject : (!fallback.isEmpty ? fallback : (parts.count >= 3 ? parts[0] : ""))
         let boardName = parts.count > 1 ? parts[1] : ""
 
         var magnets: [ThreadAttachment] = []
@@ -207,13 +210,13 @@ enum DiscuzParser {
             let dateText = HTML.stripTags(HTML.elements(in: header, className: "n5_mktbsj", inner: true).first
                 ?? HTML.elements(in: header, className: "n5_sjydhf", inner: true).first.flatMap { HTML.elements(in: $0, tag: "dt", inner: true).first }
                 ?? HTML.elements(in: header, idPrefix: "authorposton", inner: true).first ?? "")
-            let body = HTML.elements(in: block, className: "message", inner: true).first
-                ?? HTML.elements(in: block, idPrefix: "postmessage_", inner: true).first ?? ""
-            let plain = HTML.plainText(body)
+            let body = HTML.elements(in: block, className: "message", inner: true).joined(separator: "\n")
+            let bodyFallback = body.isEmpty ? (HTML.elements(in: block, idPrefix: "postmessage_", inner: true).first ?? "") : body
+            let plain = HTML.plainText(bodyFallback)
             if SiteConfig.isAdText(plain) && plain.count < 80 { continue }
             posts.append(ThreadPost(id: pid, author: author, authorID: authorID,
                 avatarURL: avatarURL(in: header, base: base), dateText: dateText,
-                htmlBody: body, plainText: plain, images: HTML.imageURLs(in: body, base: base)))
+                htmlBody: bodyFallback, plainText: HTML.plainText(bodyFallback), images: HTML.imageURLs(in: bodyFallback, base: base)))
         }
         // Some mobile skins omit post_<pid>; still extract only the actual message,
         // never turn navigation, advertisements and footer text into a synthetic post.

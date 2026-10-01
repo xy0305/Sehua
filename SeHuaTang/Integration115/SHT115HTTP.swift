@@ -81,13 +81,16 @@ extension SHT115HTTP {
         }
         return SHT115Page(entries: entries, total: Int(Self.string(obj["count"] ?? nested["count"])), path: (obj["path"] as? [[String: Any]]) ?? (nested["path"] as? [[String: Any]]) ?? [])
     }
-    func verify(cid: String, parent: String?, settings: SHT115Settings) async throws {
-        let page = try await page(cid: cid, offset: 0, settings: settings)
-        let ids = page.path.map { Self.string($0["cid"] ?? $0["category_id"]) }
-        guard ids.first == "0", ids.last == cid else { throw SHT115Error.unsafeListing }
-        if let parent = parent {
+    static func verifiedPath(_ path: [[String: Any]], cid: String, parent: String?) throws {
+        let ids = path.map { string($0["cid"] ?? $0["category_id"] ?? $0["folder_id"]) }
+        guard ids.first == "0", ids.last == cid, ids.allSatisfy(SHT115Settings.isCID), Set(ids).count == ids.count else { throw SHT115Error.unsafeListing }
+        if let parent {
             guard ids.count >= 2, ids[ids.count - 2] == parent, cid != parent else { throw SHT115Error.unsafeListing }
         }
+    }
+    func verify(cid: String, parent: String?, settings: SHT115Settings) async throws {
+        let page = try await page(cid: cid, offset: 0, settings: settings)
+        try Self.verifiedPath(page.path, cid: cid, parent: parent)
     }
     func allEntries(cid: String, settings: SHT115Settings) async throws -> [SHT115Entry] {
         var entries: [SHT115Entry] = [], seen = Set<String>()

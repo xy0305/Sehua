@@ -1,9 +1,14 @@
 import SwiftUI
 
-/// Extraction is read-only. Directory creation/submission happen only after review and confirmation.
+/// One-shot starts once after the explicitly authorized detail button; advanced mode retains review.
 struct Pan115ResourceView: View {
     let detail: ThreadDetail
     let base: URL
+    var oneShot = false
+    @Environment(\.dismiss) private var dismiss
+    @State private var started = false
+    @State private var showTasks = false
+    @State private var stage = "准备"
     @State private var extractedURLs: [String] = []
     @State private var extractionNotes: [String] = []
     @State private var manualInput = ""
@@ -19,7 +24,7 @@ struct Pan115ResourceView: View {
         List {
             Section("资源") {
                 Text(detail.title)
-                Text("tid \(detail.tid) · 每个帖子使用独立目录")
+                Text("tid \(detail.tid) · 当前阶段：\(stage)")
                     .font(.caption).foregroundStyle(.secondary)
                 NavigationLink("115 设置", destination: Pan115SettingsView())
                 if let resource {
@@ -78,8 +83,10 @@ struct Pan115ResourceView: View {
         .toolbar(.visible, for: .navigationBar)
         .disabled(busy)
         .task {
+            guard !started else { return }
+            started = true
             await loadExisting()
-            await extract()
+            if oneShot { await runOneShot() } else { await extract() }
         }
         .confirmationDialog("创建 / 复用此帖独立目录并提交 \(submissionURLs.count) 个链接？", isPresented: $showConfirmation, titleVisibility: .visible) {
             Button("确认创建目录并提交") { Task { await submit() } }
@@ -143,6 +150,19 @@ struct Pan115ResourceView: View {
         }
     }
 
+    @MainActor private func runOneShot() async {
+        guard !busy, !uncertainWrite else { return }
+        stage = "提取链接"
+        await extract()
+        guard !extractedURLs.isEmpty else {
+            message = "未提取到可提交链接，未创建目录。"
+            return
+        }
+        stage = "创建目录并提交离线"
+        await submit()
+        if resource?.tasks.contains(where: { $0.state == .accepted }) == true { showTasks = true }
+    }
+
     @MainActor private func submit() async {
         let urls = submissionURLs
         guard !busy, !urls.isEmpty, !uncertainWrite else { return }
@@ -156,6 +176,8 @@ struct Pan115ResourceView: View {
             resource = created
             resource = try await service.submit(urls: urls, resourceID: created.id, settings: settings)
             message = "已记录提交结果，请进入任务详情手动刷新。任务接受不等于离线完成。"
+        } catch let error as SHT115Error where error != .uncertainWrite {
+            message = SHT115Settings.safeMessage(error)
         } catch {
             // A write may have reached the server even if its response was lost.
             uncertainWrite = true

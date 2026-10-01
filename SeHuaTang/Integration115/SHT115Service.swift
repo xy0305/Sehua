@@ -53,13 +53,16 @@ public actor SHT115Service {
         let illegal = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/\\:*?\"<>|"))
         let clean = normalized.unicodeScalars.map { illegal.contains($0) ? " " : String($0) }.joined().split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         let safe = String((clean.isEmpty ? "资源" : clean).prefix(60)).trimmingCharacters(in: CharacterSet(charactersIn: " ."))
-        return "tid-" + tid + "_" + safe + "_" + SHT115Digest(normalized).prefix(8)
+        return (safe.isEmpty ? "资源" : safe) + "_tid-" + tid
     }
     public func createOrReuseResource(tid: String, title: String, settings: SHT115Settings) async throws -> SHT115Resource {
         try begin(); defer { operating = false }
         try settings.validate()
         let name = try Self.directoryName(tid: tid, title: title)
-        let id = SHT115Digest(settings.account + ":" + settings.parentCID + ":" + name)
+        // Reuse this account's historical tid record, including incorrectly named folders.
+        // Never rename/delete it or create a second folder merely because title parsing changed.
+        let id = records.first(where: { $0.account == settings.account && $0.parentCID == settings.parentCID && $0.tid == tid })?.id
+            ?? SHT115Digest(settings.account + ":" + settings.parentCID + ":" + name)
         if !records.contains(where: { $0.id == id }) {
             records.append(SHT115Resource(id: id, account: settings.account, tid: tid, directoryName: name, parentCID: settings.parentCID, directoryCID: nil, directoryWritePending: false, tasks: [])); try save()
         }
@@ -70,7 +73,7 @@ public actor SHT115Service {
         }
         try await http.verify(cid: settings.parentCID, parent: nil, settings: settings)
         let children = try await http.allEntries(cid: settings.parentCID, settings: settings)
-        let matches = children.filter { $0.isDirectory && $0.name == name }
+        let matches = children.filter { $0.isDirectory && $0.name == records[i].directoryName }
         guard matches.count <= 1 else { throw SHT115Error.ambiguousDirectory }
         if let existing = matches.first {
             try await http.verify(cid: existing.id, parent: settings.parentCID, settings: settings)
@@ -79,7 +82,7 @@ public actor SHT115Service {
         guard !records[i].directoryWritePending else { throw SHT115Error.uncertainWrite }
         records[i].directoryWritePending = true; try save()
         do {
-            let obj = try await http.json("https://webapi.115.com/files/add", settings: settings, fields: [("pid", settings.parentCID), ("cname", name)])
+            let obj = try await http.json("https://webapi.115.com/files/add", settings: settings, fields: [("pid", settings.parentCID), ("cname", records[i].directoryName)])
             if ["0", "false"].contains(SHT115HTTP.string(obj["state"])) {
                 records[i].directoryWritePending = false; try save(); throw SHT115Error.rejected
             }
@@ -93,6 +96,24 @@ public actor SHT115Service {
         } catch SHT115Error.rejected { throw SHT115Error.rejected }
           catch { throw SHT115Error.uncertainWrite }
     }
+    /// 115 web API uses url for a single link, url[n] (not urls[n]) for a batch.
+    static func submissionFields(links: [String], cid: String, uid: String, signature: [(String, String)]) -> [(String, String)] {
+        signature + [("uid", uid), ("wp_path_id", cid)] + links.enumerated().map {
+            (links.count == 1 ? "url" : "url[\($0.offset)]", $0.element)
+        }
+    }
+    static func submissionState(_ obj: [String: Any], count: Int) -> SHT115SubmissionState {
+        let rows = (obj["result"] as? [[String: Any]]) ?? (obj["data"] as? [[String: Any]]) ?? (obj["tasks"] as? [[String: Any]])
+        if let rows {
+            guard rows.count == count else { return .unknown }
+            if rows.allSatisfy({ SHT115HTTP.success($0) }) { return .accepted }
+            if rows.allSatisfy({ ["0", "false"].contains(SHT115HTTP.string($0["state"]).lowercased()) }) { return .rejected }
+            return .unknown // partial acceptance must never resend the batch
+        }
+        if SHT115HTTP.success(obj) { return .accepted }
+        if ["0", "false"].contains(SHT115HTTP.string(obj["state"]).lowercased()) { return .rejected }
+        return .unknown
+    }
     public func submit(urls: [String], resourceID: String, settings: SHT115Settings) async throws -> SHT115Resource {
         try begin(); defer { operating = false }
         let i = try index(resourceID, settings)
@@ -102,18 +123,19 @@ public actor SHT115Service {
             return ["magnet", "ed2k", "http", "https"].contains(scheme.lowercased())
         }), let cid = records[i].directoryCID, !records[i].directoryWritePending else { throw SHT115Error.invalidInput }
         let prior = records[i].tasks.flatMap { $0.state == .rejected ? [] : $0.urls }
-        guard links.allSatisfy({ !prior.contains($0) }) else { throw SHT115Error.uncertainWrite }
+        guard links.allSatisfy({ !prior.contains($0) }) else {
+            if records[i].tasks.contains(where: { ($0.state == .unknown || $0.state == .submitting) && !$0.urls.filter(links.contains).isEmpty }) { throw SHT115Error.uncertainWrite }
+            throw SHT115Error.alreadySubmitted
+        }
         try await http.verify(cid: cid, parent: records[i].parentCID, settings: settings)
         let signature = try await sign(settings)
         records[i].tasks.append(SHT115Task(id: UUID(), urls: links, state: .submitting, progress: [], updatedAt: Date())); try save()
         let t = records[i].tasks.count - 1
-        let fields = signature + [("wp_path_id", cid)] + links.enumerated().map { (links.count == 1 ? "url" : "url[\($0.offset)]", $0.element) }
+        let fields = Self.submissionFields(links: links, cid: cid, uid: settings.uid, signature: signature)
         do {
             let action = links.count == 1 ? "add_task_url" : "add_task_urls"
             let obj = try await http.json("https://115.com/web/lixian/?ct=lixian&ac=" + action, settings: settings, fields: fields)
-            if SHT115HTTP.success(obj) { records[i].tasks[t].state = .accepted }
-            else if ["0", "false"].contains(SHT115HTTP.string(obj["state"])), links.count == 1 { records[i].tasks[t].state = .rejected }
-            else { records[i].tasks[t].state = .unknown }
+            records[i].tasks[t].state = Self.submissionState(obj, count: links.count)
             records[i].tasks[t].updatedAt = Date(); try save()
         } catch {
             records[i].tasks[t].state = .unknown; records[i].tasks[t].updatedAt = Date(); try save(); throw SHT115Error.uncertainWrite

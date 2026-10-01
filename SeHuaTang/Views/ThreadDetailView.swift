@@ -10,6 +10,7 @@ struct ThreadDetailView: View {
     @State private var detail: ThreadDetail?
     @State private var state: LoadState = .idle
     @State private var copied = false
+    @State private var oneShotPresented = false
     @State private var copiedAttachmentID: String?
 
     var body: some View {
@@ -36,6 +37,14 @@ struct ThreadDetailView: View {
         .background(ForumChrome.page)
         .tint(ForumChrome.blue)
         .toolbar(.hidden, for: .navigationBar)
+        .sheet(isPresented: $oneShotPresented) {
+            if let detail {
+                NavigationStack {
+                    Pan115ResourceView(detail: detail, base: postURL, oneShot: true)
+                }
+                .interactiveDismissDisabled()
+            }
+        }
         .task {
             library.record(readingItem)
             await load()
@@ -108,10 +117,17 @@ struct ThreadDetailView: View {
                     .padding(.top, 20)
                     .padding(.bottom, 16)
 
+                Button { oneShotPresented = true } label: {
+                    Label("一键115提取并提交", systemImage: "externaldrive.badge.plus")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .padding(.horizontal, 16)
                 NavigationLink {
-                    Pan115ResourceView(detail: d, base: session.baseURL)
+                    Pan115ResourceView(detail: d, base: postURL)
                 } label: {
-                    Label("115 归档 / 播放", systemImage: "externaldrive.badge.plus")
+                    Label("115 手动高级 / 播放", systemImage: "slider.horizontal.3")
                         .font(.system(size: 15, weight: .semibold))
                         .frame(maxWidth: .infinity, minHeight: 44)
                 }
@@ -321,6 +337,8 @@ struct ThreadDetailView: View {
         return t.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var postURL: URL { session.url("forum.php?mod=viewthread&tid=\(tid)&mobile=2") }
+
     private func load() async {
         guard state != .loading, !Task.isCancelled else { return }
         state = .loading
@@ -331,7 +349,7 @@ struct ThreadDetailView: View {
                 state = .failed("需要过验证，到「我的」里打开网页")
                 return
             }
-            detail = DiscuzParser.parseThreadDetail(html, tid: tid, base: session.baseURL)
+            detail = DiscuzParser.parseThreadDetail(html, tid: tid, base: postURL, fallbackTitle: title)
             library.record(readingItem)
             state = .idle
         } catch {

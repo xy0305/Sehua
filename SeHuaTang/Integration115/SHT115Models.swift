@@ -3,10 +3,11 @@ import CryptoKit
 
 public enum SHT115Error: Error, LocalizedError {
     case invalidSettings, invalidInput, busy, unsafeListing, ambiguousDirectory
-    case rejected, uncertainWrite, persistence, playbackUnavailable, accountMismatch
+    case rejected, uncertainWrite, persistence, playbackUnavailable, accountMismatch, alreadySubmitted
     public var errorDescription: String? {
         switch self {
         case .invalidSettings: return "请配置含 UID/CID/SEID 的115 Cookie与数字父目录CID"
+        case .alreadySubmitted: return "此链接已有提交记录，请进入任务 / 视频页查看，不会重复推送"
         case .invalidInput: return "资源ID、链接或目录输入无效"
         case .busy: return "已有操作执行中，请稍后手动刷新"
         case .unsafeListing: return "目录分页或路径无法完整验证，已停止写入"
@@ -40,9 +41,14 @@ public struct SHT115Settings {
     public static func isCID(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.allSatisfy { (48...57).contains($0) } && (value == "0" || !value.hasPrefix("0"))
     }
-    var account: String {
-        let uid = cookie.split(separator: ";").first { $0.trimmingCharacters(in: .whitespaces).hasPrefix("UID=") }.map { String($0.trimmingCharacters(in: .whitespaces).dropFirst(4)) } ?? ""
-        return SHT115Digest(uid.components(separatedBy: "_").first ?? "")
+    var uid: String {
+        cookie.split(separator: ";").first { $0.trimmingCharacters(in: .whitespaces).hasPrefix("UID=") }
+            .map { String($0.trimmingCharacters(in: .whitespaces).dropFirst(4)).components(separatedBy: "_").first ?? "" } ?? ""
+    }
+    var account: String { SHT115Digest(uid) }
+    /// Never render arbitrary transport errors or server bodies (may contain credentials).
+    public static func safeMessage(_ error: Error) -> String {
+        (error as? SHT115Error)?.errorDescription ?? "请求失败，请检查网络与登录；未确认提交前不会锁定重试。"
     }
 }
 func SHT115Digest(_ text: String) -> String {
