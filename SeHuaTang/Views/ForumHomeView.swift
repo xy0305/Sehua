@@ -1,205 +1,153 @@
 import SwiftUI
 
-/// 跟论坛手机版板块页同一套结构：深色顶栏、左侧分类、右侧板块。
+/// Standalone native board directory; the same groups also appear below the portal.
 struct ForumHomeView: View {
     @EnvironmentObject var store: AppStore
-    @State private var catIndex = 0
 
     var body: some View {
         VStack(spacing: 0) {
-            ForumTopBar(title: "版块", showsSegment: true, showsBack: false)
-            if let error = store.forumState.errorMessage, store.categories.isEmpty {
-                ContentUnavailableView(error, systemImage: "wifi.exclamationmark")
-            } else {
-                forumSplit
+            ForumTopBar(title: "全部版块", showsBack: true)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForumLoadStatus(state: store.forumState, title: "版块") {
+                        Task { await store.loadForums() }
+                    }
+                    ForumDirectory(categories: store.categories)
+                }
+                .padding(16)
             }
+            .refreshable { await store.loadForums() }
         }
         .background(ForumChrome.page)
+        .tint(ForumChrome.accent)
         .toolbar(.hidden, for: .navigationBar)
         .task { await store.loadForums() }
     }
+}
 
-    private var forumSplit: some View {
-        let cats = store.categories
-        return HStack(alignment: .top, spacing: 0) {
-            ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(cats.indices, id: \.self) { i in
-                        Button {
-                            catIndex = i
-                        } label: {
-                            Text(cats[i].name)
-                                .font(.system(size: 14, weight: i == catIndex ? .semibold : .regular))
-                                .foregroundStyle(i == catIndex ? ForumChrome.blue : Color(white: 0.35))
-                                .frame(maxWidth: .infinity, minHeight: 52)
-                                .background(i == catIndex ? Color.white : ForumChrome.side)
-                                .overlay(alignment: .leading) {
-                                    if i == catIndex {
-                                        Rectangle().fill(ForumChrome.blue).frame(width: 3)
-                                    }
-                                }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            .frame(width: 98)
-            .background(ForumChrome.side)
+struct ForumDirectory: View {
+    let categories: [ForumCategory]
 
-            List(cats[safe: catIndex]?.boards.filter { !$0.isAd } ?? []) { board in
-                NavigationLink {
-                    ThreadListView(board: board)
-                } label: {
-                    HStack(alignment: .center, spacing: 10) {
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(ForumChrome.blue.opacity(0.85))
-                            .frame(width: 4, height: 36)
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(board.name)
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(Color(white: 0.1))
-                            if !board.meta.isEmpty {
-                                Text(board.meta)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(Color(white: 0.55))
-                                    .lineLimit(1)
-                            }
-                        }
-                        Spacer(minLength: 8)
-                        if board.today > 0 {
-                            Text("\(board.today)")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(ForumChrome.blue)
-                                .padding(.horizontal, 8)
-                                .frame(minWidth: 28, minHeight: 22)
-                                .background(ForumChrome.blue.opacity(0.1))
-                                .clipShape(Capsule())
-                        }
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color(white: 0.75))
-                    }
-                    .padding(.vertical, 8)
-                }
-                .listRowInsets(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
-                .listRowSeparator(.hidden)
-                .listRowBackground(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                )
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(ForumChrome.page)
-        }
+    private var visibleCategories: [ForumCategory] {
+        categories.filter { $0.boards.contains { !$0.isAd } }
     }
-}
-
-enum ForumChrome {
-    static let bar = Color(red: 0.22, green: 0.24, blue: 0.27)
-    static let blue = Color(red: 0.20, green: 0.52, blue: 0.86)
-    static let side = Color(red: 0.94, green: 0.94, blue: 0.95)
-    static let page = Color(red: 0.96, green: 0.96, blue: 0.97)
-    static let line = Color(red: 0.90, green: 0.91, blue: 0.92)
-}
-
-struct ForumTopBar: View {
-    let title: String
-    var showsSegment = false
-    var segment = 1
-    var showsBack = true
-    var onRefresh: (() -> Void)?
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        HStack(spacing: 0) {
-            Group {
-                if showsBack {
-                    Button { dismiss() } label: {
-                        HStack(spacing: 2) {
-                            Image(systemName: "chevron.left")
-                            Text("返回")
-                        }
-                        .font(.system(size: 16))
-                        .foregroundStyle(.white)
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    Color.clear
-                }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("版块分区", systemImage: "square.grid.2x2")
+                    .font(.headline)
+                    .foregroundStyle(ForumChrome.text)
+                Spacer()
+                Text("点击分组展开 / 收起")
+                    .font(.caption)
+                    .foregroundStyle(ForumChrome.secondary)
             }
-            .frame(width: 72, alignment: .leading)
+            .padding(.horizontal, 2)
 
-            Spacer(minLength: 0)
-            if showsSegment {
-                HStack(spacing: 0) {
-                    NavigationLink {
-                        PortalView()
-                    } label: {
-                        Text("话题")
-                            .frame(width: 68, height: 28)
-                            .background(segment == 0 ? Color.white : Color.white.opacity(0.16))
-                            .foregroundStyle(segment == 0 ? ForumChrome.bar : .white)
-                    }
-                    .buttonStyle(.plain)
-                    NavigationLink {
-                        ForumHomeView()
-                    } label: {
-                        Text("版块")
-                            .frame(width: 68, height: 28)
-                            .background(segment == 1 ? Color.white : Color.white.opacity(0.16))
-                            .foregroundStyle(segment == 1 ? ForumChrome.bar : .white)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .font(.system(size: 14))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.7), lineWidth: 1))
-            } else {
-                Text(title)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
+            if visibleCategories.isEmpty {
+                Text("暂无可显示的版块，请下拉刷新。")
+                    .font(.subheadline)
+                    .foregroundStyle(ForumChrome.secondary)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
             }
-            Spacer(minLength: 0)
-
-            if let onRefresh {
-                Button(action: onRefresh) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(.plain)
-            } else {
-                NavigationLink {
-                    SearchView()
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(.plain)
+            ForEach(visibleCategories) { category in
+                ForumCategoryCard(
+                    category: category,
+                    initiallyExpanded: category.id == visibleCategories.first?.id
+                )
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: 48)
-        .background(ForumChrome.bar)
     }
 }
 
-extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
-    }
-}
+private struct ForumCategoryCard: View {
+    let category: ForumCategory
+    @State private var expanded: Bool
 
-extension LoadState {
-    var errorMessage: String? {
-        if case .failed(let message) = self { return message }
-        return nil
+    init(category: ForumCategory, initiallyExpanded: Bool) {
+        self.category = category
+        _expanded = State(initialValue: initiallyExpanded)
+    }
+
+    private var boards: [ForumBoard] { category.boards.filter { !$0.isAd } }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "square.stack.3d.up.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(ForumChrome.accent)
+                        .frame(width: 32, height: 32)
+                        .background(ForumChrome.side, in: RoundedRectangle(cornerRadius: 9))
+                    Text(category.name)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(ForumChrome.text)
+                        .multilineTextAlignment(.leading)
+                    Spacer(minLength: 4)
+                    Text("\(boards.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(ForumChrome.secondary)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(ForumChrome.accent)
+                }
+                .padding(14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(category.name)
+            .accessibilityValue(expanded ? "已展开，\(boards.count)个版块" : "已收起，\(boards.count)个版块")
+            .accessibilityHint("轻点展开或收起分组")
+
+            if expanded {
+                ForEach(boards) { board in
+                    ForumChrome.line.frame(height: 0.5).padding(.leading, 16)
+                    NavigationLink { ThreadListView(board: board) } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "bubble.left.and.bubble.right")
+                                .font(.system(size: 17))
+                                .foregroundStyle(ForumChrome.accent.opacity(0.8))
+                                .frame(width: 30)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(board.name)
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(ForumChrome.text)
+                                if !board.meta.isEmpty {
+                                    Text(board.meta)
+                                        .font(.caption)
+                                        .foregroundStyle(ForumChrome.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer(minLength: 4)
+                            if board.today > 0 {
+                                Text("今日 \(board.today)")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(ForumChrome.accent)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(ForumChrome.side, in: Capsule())
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(ForumChrome.secondary.opacity(0.6))
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 13)
+                        .frame(minHeight: 52)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 }

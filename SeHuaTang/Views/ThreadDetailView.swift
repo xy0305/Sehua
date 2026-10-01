@@ -5,13 +5,17 @@ struct ThreadDetailView: View {
     let tid: Int
     let title: String
     @EnvironmentObject var session: WebSession
+    @EnvironmentObject var store: AppStore
+    @ObservedObject private var library = ReadingLibrary.shared
     @State private var detail: ThreadDetail?
     @State private var state: LoadState = .idle
     @State private var copied = false
+    @State private var copiedAttachmentID: String?
 
     var body: some View {
         VStack(spacing: 0) {
             ForumTopBar(title: detail?.boardName.isEmpty == false ? (detail?.boardName ?? "帖子") : "帖子")
+            detailToolbar
             Group {
                 if state == .loading && detail == nil {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -30,21 +34,84 @@ struct ThreadDetailView: View {
             .background(ForumChrome.page)
         }
         .background(ForumChrome.page)
+        .tint(ForumChrome.blue)
         .toolbar(.hidden, for: .navigationBar)
-        .task { await load() }
+        .task {
+            library.record(readingItem)
+            await load()
+        }
+    }
+
+    // The app uses a custom top bar and hides UINavigationBar; keep this native
+    // toolbar visible rather than attaching items to the hidden system bar.
+    private var detailToolbar: some View {
+        HStack {
+            Text("主题正文")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(ForumChrome.secondary)
+            Spacer()
+            Button {
+                library.toggleFavorite(readingItem)
+            } label: {
+                Label(library.isFavorite(tid) ? "已收藏 · 本机" : "收藏到本机",
+                      systemImage: library.isFavorite(tid) ? "star.fill" : "star")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ForumChrome.blue)
+                    .frame(minHeight: 44)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .background(ForumChrome.bar)
+        .overlay(alignment: .bottom) { ForumChrome.line.frame(height: 0.5) }
+    }
+
+    private var readingItem: ThreadItem {
+        var item = store.threads.first(where: { $0.id == tid }) ?? ThreadItem(
+            id: tid, title: title, excerpt: "", author: "", authorID: nil,
+            avatarURL: nil, coverURL: nil, dateText: "", replies: "",
+            likes: "", views: "", isSticky: false, fid: nil
+        )
+        if let detail {
+            if !detail.title.isEmpty { item.title = detail.title }
+            item.fid = detail.fid ?? item.fid
+            if !detail.replyCount.isEmpty { item.replies = detail.replyCount }
+            if let post = detail.posts.first {
+                item.author = post.author
+                item.authorID = post.authorID
+                item.avatarURL = post.avatarURL
+                item.dateText = post.dateText
+                item.coverURL = post.images.first ?? detail.images.first ?? item.coverURL
+                item.excerpt = String(cleaned(post.plainText).prefix(160))
+            }
+        }
+        return item
     }
 
     private func content(_ d: ThreadDetail) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 0) {
+                if let error = state.errorMessage {
+                    HStack {
+                        Text(error).font(.footnote).foregroundStyle(ForumChrome.secondary)
+                        Spacer()
+                        Button("重试") { Task { await load() } }
+                            .font(.footnote)
+                    }
+                    .padding(16)
+                    .background(ForumChrome.page)
+                }
                 Text(d.title.isEmpty ? title : d.title)
                     .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(Color(white: 0.08))
+                    .foregroundStyle(ForumChrome.text)
                     .padding(.horizontal, 16)
-                    .padding(.top, 14)
+                    .padding(.top, 20)
+                    .padding(.bottom, 16)
 
                 if let post = d.posts.first {
                     authorBar(post)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
                 }
 
                 if !d.magnets.isEmpty || !d.attachments.isEmpty {
@@ -56,9 +123,9 @@ struct ThreadDetailView: View {
                                     .foregroundStyle(ForumChrome.blue)
                                 Text(m.isMagnet ? "磁力链接" : (m.isED2K ? "eD2k" : m.name)).lineLimit(1)
                                 Spacer()
-                                Button(copied ? "已复制" : "复制") {
+                                Button(copiedAttachmentID == m.id ? "已复制" : "复制") {
                                     UIPasteboard.general.string = m.url.absoluteString
-                                    copied = true
+                                    copiedAttachmentID = m.id
                                 }
                                 .font(.system(size: 13, weight: .semibold))
                                 Button("打开") { SiteLinks.open(m.url) }
@@ -67,10 +134,10 @@ struct ThreadDetailView: View {
                             .font(.system(size: 14))
                         }
                     }
-                    .padding(14)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .padding(.horizontal, 12)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ForumChrome.page)
+                    .overlay(alignment: .bottom) { ForumChrome.line.frame(height: 0.5) }
                 }
 
                 if let body = d.posts.first?.htmlBody, !SiteLinks.links(in: body, base: session.baseURL).isEmpty {
@@ -93,47 +160,50 @@ struct ThreadDetailView: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    .padding(14)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .padding(.horizontal, 12)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ForumChrome.page)
+                    .overlay(alignment: .bottom) { ForumChrome.line.frame(height: 0.5) }
                 }
 
                 ForEach(d.posts) { post in
                     VStack(alignment: .leading, spacing: 10) {
                         if d.posts.first?.id != post.id {
-                            HStack {
-                                Text(post.author.isEmpty ? "回复" : post.author)
-                                    .font(.system(size: 14, weight: .semibold))
-                                Spacer()
-                                Text(post.dateText)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(Color(white: 0.5))
-                            }
+                            authorBar(post, isOriginal: false)
                         }
-                        Text(cleaned(post.plainText))
-                            .font(.system(size: 16))
-                            .foregroundStyle(Color(white: 0.12))
-                            .lineSpacing(6)
-                            .textSelection(.enabled)
+                        let text = cleaned(post.plainText)
+                        if !text.isEmpty {
+                            Text(text)
+                                .font(.system(size: 16))
+                                .foregroundStyle(ForumChrome.text)
+                                .lineSpacing(6)
+                                .textSelection(.enabled)
+                        }
                         if !post.images.isEmpty {
                             imageStrip(post.images)
                         }
                     }
-                    .padding(14)
+                    .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .padding(.horizontal, 12)
+                    .background(ForumChrome.bar)
+                    .overlay(alignment: .bottom) { ForumChrome.line.frame(height: 0.5) }
                 }
 
                 if d.posts.allSatisfy(\.images.isEmpty), !d.images.isEmpty {
                     imageStrip(d.images)
-                        .padding(.horizontal, 12)
+                        .padding(16)
                 }
+                Text("当前显示已加载的正文与回复；发表回复及站点收藏使用网页表单。")
+                    .font(.caption)
+                    .foregroundStyle(ForumChrome.secondary)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ForumChrome.page)
             }
+            .background(ForumChrome.bar)
             .padding(.bottom, 24)
         }
+        .refreshable { await load() }
         .safeAreaInset(edge: .bottom) {
             actionBar(d)
         }
@@ -143,17 +213,17 @@ struct ThreadDetailView: View {
         HStack(spacing: 12) {
             if let url = d.replyURL {
                 NavigationLink {
-                    LoginWebView(url: url, title: "回复")
+                    LoginWebView(url: url, title: "回复 · 网页表单")
                 } label: {
-                    Label("回复", systemImage: "bubble.left")
+                    Label("网页回复", systemImage: "square.and.pencil")
                         .frame(maxWidth: .infinity, minHeight: 40)
                 }
             }
             if let url = d.favoriteURL {
                 NavigationLink {
-                    LoginWebView(url: url, title: "收藏")
+                    LoginWebView(url: url, title: "站点收藏 · 网页表单")
                 } label: {
-                    Label("收藏", systemImage: "star")
+                    Label("站点收藏", systemImage: "safari")
                         .frame(maxWidth: .infinity, minHeight: 40)
                 }
             }
@@ -172,7 +242,7 @@ struct ThreadDetailView: View {
         .background(.ultraThinMaterial)
     }
 
-    private func authorBar(_ post: ThreadPost) -> some View {
+    private func authorBar(_ post: ThreadPost, isOriginal: Bool = true) -> some View {
         HStack(spacing: 10) {
             avatar(post.avatarURL)
             VStack(alignment: .leading, spacing: 3) {
@@ -181,31 +251,30 @@ struct ThreadDetailView: View {
                 if !post.dateText.isEmpty {
                     Text(post.dateText)
                         .font(.system(size: 12))
-                        .foregroundStyle(Color(white: 0.5))
+                        .foregroundStyle(ForumChrome.secondary)
                 }
             }
             Spacer()
-            Text("楼主")
+            Text(isOriginal ? "楼主" : "回复")
                 .font(.system(size: 12))
                 .foregroundStyle(ForumChrome.blue)
         }
-        .padding(.horizontal, 16)
     }
 
     private func avatar(_ url: URL?) -> some View {
         Group {
             if let url {
                 SiteImage(url: url) {
-                    Color(white: 0.92)
+                    ForumChrome.page
                 }
             } else {
                 Image(systemName: "person.fill")
-                    .foregroundStyle(Color(white: 0.6))
+                    .foregroundStyle(ForumChrome.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(white: 0.93))
+                    .background(ForumChrome.page)
             }
         }
-        .frame(width: 40, height: 40)
+        .frame(width: 32, height: 32)
         .clipShape(Circle())
     }
 
@@ -217,7 +286,7 @@ struct ThreadDetailView: View {
                         ImagePage(url: url)
                     } label: {
                         SiteImage(url: url) {
-                            Color(white: 0.94)
+                            ForumChrome.page
                         }
                         .frame(width: 160, height: 210)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -237,17 +306,20 @@ struct ThreadDetailView: View {
     }
 
     private func load() async {
+        guard state != .loading, !Task.isCancelled else { return }
         state = .loading
         do {
             let html = try await session.fetchHTML("forum.php?mod=viewthread&tid=\(tid)&mobile=2")
+            try Task.checkCancellation()
             if DiscuzParser.looksLikeChallenge(html) {
                 state = .failed("需要过验证，到「我的」里打开网页")
                 return
             }
             detail = DiscuzParser.parseThreadDetail(html, tid: tid, base: session.baseURL)
+            library.record(readingItem)
             state = .idle
         } catch {
-            state = .failed(error.localizedDescription)
+            state = error is CancellationError ? .idle : .failed(error.localizedDescription)
         }
     }
 }

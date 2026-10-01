@@ -3,13 +3,26 @@ import WebKit
 
 struct RootView: View {
     @EnvironmentObject var session: WebSession
+    @AppStorage("appearance.mode") private var appearanceMode = "system"
+    private var selectedScheme: ColorScheme? {
+        appearanceMode == "dark" ? .dark : (appearanceMode == "light" ? .light : nil)
+    }
 
     var body: some View {
         TabView {
             NavigationStack {
                 PortalView()
             }
-            .tabItem { Label("论坛", systemImage: "square.grid.2x2.fill") }
+            .tabItem { Label("首页", systemImage: "house.fill") }
+
+            NavigationStack { ReadingLibraryView(isHistory: false) }
+                .tabItem { Label("收藏", systemImage: "star") }
+
+            NavigationStack { ReadingLibraryView(isHistory: true) }
+                .tabItem { Label("历史", systemImage: "clock.arrow.circlepath") }
+
+            NavigationStack { SearchView() }
+                .tabItem { Label("搜索", systemImage: "magnifyingglass") }
 
             NavigationStack {
                 MineView()
@@ -17,6 +30,7 @@ struct RootView: View {
             .tabItem { Label("我的", systemImage: "person.crop.circle") }
         }
         .tint(ForumChrome.blue)
+        .preferredColorScheme(selectedScheme)
         .background {
             HiddenWebView()
                 .frame(width: 1, height: 1)
