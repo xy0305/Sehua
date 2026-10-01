@@ -57,6 +57,14 @@ final class WebSession: NSObject, ObservableObject {
                 }
                 waiters[id] = cont
                 queue.append((target, id, timeout))
+                // Deadline includes time spent waiting behind another page.
+                let work = DispatchWorkItem { [weak self] in
+                    Task { @MainActor in
+                        self?.complete(id: id, result: .failure(URLError(.timedOut)))
+                    }
+                }
+                timeoutWork[id] = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: work)
                 pump()
             }
         }, onCancel: {
@@ -70,14 +78,6 @@ final class WebSession: NSObject, ObservableObject {
         guard activeID == nil, let next = queue.first else { return }
         activeID = next.id
         collectGen += 1
-        let work = DispatchWorkItem { [weak self] in
-            Task { @MainActor in
-                guard let self, self.activeID == next.id else { return }
-                self.complete(id: next.id, result: .failure(URLError(.timedOut)))
-            }
-        }
-        timeoutWork[next.id] = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + next.timeout, execute: work)
         guard let navigation = webView.load(URLRequest(url: next.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: next.timeout)) else {
             complete(id: next.id, result: .failure(URLError(.unknown)))
             return
@@ -176,8 +176,9 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
         guard let id = activeID, let navigation else { return }
         if requestID(for: navigation) == id {
             activeNavigation = navigation
-        } else if requestID(for: navigation) == nil, ageGateRequestID == id {
-            // A script-clicked age gate is a new WKNavigation, not the original load.
+        } else if requestID(for: navigation) == nil {
+            // Same fetch may redirect via JS or a verification interstitial.
+            // Stale explicitly tagged navigations are still rejected below.
             tag(navigation, id: id)
             activeNavigation = navigation
             ageGateRequestID = nil
@@ -185,6 +186,15 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
             return
         }
         collectGen += 1
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard let id = requestID(for: navigation), id == activeID,
+              navigation === activeNavigation else { return }
+        collectGen += 1
+        let gen = collectGen
+        clickAgeGateIfNeeded(id: id, gen: gen)
+        collectHTML(attempt: 0, id: id, gen: gen)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -209,7 +219,7 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
                         return
                     }
                     if html.isEmpty {
-                        if attempt < 8 {
+                        if attempt < 24 {
                             self.collectHTML(attempt: attempt + 1, id: id, gen: gen)
                         } else {
                             self.complete(id: id, result: .failure(URLError(.cannotDecodeContentData)))
@@ -218,7 +228,7 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
                     }
                     if DiscuzParser.looksLikeChallenge(html) {
                         self.needsChallenge = true
-                        if attempt < 8 {
+                        if attempt < 24 {
                             self.clickAgeGateIfNeeded(id: id, gen: gen)
                             self.collectHTML(attempt: attempt + 1, id: id, gen: gen)
                         } else {
@@ -227,8 +237,9 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
                         return
                     }
                     let ready = html.contains("n5_htnrbt") || html.contains("class=\"btdb\"") || html.contains("n5_bbsbk")
-                        || html.contains("class=\"message\"") || html.contains("viewthread")
-                    if !ready && attempt < 8 {
+                        || html.contains("class=\"message\"") || html.contains("n5_htmk")
+                        || html.contains("n5_hdlbmk")
+                    if !ready && attempt < 24 {
                         self.collectHTML(attempt: attempt + 1, id: id, gen: gen)
                         return
                     }

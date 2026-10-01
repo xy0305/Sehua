@@ -24,6 +24,7 @@ struct ThreadListView: View {
                 typeBar
             }
             orderBar
+            ChallengeBanner()
             ScrollView {
                 LazyVStack(spacing: 0) {
                     if let error = store.threadState.errorMessage, store.threads.isEmpty {
