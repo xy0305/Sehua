@@ -38,6 +38,11 @@ jobs:
           sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
 
+      - name: Production parser regression tests
+        run: |
+          xcrun swiftc -D PARSER_REGRESSION_TESTS SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift -o /tmp/sehua-parser-tests
+          /tmp/sehua-parser-tests
+
       - name: Build unsigned (iphoneos)
         run: |
           set -euo pipefail

@@ -1,8 +1,16 @@
 import Foundation
 
+private struct HTMLTag {
+    let name: String
+    let closing: Bool
+    let empty: Bool
+    let raw: String
+    let range: Range<String.Index>
+}
+
 enum HTML {
     static func unescape(_ s: String) -> String {
-        s.replacingOccurrences(of: "&amp;", with: "&")
+        let decoded = s.replacingOccurrences(of: "&amp;", with: "&")
             .replacingOccurrences(of: "&nbsp;", with: " ")
             .replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")
@@ -11,6 +19,15 @@ enum HTML {
             .replacingOccurrences(of: "<br>", with: "\n")
             .replacingOccurrences(of: "<br/>", with: "\n")
             .replacingOccurrences(of: "<br />", with: "\n")
+        guard let regex = try? NSRegularExpression(pattern: #"&#(x[0-9a-f]+|[0-9]+);"#, options: [.caseInsensitive]) else { return decoded }
+        var result = decoded
+        for match in regex.matches(in: decoded, range: NSRange(decoded.startIndex..., in: decoded)).reversed() {
+            guard let range = Range(match.range, in: result), let valueRange = Range(match.range(at: 1), in: decoded) else { continue }
+            let value = String(decoded[valueRange])
+            let number = value.lowercased().hasPrefix("x") ? UInt32(value.dropFirst(), radix: 16) : UInt32(value)
+            if let number = number, let scalar = UnicodeScalar(number) { result.replaceSubrange(range, with: String(scalar)) }
+        }
+        return result
     }
 
     static func stripTags(_ s: String) -> String {
@@ -53,4 +70,84 @@ enum HTML {
         if name == "fid", let m = firstMatch("forum-(\\d+)", in: u) { return Int(m) }
         return nil
     }
+    private static func tags(_ html: String) -> [HTMLTag] {
+        // Comments and raw-text elements are consumed as one token, so apparent tags
+        // in JavaScript, CSS or comments cannot close a message container.
+        let pattern = #"<!--[\s\S]*?-->|<(script|style)\b[^>]*>[\s\S]*?</\1\s*>|</?[A-Za-z][A-Za-z0-9:_-]*(?:\s+(?:[^>\"']|\"[^\"]*\"|'[^']*')*)?\s*/?>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
+        return regex.matches(in: html, range: NSRange(html.startIndex..., in: html)).compactMap { match in
+            guard let range = Range(match.range, in: html) else { return nil }
+            let raw = String(html[range])
+            guard let name = firstMatch(#"^</?([A-Za-z][A-Za-z0-9:_-]*)"#, in: raw) else { return nil }
+            return HTMLTag(name: name.lowercased(), closing: raw.hasPrefix("</"), empty: raw.hasSuffix("/>"), raw: raw, range: range)
+        }
+    }
+
+    static func attribute(_ name: String, in tag: String) -> String? {
+        guard let opening = firstMatch(#"^</?[A-Za-z][A-Za-z0-9:_-]*(?:\s+(?:[^>\"']|\"[^\"]*\"|'[^']*')*)?\s*/?>"#, in: tag, group: 0) else { return nil }
+        let escaped = NSRegularExpression.escapedPattern(for: name)
+        let pattern = #"(?:\s)"# + escaped + #"\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#
+        for group in 1...3 {
+            if let value = firstMatch(pattern, in: opening, group: group) { return unescape(value) }
+        }
+        return nil
+    }
+
+    static func hasClass(_ name: String, in tag: String) -> Bool {
+        (attribute("class", in: tag) ?? "").split(whereSeparator: { $0.isWhitespace }).contains { $0 == name }
+    }
+
+    /// Returns full, balanced elements (or their contents), never an unbounded page suffix.
+    static func elements(in html: String, tag name: String? = nil, className: String? = nil, idPrefix: String? = nil, inner: Bool = false) -> [String] {
+        let tokens = tags(html)
+        var result: [String] = []
+        var consumedUntil = html.startIndex
+        for (index, token) in tokens.enumerated() {
+            guard !token.closing, token.range.lowerBound >= consumedUntil,
+                  name == nil || token.name == name?.lowercased(),
+                  className == nil || hasClass(className!, in: token.raw),
+                  idPrefix == nil || (attribute("id", in: token.raw) ?? "").hasPrefix(idPrefix!) else { continue }
+            if token.empty || ["img", "input", "br", "hr", "meta", "link"].contains(token.name) {
+                result.append(inner ? "" : token.raw)
+                consumedUntil = token.range.upperBound
+                continue
+            }
+            var depth = 1
+            for end in tokens.dropFirst(index + 1) where end.name == token.name {
+                if end.closing { depth -= 1 } else if !end.empty { depth += 1 }
+                if depth == 0 {
+                    let range = inner ? token.range.upperBound..<end.range.lowerBound : token.range.lowerBound..<end.range.upperBound
+                    result.append(String(html[range]))
+                    consumedUntil = end.range.upperBound
+                    break
+                }
+            }
+        }
+        return result
+    }
+
+    static func plainText(_ html: String) -> String {
+        var text = html.replacingOccurrences(of: #"(?is)<(script|style)\b[^>]*>[\s\S]*?</\1\s*>|<!--[\s\S]*?-->"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?i)<br\b[^>]*>|</?(?:p|div|li|blockquote|h[1-6]|tr|section|pre)\b[^>]*>"#, with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)
+        return unescape(text).components(separatedBy: .newlines).map {
+            $0.replacingOccurrences(of: #"[^\S\r\n]+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+        }.joined(separator: "\n").replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func imageURLs(in html: String, base: URL, excludingDecorations: Bool = true) -> [URL] {
+        var seen = Set<String>()
+        return elements(in: html, tag: "img").compactMap { tag in
+            for key in ["zoomfile", "file", "data-original", "data-src", "src"] {
+                guard let value = attribute(key, in: tag), let url = absURL(value, base: base),
+                      ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { continue }
+                let path = url.path.lowercased()
+                if excludingDecorations && (path.contains("/uc_server/") || path.contains("/avatar") || path.contains("noavatar") || path.contains("/static/image/") || path.contains("/smiley/")) { continue }
+                // Only one URL per tag; never choose the last matching attribute by greediness.
+                return seen.insert(url.absoluteString).inserted ? url : nil
+            }
+            return nil
+        }
+    }
+
 }

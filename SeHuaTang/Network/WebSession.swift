@@ -1,6 +1,7 @@
 import Foundation
 import WebKit
 import Combine
+import ObjectiveC
 
 @MainActor
 final class WebSession: NSObject, ObservableObject {
@@ -17,7 +18,9 @@ final class WebSession: NSObject, ObservableObject {
     private var waiters: [UUID: CheckedContinuation<String, Error>] = [:]
     private var timeoutWork: [UUID: DispatchWorkItem] = [:]
     private var queue: [(url: URL, id: UUID, timeout: TimeInterval)] = []
-    private var loading = false
+    private var activeID: UUID?
+    private var activeNavigation: WKNavigation?
+    private var ageGateRequestID: UUID?
     private var collectGen = 0
 
     var baseURL: URL { URL(string: "https://\(host)")! }
@@ -43,34 +46,74 @@ final class WebSession: NSObject, ObservableObject {
     }
 
     func fetchHTML(_ path: String, timeout: TimeInterval = 25) async throws -> String {
+        try Task.checkCancellation()
         let target = url(path)
-        return try await withCheckedThrowingContinuation { cont in
-            let id = UUID()
-            waiters[id] = cont
-            queue.append((target, id, timeout))
-            pump()
-        }
+        let id = UUID()
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { cont in
+                guard !Task.isCancelled else {
+                    cont.resume(throwing: CancellationError())
+                    return
+                }
+                waiters[id] = cont
+                queue.append((target, id, timeout))
+                pump()
+            }
+        }, onCancel: {
+            Task { @MainActor [weak self] in
+                self?.complete(id: id, result: .failure(CancellationError()))
+            }
+        })
     }
 
     private func pump() {
-        guard !loading, let next = queue.first else { return }
-        loading = true
+        guard activeID == nil, let next = queue.first else { return }
+        activeID = next.id
+        collectGen += 1
         let work = DispatchWorkItem { [weak self] in
             Task { @MainActor in
-                guard let self, let c = self.waiters.removeValue(forKey: next.id) else { return }
-                self.webView.stopLoading()
-                if self.queue.first?.id == next.id { self.queue.removeFirst() }
-                self.loading = false
-                c.resume(throwing: URLError(.timedOut))
-                self.pump()
+                guard let self, self.activeID == next.id else { return }
+                self.complete(id: next.id, result: .failure(URLError(.timedOut)))
             }
         }
         timeoutWork[next.id] = work
         DispatchQueue.main.asyncAfter(deadline: .now() + next.timeout, execute: work)
-        webView.load(URLRequest(url: next.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: next.timeout))
+        guard let navigation = webView.load(URLRequest(url: next.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: next.timeout)) else {
+            complete(id: next.id, result: .failure(URLError(.unknown)))
+            return
+        }
+        activeNavigation = navigation
+        tag(navigation, id: next.id)
     }
 
-    func clickAgeGateIfNeeded() {
+    private func tag(_ navigation: WKNavigation, id: UUID) {
+        objc_setAssociatedObject(navigation, &AssociatedKeys.fetchID, id as NSUUID, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    }
+
+    private func requestID(for navigation: WKNavigation?) -> UUID? {
+        guard let navigation else { return nil }
+        return (objc_getAssociatedObject(navigation, &AssociatedKeys.fetchID) as? NSUUID).map { $0 as UUID }
+    }
+
+    private func complete(id: UUID, result: Result<String, Error>) {
+        guard let continuation = waiters.removeValue(forKey: id) else { return }
+        timeoutWork.removeValue(forKey: id)?.cancel()
+        queue.removeAll { $0.id == id }
+        if activeID == id {
+            // Invalidate delayed collection and JS completions BEFORE starting another load.
+            collectGen += 1
+            activeID = nil
+            activeNavigation = nil
+            ageGateRequestID = nil
+            webView.stopLoading()
+        }
+        continuation.resume(with: result)
+        pump()
+    }
+
+    private func clickAgeGateIfNeeded(id: UUID, gen: Int) {
+        guard activeID == id, collectGen == gen else { return }
+        ageGateRequestID = id
         let js = """
         (function(){
           var a = document.querySelector('a.enter-btn');
@@ -83,42 +126,31 @@ final class WebSession: NSObject, ObservableObject {
           return 'ok';
         })();
         """
-        webView.evaluateJavaScript(js, completionHandler: nil)
+        webView.evaluateJavaScript(js) { [weak self] result, _ in
+            Task { @MainActor in
+                guard let self, self.activeID == id, self.collectGen == gen else { return }
+                if (result as? String) != "clicked" { self.ageGateRequestID = nil }
+            }
+        }
     }
 
     func currentHTML() async -> String {
         (try? await webView.evaluateJavaScript("document.documentElement.outerHTML") as? String) ?? ""
     }
 
-    func finish(_ html: String) {
+    private func finish(_ html: String, id: UUID, gen: Int) {
+        guard activeID == id, collectGen == gen else { return }
         needsChallenge = DiscuzParser.looksLikeChallenge(html)
         if let name = DiscuzParser.loggedInUsername(html) { username = name }
-        resumeFirst(result: .success(html))
-    }
-
-    private func resumeFirst(result: Result<String, Error>) {
-        guard !queue.isEmpty else { return }
-        let id = queue.removeFirst().id
-        guard let c = waiters.removeValue(forKey: id) else {
-            loading = false
-            pump()
-            return
-        }
-        timeoutWork[id]?.cancel()
-        timeoutWork[id] = nil
-        loading = false
-        switch result {
-        case .success(let s): c.resume(returning: s)
-        case .failure(let e): c.resume(throwing: e)
-        }
-        pump()
+        complete(id: id, result: .success(html))
     }
 
     func refreshAccount() {
+        let gen = collectGen
         webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] result, _ in
             let html = (result as? String) ?? ""
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.collectGen == gen else { return }
                 if let name = DiscuzParser.loggedInUsername(html) {
                     self.username = name
                 }
@@ -140,50 +172,84 @@ private enum AssociatedKeys {
 }
 
 extension WebSession: WKNavigationDelegate, WKUIDelegate {
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        clickAgeGateIfNeeded()
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard let id = activeID, let navigation else { return }
+        if requestID(for: navigation) == id {
+            activeNavigation = navigation
+        } else if requestID(for: navigation) == nil, ageGateRequestID == id {
+            // A script-clicked age gate is a new WKNavigation, not the original load.
+            tag(navigation, id: id)
+            activeNavigation = navigation
+            ageGateRequestID = nil
+        } else {
+            return
+        }
         collectGen += 1
-        collectHTML(attempt: 0, gen: collectGen)
     }
 
-    private func collectHTML(attempt: Int, gen: Int) {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let id = requestID(for: navigation), id == activeID,
+              navigation === activeNavigation else { return }
+        collectGen += 1
+        let gen = collectGen
+        clickAgeGateIfNeeded(id: id, gen: gen)
+        collectHTML(attempt: 0, id: id, gen: gen)
+    }
+
+    private func collectHTML(attempt: Int, id: UUID, gen: Int) {
         let delay: TimeInterval = attempt == 0 ? 0.4 : 0.7
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, gen == self.collectGen else { return }
-            self.webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] result, _ in
+            guard let self, self.activeID == id, gen == self.collectGen else { return }
+            self.webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] result, error in
                 let html = (result as? String) ?? ""
                 Task { @MainActor in
-                    guard let self, gen == self.collectGen else { return }
+                    guard let self, self.activeID == id, gen == self.collectGen else { return }
+                    if let error {
+                        self.complete(id: id, result: .failure(error))
+                        return
+                    }
+                    if html.isEmpty {
+                        if attempt < 8 {
+                            self.collectHTML(attempt: attempt + 1, id: id, gen: gen)
+                        } else {
+                            self.complete(id: id, result: .failure(URLError(.cannotDecodeContentData)))
+                        }
+                        return
+                    }
                     if DiscuzParser.looksLikeChallenge(html) {
                         self.needsChallenge = true
                         if attempt < 8 {
-                            self.clickAgeGateIfNeeded()
-                            self.collectHTML(attempt: attempt + 1, gen: gen)
+                            self.clickAgeGateIfNeeded(id: id, gen: gen)
+                            self.collectHTML(attempt: attempt + 1, id: id, gen: gen)
                         } else {
-                            self.finish(html)
+                            self.finish(html, id: id, gen: gen)
                         }
                         return
                     }
                     let ready = html.contains("n5_htnrbt") || html.contains("class=\"btdb\"") || html.contains("n5_bbsbk")
                         || html.contains("class=\"message\"") || html.contains("viewthread")
                     if !ready && attempt < 8 {
-                        self.collectHTML(attempt: attempt + 1, gen: gen)
+                        self.collectHTML(attempt: attempt + 1, id: id, gen: gen)
                         return
                     }
-                    self.finish(html)
+                    self.finish(html, id: id, gen: gen)
                 }
             }
         }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard let id = requestID(for: navigation), id == activeID,
+              navigation === activeNavigation else { return }
         if (error as NSError).code == NSURLErrorCancelled { return }
-        resumeFirst(result: .failure(error))
+        complete(id: id, result: .failure(error))
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard let id = requestID(for: navigation), id == activeID,
+              navigation === activeNavigation else { return }
         if (error as NSError).code == NSURLErrorCancelled { return }
-        resumeFirst(result: .failure(error))
+        complete(id: id, result: .failure(error))
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {

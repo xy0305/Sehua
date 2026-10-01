@@ -4,7 +4,7 @@ enum DiscuzParser {
     static func parsePortal(_ html: String, base: URL) -> PortalPage {
         var notices: [SiteNotice] = []
         var seenNotice = Set<Int>()
-        if let box = HTML.firstMatch(#"class="n5_ggmk[\s\S]*?</ul>"#, in: html) {
+        if let box = HTML.elements(in: html, className: "n5_ggmk").first {
             let hrefs = HTML.allMatches(#"<a href="([^"]*tid=\d+[^"]*)"[^>]*>([\s\S]*?)</a>"#, in: box, group: 1)
             let titles = HTML.allMatches(#"<a href="([^"]*tid=\d+[^"]*)"[^>]*>([\s\S]*?)</a>"#, in: box, group: 2)
             let dates = HTML.allMatches(#"<i>([^<]*)</i>"#, in: box, group: 1)
@@ -115,41 +115,35 @@ enum DiscuzParser {
             threads.append(ThreadItem(id: tid, title: title, excerpt: "", author: "", authorID: nil, avatarURL: nil, coverURL: nil, dateText: date, replies: "", likes: "", views: "", isSticky: true, fid: fid))
         }
 
-        let cards = html.components(separatedBy: "n5_htmk")
-        for raw in cards.dropFirst() {
-            let card = "n5_htmk" + raw
+        let cards = HTML.elements(in: html, className: "n5_htmk")
+        let listBase = URL(string: "https://\(SiteConfig.defaultHost)/")!
+        for card in cards {
             guard let tidS = HTML.firstMatch(#"mod=viewthread&amp;tid=(\d+)"#, in: card)
                     ?? HTML.firstMatch(#"mod=viewthread&tid=(\d+)"#, in: card),
                   let tid = Int(tidS) else { continue }
             if !seenTID.insert(tid).inserted { continue }
 
-            if card.contains("id=\"links\"") || card.contains("class=\"show-text") { continue }
+            if !HTML.elements(in: card, idPrefix: "links").isEmpty { continue }
             let title = HTML.stripTags(
-                HTML.firstMatch(#"class="n5_htnrbt[^"]*"[^>]*>\s*<a[^>]*>([\s\S]*?)</a>"#, in: card)
+                HTML.elements(in: card, className: "n5_htnrbt", inner: true).first
                     ?? HTML.firstMatch(#"<h1>\s*<a[^>]*>([\s\S]*?)</a>"#, in: card)
                     ?? ""
             )
             if title.isEmpty { continue }
             if SiteConfig.isAdText(title) { continue }
 
-            let excerpt = HTML.stripTags(HTML.firstMatch(#"<p>\s*<a[^>]*>([\s\S]*?)</a>"#, in: card) ?? "")
+            let excerpt = HTML.stripTags(HTML.elements(in: card, className: "n5_htnrjj", inner: true).first
+                ?? HTML.firstMatch(#"<p>\s*<a[^>]*>([\s\S]*?)</a>"#, in: card) ?? "")
             let author = HTML.stripTags(HTML.firstMatch(#"class="n5_mktbhy"[^>]*>\s*<a[^>]*>([\s\S]*?)</a>"#, in: card) ?? "")
             let authorID = Int(HTML.firstMatch(#"uid=(\d+)"#, in: card) ?? "")
             let dateText = HTML.stripTags(HTML.firstMatch(#"class="n5_mktbsj[^"]*"[^>]*>([\s\S]*?)</span>"#, in: card) ?? "")
                 .replacingOccurrences(of: "发布", with: "")
                 .trimmingCharacters(in: .whitespaces)
-            let avatar = HTML.firstMatch(#"<img[^>]+src="(/uc_server/[^"]+)"#, in: card)
-            let covers = HTML.allMatches(#"data-original="(https?://[^"]+)"#, in: card, group: 1)
-            let cover = covers.first
-            let replies = HTML.stripTags(HTML.firstMatch(#"n5_hthfcs[\s\S]{0,180}?</i>\s*([^<]+)"#, in: card) ?? "")
-            let likes = HTML.stripTags(HTML.firstMatch(#"n5_htdzcs[\s\S]{0,180}?</i>\s*([^<]+)"#, in: card) ?? "")
-            let views = HTML.stripTags(HTML.firstMatch(#"n5_htsccs[\s\S]{0,180}?</i>\s*([^<]+)"#, in: card) ?? "")
-
-            let coverURL = cover.flatMap { URL(string: HTML.unescape($0)) }
-            let avatarURL: URL? = avatar.flatMap {
-                if $0.hasPrefix("http") { return URL(string: $0) }
-                return URL(string: "https://\(SiteConfig.defaultHost)\($0)")
-            }
+            let avatarURL = avatarURL(in: card, base: listBase)
+            let coverURL = HTML.imageURLs(in: card, base: listBase).first
+            let replies = statistic("n5_hthfcs", in: card)
+            let likes = statistic("n5_htdzcs", in: card)
+            let views = statistic("n5_htsccs", in: card)
 
             threads.append(ThreadItem(
                 id: tid, title: title, excerpt: excerpt, author: author,
@@ -198,45 +192,73 @@ enum DiscuzParser {
             attachments.append(ThreadAttachment(id: url.absoluteString, name: n, url: url))
         }
 
-        var images: [URL] = []
-        var seenImg = Set<String>()
-        for c in HTML.allMatches(#"<img[^>]+(?:zoomfile|file|data-original|src)="(https?://[^"]+)"#, in: html, group: 1) {
-            let u = HTML.unescape(c)
-            if u.contains("avatar") || u.contains("static/image") || u.contains("noavatar") { continue }
-            if u.contains("icon") || u.contains("smiley") { continue }
-            if seenImg.insert(u).inserted, let url = URL(string: u) { images.append(url) }
-        }
-
         var posts: [ThreadPost] = []
-        let postBlocks = html.components(separatedBy: "id=\"post_")
-        if postBlocks.count > 1 {
-            for raw in postBlocks.dropFirst() {
-                let block = "id=\"post_" + raw
-                let pid = HTML.firstMatch(#"id="post_(\d+)"#, in: block) ?? UUID().uuidString
-                let author = HTML.stripTags(HTML.firstMatch(#"class="n5_mktbhy"[^>]*>\s*<a[^>]*>([\s\S]*?)</a>"#, in: block) ?? "")
-                let dateText = HTML.stripTags(HTML.firstMatch(#"class="n5_mktbsj[^"]*"[^>]*>([\s\S]*?)</span>"#, in: block) ?? "")
-                let body = HTML.firstMatch(#"class="[^"]*message[^"]*"[^>]*>([\s\S]*?)</div>"#, in: block) ?? ""
-                let plain = HTML.stripTags(body)
-                if SiteConfig.isAdText(plain) && plain.count < 80 { continue }
-                var pImages: [URL] = []
-                for c in HTML.allMatches(#"<img[^>]+(?:zoomfile|file|data-original|src)="(https?://[^"]+)"#, in: body, group: 1) {
-                    let u = HTML.unescape(c)
-                    if u.contains("avatar") || u.contains("static/image") { continue }
-                    if let url = URL(string: u) { pImages.append(url) }
-                }
-                posts.append(ThreadPost(id: pid, author: author, authorID: nil, avatarURL: nil, dateText: dateText, htmlBody: body, plainText: plain, images: pImages))
-            }
+        let postBlocks = (HTML.elements(in: html, idPrefix: "post_") + HTML.elements(in: html, idPrefix: "pid")).filter {
+            HTML.firstMatch(#"^<[^>]*\bid\s*=\s*["'](?:post_|pid)\d+["']"#, in: $0, group: 0) != nil
         }
-        if posts.isEmpty {
-            let plain = HTML.stripTags(html)
-            posts.append(ThreadPost(id: "op", author: "", authorID: nil, avatarURL: nil, dateText: "", htmlBody: "", plainText: String(plain.prefix(4000)), images: images))
+        for (index, block) in postBlocks.enumerated() {
+            let pid = HTML.firstMatch(#"id\s*=\s*["'](?:post_|pid)(\d+)["']"#, in: block) ?? "post-\(index)"
+            let header = HTML.elements(in: block, className: "n5_mktb").first ?? block
+            let authorBlock = HTML.elements(in: header, className: "n5_mktbhy", inner: true).first
+                ?? HTML.elements(in: header, className: "n5_yhmhdj", inner: true).first
+                ?? HTML.elements(in: header, className: "authi", inner: true).first ?? ""
+            let author = HTML.stripTags(HTML.elements(in: authorBlock, tag: "a", inner: true).first ?? authorBlock)
+            let authorID = HTML.firstMatch(#"(?:uid=|space-uid-)(\d+)"#, in: authorBlock).flatMap(Int.init)
+            let dateText = HTML.stripTags(HTML.elements(in: header, className: "n5_mktbsj", inner: true).first
+                ?? HTML.elements(in: header, className: "n5_sjydhf", inner: true).first.flatMap { HTML.elements(in: $0, tag: "dt", inner: true).first }
+                ?? HTML.elements(in: header, idPrefix: "authorposton", inner: true).first ?? "")
+            let body = HTML.elements(in: block, className: "message", inner: true).first
+                ?? HTML.elements(in: block, idPrefix: "postmessage_", inner: true).first ?? ""
+            let plain = HTML.plainText(body)
+            if SiteConfig.isAdText(plain) && plain.count < 80 { continue }
+            posts.append(ThreadPost(id: pid, author: author, authorID: authorID,
+                avatarURL: avatarURL(in: header, base: base), dateText: dateText,
+                htmlBody: body, plainText: plain, images: HTML.imageURLs(in: body, base: base)))
         }
-
-        let favorite = HTML.firstMatch(#"ac=favorite&amp;type=thread[^"]*"#, in: html).map { "home.php?mod=spacecp&" + $0.replacingOccurrences(of: "&amp;", with: "&") }
-        let reply = HTML.firstMatch(#"mod=post&amp;action=reply&amp;fid=\d+&amp;tid=\d+[^"]*"#, in: html).map { "forum.php?" + $0.replacingOccurrences(of: "&amp;", with: "&") }
+        // Some mobile skins omit post_<pid>; still extract only the actual message,
+        // never turn navigation, advertisements and footer text into a synthetic post.
+        if posts.isEmpty, let body = HTML.elements(in: html, className: "message", inner: true).first
+            ?? HTML.elements(in: html, idPrefix: "postmessage_", inner: true).first {
+            posts.append(ThreadPost(id: "op", author: "", authorID: nil, avatarURL: nil,
+                dateText: "", htmlBody: body, plainText: HTML.plainText(body), images: HTML.imageURLs(in: body, base: base)))
+        }
+        var seenImages = Set<String>()
+        let images = posts.flatMap { $0.images }.filter { seenImages.insert($0.absoluteString).inserted }
+        let links = HTML.elements(in: html, tag: "a").compactMap { HTML.attribute("href", in: $0) }
+        let favorite = links.first { href in
+            guard let components = URLComponents(string: href) else { return false }
+            let query = components.queryItems ?? []
+            return query.contains { $0.name == "ac" && $0.value == "favorite" }
+                && query.contains { $0.name == "type" && $0.value == "thread" }
+                && HTML.queryInt("id", in: href) == tid
+        }
+        let replyLinks = links.filter { href in
+            guard let components = URLComponents(string: href) else { return false }
+            return (components.queryItems ?? []).contains { $0.name == "action" && $0.value == "reply" }
+                && HTML.queryInt("tid", in: href) == tid
+        }
+        let reply = replyLinks.first { HTML.queryInt("repquote", in: $0) == nil } ?? replyLinks.first
+        let fid = reply.flatMap { HTML.queryInt("fid", in: $0) }
+            ?? HTML.firstMatch(#"name\s*=\s*["']fid["'][^>]*value\s*=\s*["'](\d+)"#, in: html).flatMap(Int.init)
+            ?? links.first(where: { $0.contains("mod=forumdisplay") || $0.contains("forum-") }).flatMap { HTML.queryInt("fid", in: $0) }
         let replyCount = HTML.firstMatch(#"网友回复（(\d+)条）"#, in: html) ?? ""
 
-        return ThreadDetail(tid: tid, title: title, boardName: boardName, fid: nil, replyCount: replyCount, favoriteURL: favorite.flatMap { HTML.absURL($0, base: base) }, replyURL: reply.flatMap { HTML.absURL($0, base: base) }, posts: posts, magnets: magnets, attachments: attachments, images: images)
+        return ThreadDetail(tid: tid, title: title, boardName: boardName, fid: fid, replyCount: replyCount, favoriteURL: favorite.flatMap { HTML.absURL($0, base: base) }, replyURL: reply.flatMap { HTML.absURL($0, base: base) }, posts: posts, magnets: magnets, attachments: attachments, images: images)
+    }
+
+    private static func statistic(_ className: String, in html: String) -> String {
+        guard let body = HTML.elements(in: html, className: className, inner: true).first else { return "" }
+        return HTML.stripTags(HTML.elements(in: body, tag: "a", inner: true).first ?? body)
+    }
+
+    private static func avatarURL(in html: String, base: URL) -> URL? {
+        for tag in HTML.elements(in: html, tag: "img") {
+            guard let source = HTML.attribute("src", in: tag) ?? HTML.attribute("data-original", in: tag) else { continue }
+            if source.lowercased().contains("avatar") || source.contains("uc_server") {
+                return HTML.absURL(source, base: base)
+            }
+        }
+        return nil
     }
 
     static func parseSearch(_ html: String) -> [SearchHit] {
@@ -274,3 +296,68 @@ private func zip3<A, B, C>(_ a: [A], _ b: [B], _ c: [C]) -> [(A, B, C)] {
     let n = min(a.count, b.count, c.count)
     return (0..<n).map { (a[$0], b[$0], c[$0]) }
 }
+
+#if PARSER_REGRESSION_TESTS
+// macOS: xcrun swiftc -D PARSER_REGRESSION_TESTS SeHuaTang/Parser/*.swift \
+//   SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift -o /tmp/parser-tests
+// Then run /tmp/parser-tests. Tests compile the actual production implementations.
+@main
+private enum ParserRegressionTests {
+    static func main() {
+        let base = URL(string: "https://www.sehuatang.org/forum.php?mod=viewthread&tid=42")!
+        precondition(HTML.firstMatch("abc", in: "abc") == nil)
+        precondition(HTML.firstMatch("abc", in: "abc", group: 0) == "abc")
+        precondition(HTML.unescape("&#65;&#x1F600;") == "A😀")
+        let portal = DiscuzParser.parsePortal(#"<div class="n5_ggmk"><ul><li><i>10-01</i><a href="forum.php?mod=viewthread&amp;tid=42">公告</a></li></ul></div>"#, base: base)
+        precondition(portal.notices.count == 1 && portal.notices[0].id == 42)
+        let listHTML = #"""
+        <title>测试版块 - 论坛</title>
+        <div class="n5_htmk"><h1 class="n5_htnrbt"><a href="forum.php?mod=viewthread&amp;tid=42">正常帖子</a></h1>
+        <div class="show-text">合法摘要</div><span class="n5_hthfcs"><a>123</a></span>
+        <span class="n5_htdzcs"><a>45</a></span><span class="n5_htsccs"><a>6,789</a></span>
+        <img src="/static/image/loading.gif" data-original="//img.example/cover.jpg"></div>
+        <div class="n5_htmk"><h1><a href="forum.php?mod=viewthread&amp;tid=43">第二个帖子</a></h1></div>
+        """#
+        let list = DiscuzParser.parseThreadList(listHTML, fid: 103, page: 1)
+        precondition(list.threads.count == 2)
+        precondition(list.threads[0].replies == "123" && list.threads[0].likes == "45" && list.threads[0].views == "6,789")
+        precondition(list.threads[0].coverURL?.absoluteString == "https://img.example/cover.jpg")
+        let detailHTML = #"""
+        <title>测试帖子 - 测试版块 - 论坛</title>
+        <a href="home.php?type=thread&amp;id=42&amp;mod=spacecp&amp;ac=favorite">收藏</a>
+        <a href='forum.php?tid=42&amp;fid=103&amp;action=reply&amp;mod=post'>回复</a>
+        <div id='post_100'><div class="n5_mktb">
+        <span class="n5_mktbhy"><a href="home.php?mod=space&amp;uid=7">作者甲</a></span>
+        <span class="n5_mktbsj">2026-10-01</span><img src='/uc_server/avatar.php?uid=7'></div>
+        <div class='extra message' data-note='a > b'><p>第一段</p><div>嵌套内容</div>
+        <!-- </div> --><script>var ignored = '</div>';</script><p>最后一段<br>第二行</p>
+        <img zoomfile='/images/full.jpg' src='/static/image/loading.gif' file='/images/thumb.jpg'>
+        <img src='//img.example/second.jpg'><img src='/images/full.jpg'></div></div>
+        <div id="post_101"><span class="n5_mktbhy"><a href="space-uid-8.html">作者乙</a></span>
+        <div class="message"><p>回复内容</p></div></div>
+        <img src="https://ads.example/banner.jpg">
+        """#
+        let detail = DiscuzParser.parseThreadDetail(detailHTML, tid: 42, base: base)
+        precondition(detail.fid == 103 && detail.favoriteURL != nil && detail.replyURL != nil)
+        precondition(detail.posts.count == 2 && detail.posts[0].authorID == 7 && detail.posts[1].authorID == 8)
+        precondition(detail.posts[0].author == "作者甲" && detail.posts[0].dateText == "2026-10-01")
+        precondition(detail.posts[0].avatarURL?.path == "/uc_server/avatar.php")
+        precondition(detail.posts[0].plainText.contains("最后一段\n第二行"))
+        precondition(detail.posts[0].htmlBody.contains("/images/full.jpg") && !detail.posts[0].htmlBody.contains("回复内容"))
+        precondition(detail.images.map { $0.absoluteString } == ["https://www.sehuatang.org/images/full.jpg", "https://img.example/second.jpg"])
+        precondition(DiscuzParser.parseThreadDetail("<div>导航</div>", tid: 42, base: base).posts.isEmpty)
+        let mobileHTML = #"""
+        <div id="pid200"><ul class="authi"><div class="n5_yhmhdj"><h3><a href="home.php?uid=9">移动作者</a></h3></div>
+        <div class="n5_sjydhf"><dt>8&nbsp;小时前</dt></div><img src="/uc_server/avatar.php?uid=9"></ul>
+        <div class="message">正文<div class="blockcode"><div><ol><li>magnet:?xt=urn:btih:ABC</li></ol></div></div>尾段</div>
+        <div id="post_rate_200"></div></div>
+        <div id="pid201"><ul class="authi"><div class="n5_yhmhdj"><h3><a href="home.php?uid=10">回复作者</a></h3></div></ul><div class="message">回复</div></div>
+        """#
+        let mobile = DiscuzParser.parseThreadDetail(mobileHTML, tid: 42, base: base)
+        precondition(mobile.posts.map { $0.id } == ["200", "201"])
+        precondition(mobile.posts[0].author == "移动作者" && mobile.posts[0].authorID == 9)
+        precondition(mobile.posts[0].dateText == "8 小时前" && mobile.posts[0].plainText.hasSuffix("尾段"))
+        print("PASS: production parser regression fixtures")
+    }
+}
+#endif

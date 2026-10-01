@@ -21,10 +21,28 @@ final class AppStore: ObservableObject {
     @Published var portal = PortalPage(notices: [], sections: [])
     @Published var portalState: LoadState = .idle
 
+    private struct ThreadRequest: Equatable {
+        let fid: Int
+        let page: Int
+        let typeID: Int
+        let order: String
+        let append: Bool
+    }
+    private var activeThreadRequest: ThreadRequest?
+    private var threadGeneration = UUID()
+    private var forumGeneration = UUID()
+    private var portalGeneration = UUID()
+    private var searchGeneration = UUID()
+
     func loadForums() async {
+        guard forumState != .loading, !Task.isCancelled else { return }
+        let generation = UUID()
+        forumGeneration = generation
         forumState = .loading
         do {
             let html = try await WebSession.shared.fetchHTML("forum.php?forumlist=1&mobile=2")
+            guard forumGeneration == generation else { return }
+            try Task.checkCancellation()
             if DiscuzParser.looksLikeChallenge(html) {
                 forumState = .failed("需要过验证，请到「我的」打开网页登录")
                 return
@@ -33,14 +51,34 @@ final class AppStore: ObservableObject {
             categories = cats
             forumState = .idle
         } catch {
-            forumState = .failed(error.localizedDescription)
+            guard forumGeneration == generation else { return }
+            forumState = error is CancellationError ? .idle : .failed(error.localizedDescription)
         }
     }
 
     func loadThreads(fid: Int, page: Int = 1, typeid: Int = 0, order: String = "dateline", append: Bool = false) async {
+        guard !Task.isCancelled else { return }
+        let request = ThreadRequest(fid: fid, page: page, typeID: typeid, order: order, append: append)
+        // Coalesce repeated last-row appearances / identical refreshes before suspension.
+        guard activeThreadRequest != request else { return }
+        if append {
+            guard activeThreadRequest == nil, threadHasNext,
+                  currentFID == fid, currentTypeID == typeid, currentOrder == order,
+                  page == threadPage + 1 else { return }
+        }
+        let generation = UUID()
+        threadGeneration = generation
+        activeThreadRequest = request
+        defer {
+            if threadGeneration == generation { activeThreadRequest = nil }
+        }
+        threadState = .loading
         if !append {
-            threadState = .loading
-            if page == 1 { threads = [] }
+            threads = []
+            threadTypes = []
+            threadPage = 0
+            threadHasNext = false
+            boardTitle = ""
         }
         currentFID = fid
         currentTypeID = typeid
@@ -51,16 +89,19 @@ final class AppStore: ObservableObject {
         }
         do {
             let html = try await WebSession.shared.fetchHTML(path)
+            guard threadGeneration == generation else { return }
+            try Task.checkCancellation()
             if DiscuzParser.looksLikeChallenge(html) {
                 threadState = .failed("需要过验证")
                 return
             }
             let parsed = DiscuzParser.parseThreadList(html, fid: fid, page: page)
             if append {
-                let exist = Set(threads.map(\.id))
-                threads.append(contentsOf: parsed.threads.filter { !exist.contains($0.id) })
+                var seen = Set(threads.map(\.id))
+                threads.append(contentsOf: parsed.threads.filter { seen.insert($0.id).inserted })
             } else {
-                threads = parsed.threads
+                var seen = Set<Int>()
+                threads = parsed.threads.filter { seen.insert($0.id).inserted }
             }
             threadTypes = parsed.types
             threadPage = page
@@ -68,7 +109,8 @@ final class AppStore: ObservableObject {
             if !parsed.boardName.isEmpty { boardTitle = parsed.boardName }
             threadState = .idle
         } catch {
-            threadState = .failed(error.localizedDescription)
+            guard threadGeneration == generation else { return }
+            threadState = error is CancellationError ? .idle : .failed(error.localizedDescription)
         }
     }
 
@@ -78,32 +120,56 @@ final class AppStore: ObservableObject {
     }
 
     func loadPortal() async {
+        guard portalState != .loading, !Task.isCancelled else { return }
+        let generation = UUID()
+        portalGeneration = generation
         portalState = .loading
         do {
+            let base = WebSession.shared.baseURL
             let html = try await WebSession.shared.fetchHTML("portal.php?mod=index&mobile=2")
+            guard portalGeneration == generation else { return }
+            try Task.checkCancellation()
             if DiscuzParser.looksLikeChallenge(html) {
                 portalState = .failed("需要过验证，请到「我的」打开网页登录")
                 return
             }
-            portal = DiscuzParser.parsePortal(html, base: WebSession.shared.baseURL)
+            portal = DiscuzParser.parsePortal(html, base: base)
             portalState = .idle
         } catch {
-            portalState = .failed(error.localizedDescription)
+            guard portalGeneration == generation else { return }
+            portalState = error is CancellationError ? .idle : .failed(error.localizedDescription)
         }
     }
 
     func search(_ q: String) async {
+        guard !Task.isCancelled else { return }
         let trimmed = q.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        let generation = UUID()
+        searchGeneration = generation
+        guard !trimmed.isEmpty else {
+            searchHits = []
+            searchState = .idle
+            return
+        }
         searchState = .loading
-        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trimmed
+        searchHits = []
+        // Query values must not treat &, +, # or = as separators.
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: allowed) ?? trimmed
         let path = "search.php?mod=forum&searchsubmit=yes&srchtxt=\(encoded)&mobile=2"
         do {
             let html = try await WebSession.shared.fetchHTML(path)
+            guard searchGeneration == generation else { return }
+            try Task.checkCancellation()
+            if DiscuzParser.looksLikeChallenge(html) {
+                searchState = .failed("需要过验证，请到「我的」打开网页登录")
+                return
+            }
             searchHits = DiscuzParser.parseSearch(html)
             searchState = .idle
         } catch {
-            searchState = .failed(error.localizedDescription)
+            guard searchGeneration == generation else { return }
+            searchState = error is CancellationError ? .idle : .failed(error.localizedDescription)
         }
     }
 }
