@@ -128,8 +128,13 @@ struct ThreadDetailView: View {
                                     copiedAttachmentID = m.id
                                 }
                                 .font(.system(size: 13, weight: .semibold))
-                                Button("打开") { SiteLinks.open(m.url) }
-                                    .font(.system(size: 13, weight: .semibold))
+                                if !m.isMagnet && !m.isED2K && (m.name.lowercased().hasSuffix(".txt") || m.url.pathExtension.lowercased() == "txt") {
+                                    NavigationLink("阅读") { TextAttachmentView(attachment: m) }
+                                        .font(.system(size: 13, weight: .semibold))
+                                } else {
+                                    Button("打开") { SiteLinks.open(m.url) }
+                                        .font(.system(size: 13, weight: .semibold))
+                                }
                             }
                             .font(.system(size: 14))
                         }
