@@ -6,6 +6,7 @@ struct ThreadListView: View {
     @EnvironmentObject var session: WebSession
     @State private var typeID = 0
     @State private var order = "dateline"
+    @State private var visibleThreadID: Int?
 
     private let orders: [(String, String)] = [
         ("dateline", "最新"),
@@ -46,6 +47,7 @@ struct ThreadListView: View {
                         } label: {
                             ThreadCard(item: item)
                         }
+                        .id(item.id)
                         .buttonStyle(.plain)
                         .onAppear {
                             if item.id == store.threads.last?.id {
@@ -68,7 +70,9 @@ struct ThreadListView: View {
                             .padding(16)
                     }
                 }
+                .scrollTargetLayout()
             }
+            .scrollPosition(id: $visibleThreadID, anchor: .top)
             .background(ForumChrome.page)
             .refreshable { await reload() }
         }
@@ -76,7 +80,13 @@ struct ThreadListView: View {
         .tint(ForumChrome.blue)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
-        .task { await reload() }
+        .task {
+            // A popped detail must not clear the list or fetch page one again.
+            if store.currentFID == board.id,
+               store.currentTypeID == typeID, store.currentOrder == order,
+               !store.threads.isEmpty { return }
+            await reload()
+        }
     }
 
     private var boardHeader: some View {

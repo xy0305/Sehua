@@ -72,8 +72,10 @@ final class AppStore: ObservableObject {
         defer {
             if threadGeneration == generation { activeThreadRequest = nil }
         }
+        let sameSelection = currentFID == fid && currentTypeID == typeid && currentOrder == order
         threadState = .loading
-        if !append {
+        // Refresh the same list in place. Failed refreshes keep usable old data.
+        if !append && !sameSelection {
             threads = []
             threadTypes = []
             threadPage = 0
