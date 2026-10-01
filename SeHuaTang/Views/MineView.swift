@@ -47,6 +47,25 @@ struct MineView: View {
                         }
                     }
                 }
+                section("115 网盘", symbol: "externaldrive") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        NavigationLink {
+                            Pan115SettingsView()
+                        } label: {
+                            webRow("115 设置与连接检查")
+                        }
+                        Divider().overlay(ForumChrome.line)
+                        NavigationLink {
+                            Pan115TasksView()
+                        } label: {
+                            webRow("资源归档任务 / 播放")
+                        }
+                        Text("每个帖子独立目录；离线完成后手动刷新并选择视频。应用关闭后不会继续轮询。")
+                            .font(.footnote)
+                            .foregroundStyle(ForumChrome.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
                 section("网页辅助", symbol: "globe") {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("日常浏览请使用底部的首页、收藏、历史和搜索。以下保留原网页入口，仅用于辅助访问。")

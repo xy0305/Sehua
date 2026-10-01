@@ -108,6 +108,17 @@ struct ThreadDetailView: View {
                     .padding(.top, 20)
                     .padding(.bottom, 16)
 
+                NavigationLink {
+                    Pan115ResourceView(detail: d, base: session.baseURL)
+                } label: {
+                    Label("115 归档 / 播放", systemImage: "externaldrive.badge.plus")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+
                 if let post = d.posts.first {
                     authorBar(post)
                         .padding(.horizontal, 16)

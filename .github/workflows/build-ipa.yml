@@ -43,6 +43,11 @@ jobs:
           xcrun swiftc -D PARSER_REGRESSION_TESTS SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift -o /tmp/sehua-parser-tests
           /tmp/sehua-parser-tests
 
+      - name: Resource link extraction fixtures
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Models/Models.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Integration115/ResourceLinkExtractor.swift Regression115/ResourceLinkExtractorFixtures.swift -o /tmp/resource-link-fixtures
+          /tmp/resource-link-fixtures
+
       - name: Build unsigned (iphoneos)
         run: |
           set -euo pipefail
