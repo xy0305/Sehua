@@ -48,6 +48,11 @@ jobs:
           xcrun swiftc -parse-as-library SeHuaTang/Models/Models.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Integration115/ResourceLinkExtractor.swift Regression115/ResourceLinkExtractorFixtures.swift -o /tmp/resource-link-fixtures
           /tmp/resource-link-fixtures
 
+      - name: Content completeness fixtures
+        run: |
+          xcrun swiftc SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift Regression115/ContentFixtures.swift -o /tmp/content-fixtures
+          /tmp/content-fixtures
+
       - name: Build unsigned (iphoneos)
         run: |
           set -euo pipefail

@@ -206,12 +206,14 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
         collectHTML(attempt: 0, id: id, gen: gen)
     }
 
-    private func collectHTML(attempt: Int, id: UUID, gen: Int) {
+    private func collectHTML(attempt: Int, id: UUID, gen: Int, previousBody: String? = nil) {
         let delay: TimeInterval = attempt == 0 ? 0.4 : 0.7
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.activeID == id, gen == self.collectGen else { return }
-            self.webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] result, error in
-                let html = (result as? String) ?? ""
+            self.webView.evaluateJavaScript("({html: document.documentElement.outerHTML, ready: document.readyState})") { [weak self] result, error in
+                let snapshot = result as? [String: Any]
+                let html = (snapshot?["html"] as? String) ?? ""
+                let documentReady = (snapshot?["ready"] as? String) == "complete"
                 Task { @MainActor in
                     guard let self, self.activeID == id, gen == self.collectGen else { return }
                     if let error {
@@ -235,6 +237,25 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
                             self.finish(html, id: id, gen: gen)
                         }
                         return
+                    }
+                    let target = self.queue.first(where: { $0.id == id })?.url
+                    let isThread = target.map { url in
+                        let query = URLComponents(url: url, resolvingAgainstBaseURL: true)?.queryItems ?? []
+                        return query.contains { $0.name == "mod" && $0.value == "viewthread" }
+                            || url.lastPathComponent.hasPrefix("thread-")
+                    } ?? false
+                    if isThread {
+                        // A navigation label is not evidence that the thread body is ready.
+                        // Compare message-only snapshots so live counters/ads cannot starve collection.
+                        let body = DiscuzParser.messageBodies(in: html).joined(separator: "\n")
+                        if (!documentReady || body != previousBody) && attempt < 24 {
+                            self.collectHTML(attempt: attempt + 1, id: id, gen: gen, previousBody: body)
+                            return
+                        }
+                        if !body.isEmpty || documentReady {
+                            self.finish(html, id: id, gen: gen)
+                            return
+                        }
                     }
                     let ready = html.contains("n5_htnrbt") || html.contains("class=\"btdb\"") || html.contains("n5_bbsbk")
                         || html.contains("class=\"message\"") || html.contains("n5_htmk")

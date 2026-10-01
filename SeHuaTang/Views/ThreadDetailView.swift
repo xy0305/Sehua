@@ -12,6 +12,10 @@ struct ThreadDetailView: View {
     @State private var copied = false
     @State private var oneShotPresented = false
     @State private var copiedAttachmentID: String?
+    @State private var nextPageURL: URL?
+    @State private var loadedPage = 1
+    @State private var loadingReplies = false
+    @State private var replyLoadError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -203,16 +207,18 @@ struct ThreadDetailView: View {
                         if d.posts.first?.id != post.id {
                             authorBar(post, isOriginal: false)
                         }
-                        let text = cleaned(post.plainText)
-                        if !text.isEmpty {
-                            Text(text)
-                                .font(.system(size: 16))
-                                .foregroundStyle(ForumChrome.text)
-                                .lineSpacing(6)
-                                .textSelection(.enabled)
-                        }
-                        if !post.images.isEmpty {
-                            imageStrip(post.images)
+                        ForEach(Array(HTML.orderedContent(in: post.htmlBody, base: postURL).enumerated()), id: \.offset) { _, fragment in
+                            switch fragment {
+                            case .text(let text):
+                                Text(text)
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(ForumChrome.text)
+                                    .lineSpacing(6)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .textSelection(.enabled)
+                            case .image(let url):
+                                imageStrip([url])
+                            }
                         }
                     }
                     .padding(16)
@@ -225,7 +231,20 @@ struct ThreadDetailView: View {
                     imageStrip(d.images)
                         .padding(16)
                 }
-                Text("当前显示已加载的正文与回复；发表回复及站点收藏使用网页表单。")
+                if let error = replyLoadError {
+                    Text(error).font(.footnote).foregroundStyle(ForumChrome.secondary).padding(16)
+                }
+                if nextPageURL != nil {
+                    Button { Task { await loadMoreReplies() } } label: {
+                        HStack {
+                            if loadingReplies { ProgressView() }
+                            Text(loadingReplies ? "正在加载回复…" : "加载更多回复")
+                        }.frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .disabled(loadingReplies || state == .loading)
+                    .padding(16)
+                }
+                Text("主题正文与各楼层独立显示，已加载至第\(loadedPage)页。更多回复按网页分页加载；权限隐藏内容需在网页查看。")
                     .font(.caption)
                     .foregroundStyle(ForumChrome.secondary)
                     .padding(16)
@@ -278,7 +297,7 @@ struct ThreadDetailView: View {
         HStack(spacing: 10) {
             avatar(post.avatarURL)
             VStack(alignment: .leading, spacing: 3) {
-                Text(post.author.isEmpty ? "楼主" : post.author)
+                Text(post.author.isEmpty ? (isOriginal ? "楼主" : "回复者") : post.author)
                     .font(.system(size: 15, weight: .semibold))
                 if !post.dateText.isEmpty {
                     Text(post.dateText)
@@ -339,8 +358,39 @@ struct ThreadDetailView: View {
 
     private var postURL: URL { session.url("forum.php?mod=viewthread&tid=\(tid)&mobile=2") }
 
+    private func loadMoreReplies() async {
+        guard !loadingReplies, state != .loading, let url = nextPageURL else { return }
+        loadingReplies = true
+        replyLoadError = nil
+        defer { loadingReplies = false }
+        do {
+            let html = try await session.fetchHTML(url.absoluteString)
+            try Task.checkCancellation()
+            guard !DiscuzParser.looksLikeChallenge(html) else {
+                replyLoadError = "需要网页验证；已加载正文仍保留，可完成验证后重试"
+                return
+            }
+            let page = HTML.queryInt("page", in: url.absoluteString)
+                ?? HTML.firstMatch(#"thread-\d+-(\d+)-\d+\.html"#, in: url.absoluteString).flatMap(Int.init)
+                ?? (loadedPage + 1)
+            let more = DiscuzParser.parseThreadDetail(html, tid: tid, base: url, fallbackTitle: title)
+            guard !more.posts.isEmpty, var current = detail else {
+                replyLoadError = "未取得下一页回复，请检查网页权限后重试"
+                return
+            }
+            var ids = Set(current.posts.map(\.id))
+            current.posts += more.posts.filter { ids.insert($0.id).inserted }
+            // Preserve page-one download/115 inputs: later replies are not the OP.
+            detail = current
+            loadedPage = page
+            nextPageURL = DiscuzParser.nextThreadPage(in: html, tid: tid, base: url, page: page)
+        } catch {
+            if !(error is CancellationError) { replyLoadError = error.localizedDescription }
+        }
+    }
+
     private func load() async {
-        guard state != .loading, !Task.isCancelled else { return }
+        guard !loadingReplies, state != .loading, !Task.isCancelled else { return }
         state = .loading
         do {
             let html = try await session.fetchHTML("forum.php?mod=viewthread&tid=\(tid)&mobile=2")
@@ -349,7 +399,15 @@ struct ThreadDetailView: View {
                 state = .failed("需要过验证，到「我的」里打开网页")
                 return
             }
-            detail = DiscuzParser.parseThreadDetail(html, tid: tid, base: postURL, fallbackTitle: title)
+            let parsed = DiscuzParser.parseThreadDetail(html, tid: tid, base: postURL, fallbackTitle: title)
+            guard !parsed.posts.isEmpty else {
+                state = .failed("未取得可读正文，可能需登录或网页权限；请到「我的」检查网页")
+                return
+            }
+            detail = parsed
+            loadedPage = 1
+            nextPageURL = DiscuzParser.nextThreadPage(in: html, tid: tid, base: postURL, page: 1)
+            replyLoadError = nil
             library.record(readingItem)
             state = .idle
         } catch {

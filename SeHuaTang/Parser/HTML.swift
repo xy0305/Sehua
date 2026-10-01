@@ -99,14 +99,21 @@ enum HTML {
 
     /// Returns full, balanced elements (or their contents), never an unbounded page suffix.
     static func elements(in html: String, tag name: String? = nil, className: String? = nil, idPrefix: String? = nil, inner: Bool = false) -> [String] {
+        elements(in: html, inner: inner) { tag in
+            (name == nil || firstMatch(#"^<([A-Za-z][A-Za-z0-9:_-]*)"#, in: tag)?.lowercased() == name?.lowercased())
+                && (className == nil || hasClass(className!, in: tag))
+                && (idPrefix == nil || (attribute("id", in: tag) ?? "").hasPrefix(idPrefix!))
+        }
+    }
+
+    /// A single ordered scan for alternative selectors; outer matches consume nested matches.
+    static func elements(in html: String, inner: Bool = false, matching: (String) -> Bool) -> [String] {
         let tokens = tags(html)
         var result: [String] = []
         var consumedUntil = html.startIndex
         for (index, token) in tokens.enumerated() {
             guard !token.closing, token.range.lowerBound >= consumedUntil,
-                  name == nil || token.name == name?.lowercased(),
-                  className == nil || hasClass(className!, in: token.raw),
-                  idPrefix == nil || (attribute("id", in: token.raw) ?? "").hasPrefix(idPrefix!) else { continue }
+                  matching(token.raw) else { continue }
             if token.empty || ["img", "input", "br", "hr", "meta", "link"].contains(token.name) {
                 result.append(inner ? "" : token.raw)
                 consumedUntil = token.range.upperBound
@@ -133,6 +140,26 @@ enum HTML {
         return unescape(text).components(separatedBy: .newlines).map {
             $0.replacingOccurrences(of: #"[^\S\r\n]+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
         }.joined(separator: "\n").replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    enum Content: Hashable {
+        case text(String)
+        case image(URL)
+    }
+
+    /// Split at actual image tags, retaining text/image/text order and lazy image URLs.
+    static func orderedContent(in html: String, base: URL) -> [Content] {
+        var result: [Content] = []
+        var cursor = html.startIndex
+        for token in tags(html) where token.name == "img" && !token.closing {
+            let text = plainText(String(html[cursor..<token.range.lowerBound]))
+            if !text.isEmpty { result.append(.text(text)) }
+            if let url = imageURLs(in: token.raw, base: base).first { result.append(.image(url)) }
+            cursor = token.range.upperBound
+        }
+        let text = plainText(String(html[cursor...]))
+        if !text.isEmpty { result.append(.text(text)) }
+        return result
     }
 
     static func imageURLs(in html: String, base: URL, excludingDecorations: Bool = true) -> [URL] {

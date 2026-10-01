@@ -196,11 +196,12 @@ enum DiscuzParser {
         }
 
         var posts: [ThreadPost] = []
-        let postBlocks = (HTML.elements(in: html, idPrefix: "post_") + HTML.elements(in: html, idPrefix: "pid")).filter {
-            HTML.firstMatch(#"^<[^>]*\bid\s*=\s*["'](?:post_|pid)\d+["']"#, in: $0, group: 0) != nil
+        var seenPosts = Set<String>()
+        let postBlocks = HTML.elements(in: html) {
+            HTML.firstMatch(#"^(?:post_|pid)\d+$"#, in: HTML.attribute("id", in: $0) ?? "", group: 0) != nil
         }
         for (index, block) in postBlocks.enumerated() {
-            let pid = HTML.firstMatch(#"id\s*=\s*["'](?:post_|pid)(\d+)["']"#, in: block) ?? "post-\(index)"
+            let pid = HTML.firstMatch(#"^(?:post_|pid)(\d+)$"#, in: HTML.attribute("id", in: block) ?? "") ?? "post-\(index)"
             let header = HTML.elements(in: block, className: "n5_mktb").first ?? block
             let authorBlock = HTML.elements(in: header, className: "n5_mktbhy", inner: true).first
                 ?? HTML.elements(in: header, className: "n5_yhmhdj", inner: true).first
@@ -210,8 +211,8 @@ enum DiscuzParser {
             let dateText = HTML.stripTags(HTML.elements(in: header, className: "n5_mktbsj", inner: true).first
                 ?? HTML.elements(in: header, className: "n5_sjydhf", inner: true).first.flatMap { HTML.elements(in: $0, tag: "dt", inner: true).first }
                 ?? HTML.elements(in: header, idPrefix: "authorposton", inner: true).first ?? "")
-            let body = HTML.elements(in: block, className: "message", inner: true).joined(separator: "\n")
-            let bodyFallback = body.isEmpty ? (HTML.elements(in: block, idPrefix: "postmessage_", inner: true).first ?? "") : body
+            let bodyFallback = messageBodies(in: block).joined(separator: "\n")
+            guard !bodyFallback.isEmpty, seenPosts.insert(pid).inserted else { continue }
             let plain = HTML.plainText(bodyFallback)
             if SiteConfig.isAdText(plain) && plain.count < 80 { continue }
             posts.append(ThreadPost(id: pid, author: author, authorID: authorID,
@@ -220,10 +221,11 @@ enum DiscuzParser {
         }
         // Some mobile skins omit post_<pid>; still extract only the actual message,
         // never turn navigation, advertisements and footer text into a synthetic post.
-        if posts.isEmpty, let body = HTML.elements(in: html, className: "message", inner: true).first
-            ?? HTML.elements(in: html, idPrefix: "postmessage_", inner: true).first {
-            posts.append(ThreadPost(id: "op", author: "", authorID: nil, avatarURL: nil,
-                dateText: "", htmlBody: body, plainText: HTML.plainText(body), images: HTML.imageURLs(in: body, base: base)))
+        if posts.isEmpty {
+            for (index, body) in messageBodies(in: html).enumerated() {
+                posts.append(ThreadPost(id: "unwrapped-\(HTML.queryInt("page", in: base.absoluteString) ?? HTML.firstMatch(#"thread-\d+-(\d+)-\d+\.html"#, in: base.absoluteString).flatMap(Int.init) ?? 1)-\(index)", author: "", authorID: nil, avatarURL: nil,
+                    dateText: "", htmlBody: body, plainText: HTML.plainText(body), images: HTML.imageURLs(in: body, base: base)))
+            }
         }
         var seenImages = Set<String>()
         let images = posts.flatMap { $0.images }.filter { seenImages.insert($0.absoluteString).inserted }
@@ -247,6 +249,33 @@ enum DiscuzParser {
         let replyCount = HTML.firstMatch(#"网友回复（(\d+)条）"#, in: html) ?? ""
 
         return ThreadDetail(tid: tid, title: title, boardName: boardName, fid: fid, replyCount: replyCount, favoriteURL: favorite.flatMap { HTML.absURL($0, base: base) }, replyURL: reply.flatMap { HTML.absURL($0, base: base) }, posts: posts, magnets: magnets, attachments: attachments, images: images)
+    }
+
+    static func messageBodies(in html: String) -> [String] {
+        HTML.elements(in: html, inner: true) {
+            HTML.hasClass("message", in: $0)
+                || (HTML.attribute("id", in: $0) ?? "").hasPrefix("postmessage_")
+        }
+    }
+
+    /// Only forward links for this thread and host. Do not mistake quote/reply,
+    /// related-thread or list pagination for detail pagination.
+    static func nextThreadPage(in html: String, tid: Int, base: URL, page: Int) -> URL? {
+        let candidates = HTML.elements(in: html, tag: "a").compactMap { anchor -> (Int, URL)? in
+            guard let href = HTML.attribute("href", in: anchor), let url = HTML.absURL(href, base: base),
+                  url.host == base.host, ["https", "http"].contains(url.scheme ?? ""),
+                  HTML.queryInt("tid", in: href) == tid else { return nil }
+            let decoded = HTML.unescape(href)
+            let seoPage = HTML.firstMatch(#"thread-\d+-(\d+)-\d+\.html"#, in: decoded).flatMap(Int.init)
+            guard let p = HTML.queryInt("page", in: decoded) ?? seoPage, p == page + 1 else { return nil }
+            if seoPage == nil {
+                let items = URLComponents(url: url, resolvingAgainstBaseURL: true)?.queryItems ?? []
+                guard items.contains(where: { $0.name == "mod" && $0.value == "viewthread" }),
+                      !items.contains(where: { ["action", "pid", "authorid", "ordertype", "view", "goto"].contains($0.name) }) else { return nil }
+            }
+            return (p, url)
+        }
+        return candidates.min { $0.0 < $1.0 }?.1
     }
 
     private static func statistic(_ className: String, in html: String) -> String {
