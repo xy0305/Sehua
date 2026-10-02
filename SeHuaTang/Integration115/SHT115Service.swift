@@ -5,6 +5,8 @@ public actor SHT115Service {
     private let storeURL: URL
     private var records: [SHT115Resource]
     private var operating = false
+    private var interactiveWaiters: [CheckedContinuation<Void, Never>] = []
+    private var backgroundWaiters: [CheckedContinuation<Void, Never>] = []
     public init(storeURL: URL? = nil, session: URLSession? = nil) throws {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         self.storeURL = storeURL ?? base.appendingPathComponent("SeHuaTang/115-resources-v1.json")
@@ -19,9 +21,23 @@ public actor SHT115Service {
         }
     }
     public func resources() -> [SHT115Resource] { records }
-    private func begin() throws {
-        guard !operating else { throw SHT115Error.busy }
-        operating = true
+    // Hold the permit across actor reentrancy. Interactive FIFO wins at each
+    // operation boundary; background reads/extraction never reject a push as busy.
+    private func begin(background: Bool = false) async throws {
+        try Task.checkCancellation()
+        if operating {
+            await withCheckedContinuation { continuation in
+                if background { backgroundWaiters.append(continuation) }
+                else { interactiveWaiters.append(continuation) }
+            }
+        } else { operating = true }
+        // A cancelled waiter must hand its granted permit on before leaving.
+        if Task.isCancelled { end(); throw CancellationError() }
+    }
+    private func end() {
+        if !interactiveWaiters.isEmpty { interactiveWaiters.removeFirst().resume() }
+        else if !backgroundWaiters.isEmpty { backgroundWaiters.removeFirst().resume() }
+        else { operating = false }
     }
     private func save() throws {
         do {
@@ -46,7 +62,7 @@ public actor SHT115Service {
         return [("sign", sign), ("time", returnedTime.isEmpty ? timestamp : returnedTime)]
     }
     public func validateSettings(_ settings: SHT115Settings) async throws {
-        try begin(); defer { operating = false }
+        try await begin(); defer { end() }
         try settings.validate()
         try await http.verify(cid: settings.parentCID, parent: nil, settings: settings)
         _ = try await sign(settings)
@@ -60,7 +76,7 @@ public actor SHT115Service {
         return (safe.isEmpty ? "资源" : safe) + "_tid-" + tid
     }
     public func createOrReuseResource(tid: String, title: String, settings: SHT115Settings) async throws -> SHT115Resource {
-        try begin(); defer { operating = false }
+        try await begin(); defer { end() }
         try settings.validate()
         let name = try Self.directoryName(tid: tid, title: title)
         // Reuse this account's historical tid record, including incorrectly named folders.
@@ -88,7 +104,7 @@ public actor SHT115Service {
         do {
             let obj = try await http.json("https://webapi.115.com/files/add", settings: settings, fields: [("pid", settings.parentCID), ("cname", records[i].directoryName)])
             if ["0", "false"].contains(SHT115HTTP.string(obj["state"])) {
-                records[i].directoryWritePending = false; try save(); throw SHT115Error.rejected
+                records[i].directoryWritePending = false; try save(); throw SHT115Diagnostic(stage: "directory-create", outcome: "API明确拒绝（未创建）", code: SHT115Diagnostic.apiCode(obj))
             }
             guard SHT115HTTP.success(obj) else { throw SHT115Error.uncertainWrite }
             let nested = obj["data"] as? [String: Any] ?? [:]
@@ -97,8 +113,12 @@ public actor SHT115Service {
             records[i].directoryCID = cid; try save()
             try await http.verify(cid: cid, parent: settings.parentCID, settings: settings)
             records[i].directoryWritePending = false; try save(); return records[i]
-        } catch SHT115Error.rejected { throw SHT115Error.rejected }
-          catch { throw SHT115Error.uncertainWrite }
+        } catch let error as SHT115Diagnostic { throw error }
+          catch SHT115Error.persistence { throw SHT115Error.persistence }
+          catch let error as URLError {
+              throw SHT115Diagnostic(stage: "directory-create", outcome: "结果未知：传输失败，不自动重发", code: String(error.code.rawValue))
+          }
+          catch { throw SHT115Diagnostic(stage: "directory-create", outcome: "结果未知：响应或路径无法确认，不自动重发", code: "") }
     }
     /// 115 web API uses url for a single link, url[n] (not urls[n]) for a batch.
     static func submissionFields(links: [String], cid: String, uid: String, signature: [(String, String)]) -> [(String, String)] {
@@ -119,7 +139,7 @@ public actor SHT115Service {
         return .unknown
     }
     public func submit(urls: [String], resourceID: String, settings: SHT115Settings) async throws -> SHT115Resource {
-        try begin(); defer { operating = false }
+        try await begin(); defer { end() }
         let i = try index(resourceID, settings)
         let links = Array(Set(urls.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })).sorted()
         guard !links.isEmpty, links.count <= 50, links.allSatisfy({ link in
@@ -163,8 +183,8 @@ public actor SHT115Service {
         if records[i].tasks[t].state == .rejected { throw SHT115Diagnostic(stage: "submit", outcome: "API明确拒绝", code: apiCode) }
         return records[i]
     }
-    public func listVideos(resourceID: String, settings: SHT115Settings, maxDepth: Int = 3) async throws -> SHT115VideoListing {
-        try begin(); defer { operating = false }
+    public func listVideos(resourceID: String, settings: SHT115Settings, maxDepth: Int = 3, background: Bool = false) async throws -> SHT115VideoListing {
+        try await begin(background: background); defer { end() }
         return try await scan(resourceID: resourceID, settings: settings, maxDepth: maxDepth)
     }
     private func scan(resourceID: String, settings: SHT115Settings, maxDepth: Int) async throws -> SHT115VideoListing {
@@ -199,8 +219,8 @@ public actor SHT115Service {
         }
         return SHT115VideoListing(videos: videos.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }, archives: archives, truncated: truncated)
     }
-    public func inspect(resourceID: String, settings: SHT115Settings) async throws -> SHT115Inspection {
-        try begin(); defer { operating = false }
+    public func inspect(resourceID: String, settings: SHT115Settings, background: Bool = false) async throws -> SHT115Inspection {
+        try await begin(background: background); defer { end() }
         let i = try index(resourceID, settings)
         guard let target = records[i].directoryCID else { throw SHT115Error.invalidInput }
         // Directory availability is independent of the account's offline task history.
@@ -250,7 +270,7 @@ public actor SHT115Service {
         return ""
     }
     public func resolvePlayback(video: SHT115Video, settings: SHT115Settings) async throws -> [SHT115PlaybackSource] {
-        try begin(); defer { operating = false }
+        try await begin(); defer { end() }
         let listing = try await scan(resourceID: video.resourceID, settings: settings, maxDepth: 5)
         guard listing.videos.contains(where: { $0.id == video.id && $0.pickCode == video.pickCode && $0.directoryCID == video.directoryCID }), video.pickCode.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) }) else { throw SHT115Error.invalidInput }
         let headers = SHT115HTTP.headers(settings)
@@ -287,8 +307,8 @@ public actor SHT115Service {
         return String(line[range]).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
     }
     /// One persisted write intent per archive and phase. Unknown writes are never replayed.
-    public func requestExtraction(archive: SHT115Archive, resourceID: String, settings: SHT115Settings, confirmed: Bool) async throws -> SHT115ExtractionResult {
-        try begin(); defer { operating = false }
+    public func requestExtraction(archive: SHT115Archive, resourceID: String, settings: SHT115Settings, confirmed: Bool, background: Bool = false) async throws -> SHT115ExtractionResult {
+        try await begin(background: background); defer { end() }
         let i = try index(resourceID, settings)
         guard confirmed else { return SHT115ExtractionResult(state: .awaitingConfirmation, message: "尚未授权云解压") }
         guard let target = records[i].directoryCID else { throw SHT115Error.invalidInput }

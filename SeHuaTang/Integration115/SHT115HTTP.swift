@@ -30,6 +30,8 @@ struct SHT115HTTP {
             request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
             request.httpBody = Data(Self.form(fields).utf8)
         }
+        try await SHT115RequestPacer.shared.wait()
+        try Task.checkCancellation()
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode
@@ -43,7 +45,13 @@ struct SHT115HTTP {
         guard var text = String(data: data, encoding: .utf8) else { throw SHT115Error.unsafeListing }
         let regex = try NSRegularExpression(pattern: "(\"(?:cid|pid|parent_id|category_id|folder_id|file_id|fid|id|wp_path_id)\"\\s*:\\s*)([0-9]+)(?=\\s*[,}])")
         text = regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1\"$2\"")
-        guard let obj = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { throw SHT115Error.unsafeListing }
+        let obj: [String: Any]
+        do {
+            guard let decoded = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { throw SHT115Error.unsafeListing }
+            obj = decoded
+        } catch {
+            throw SHT115Diagnostic(stage: fields == nil ? "json-read" : "json-write", outcome: fields == nil ? "响应不是可验证JSON" : "结果未知：响应不是可验证JSON，不自动重发", code: "")
+        }
         return obj
     }
     static func string(_ value: Any?) -> String {
@@ -69,7 +77,7 @@ extension SHT115HTTP {
     func page(cid: String, offset: Int, settings: SHT115Settings) async throws -> SHT115Page {
         let query = Self.form([("aid", "1"), ("cid", cid), ("offset", String(offset)), ("limit", "100"), ("show_dir", "1"), ("format", "json")])
         let obj = try await json("https://webapi.115.com/files?" + query, settings: settings)
-        guard Self.success(obj) else { throw SHT115Error.rejected }
+        guard Self.success(obj) else { throw SHT115Diagnostic(stage: "directory-list", outcome: "读取被API拒绝", code: SHT115Diagnostic.apiCode(obj)) }
         let nested = obj["data"] as? [String: Any] ?? [:]
         guard let raw = (obj["data"] as? [[String: Any]]) ?? (nested["list"] as? [[String: Any]]) ?? (obj["files"] as? [[String: Any]]) else { throw SHT115Error.unsafeListing }
         let entries = try raw.map { item -> SHT115Entry in
@@ -107,5 +115,19 @@ extension SHT115HTTP {
             } else if page.entries.count < 100 { return entries }
         }
         throw SHT115Error.unsafeListing
+    }
+}
+
+/// Reserve start slots across all service instances, like tang115 MIN_115_GAP_MS.
+/// No automatic retry, especially no retry of an ambiguous POST.
+private actor SHT115RequestPacer {
+    static let shared = SHT115RequestPacer()
+    private var next: UInt64 = 0
+    func wait() async throws {
+        try Task.checkCancellation()
+        let now = DispatchTime.now().uptimeNanoseconds
+        let slot = max(now, next)
+        next = slot + 1_000_000_000
+        if slot > now { try await Task.sleep(nanoseconds: slot - now) }
     }
 }

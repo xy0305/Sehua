@@ -162,7 +162,8 @@ struct Pan115ResourceView: View {
     }
 
     @MainActor private func runOneShot() async {
-        if let resource, resource.directoryCID != nil {
+        if let resource, resource.directoryCID != nil,
+           resource.tasks.contains(where: { $0.state == .accepted }) {
             showTasks = true
             return
         }
@@ -197,7 +198,7 @@ struct Pan115ResourceView: View {
             // A write may have reached the server even if its response was lost.
             uncertainWrite = true
             await loadExisting()
-            message = "未能确认写入结果。请检查设置，并在本机任务记录与115核对；本页面不会自动重发。"
+            message = SHT115Settings.safeMessage(error)
         }
     }
 }

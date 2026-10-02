@@ -136,11 +136,11 @@ struct Pan115TaskDetailView: View {
         .toolbar(.visible, for: .navigationBar)
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
-            await refresh()
+            await refresh(background: true)
             for _ in 0..<20 {
                 do { try await Task.sleep(nanoseconds: 15_000_000_000) } catch { return }
                 guard !Task.isCancelled, scenePhase == .active else { return }
-                await refresh()
+                await refresh(background: true)
             }
         }
     }
@@ -155,7 +155,7 @@ struct Pan115TaskDetailView: View {
         }
     }
 
-    @MainActor private func refresh() async {
+    @MainActor private func refresh(background: Bool = false) async {
         guard !busy else { return }
         busy = true
         defer { busy = false }
@@ -163,18 +163,18 @@ struct Pan115TaskDetailView: View {
             let service = try Pan115UIService.get()
             let settings = SHT115Settings.load()
             // Publish videos before any task query or archive write can fail.
-            let current = try await service.listVideos(resourceID: resource.id, settings: settings)
+            let current = try await service.listVideos(resourceID: resource.id, settings: settings, background: background)
             listing = current
             if !current.truncated {
                 for archive in current.archives.prefix(4) {
                     guard !Task.isCancelled, scenePhase == .active else { return }
                     do {
-                        let outcome = try await service.requestExtraction(archive: archive, resourceID: resource.id, settings: settings, confirmed: true)
+                        let outcome = try await service.requestExtraction(archive: archive, resourceID: resource.id, settings: settings, confirmed: true, background: true)
                         message = outcome.message
                     } catch { message = SHT115Settings.safeMessage(error) }
                 }
             }
-            let inspection = try await service.inspect(resourceID: resource.id, settings: settings)
+            let inspection = try await service.inspect(resourceID: resource.id, settings: settings, background: background)
             resource = inspection.resource
             listing = inspection.listing
             if inspection.taskPagesTruncated { message = "视频目录已读取；定向任务查询失败或达到上限，进度可能不完整。" }
