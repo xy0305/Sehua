@@ -10,7 +10,9 @@ struct ThreadDetailView: View {
     @State private var detail: ThreadDetail?
     @State private var state: LoadState = .idle
     @State private var copied = false
-    @State private var oneShotPresented = false
+    @State private var playVideos: [SHT115Video] = []
+    @State private var showPlayer = false
+    @State private var panStatus: String?
     @State private var copiedAttachmentID: String?
     @State private var nextPageURL: URL?
     @State private var loadedPage = 1
@@ -41,13 +43,8 @@ struct ThreadDetailView: View {
         .background(ForumChrome.page)
         .tint(ForumChrome.blue)
         .toolbar(.hidden, for: .navigationBar)
-        .sheet(isPresented: $oneShotPresented) {
-            if let detail {
-                NavigationStack {
-                    Pan115ResourceView(detail: detail, base: postURL, oneShot: true)
-                }
-                .interactiveDismissDisabled()
-            }
+        .fullScreenCover(isPresented: $showPlayer) {
+            Pan115InlinePlayer(title: detail?.title.isEmpty == false ? (detail?.title ?? title) : title, videos: playVideos)
         }
         .task {
             library.record(readingItem)
@@ -122,20 +119,15 @@ struct ThreadDetailView: View {
                     .padding(.bottom, 16)
 
                 HStack(spacing: 8) {
-                    Button { oneShotPresented = true } label: {
-                        Label("一键115", systemImage: "externaldrive.badge.plus")
+                    Button { if panStatus == nil { Task { await play115(d) } } else { panStatus = nil } } label: {
+                        Label(panStatus ?? "115", systemImage: "play.rectangle.fill")
                             .padding(.horizontal, 10)
                             .frame(minHeight: 36)
                             .background(ForumChrome.blue.opacity(0.12))
                             .clipShape(RoundedRectangle(cornerRadius: 7))
                     }
-                    .accessibilityLabel("一键115提取并提交")
-                    NavigationLink {
-                        Pan115ResourceView(detail: d, base: postURL)
-                    } label: {
-                        Label("高级 / 播放", systemImage: "slider.horizontal.3")
-                            .frame(minHeight: 44)
-                    }
+                    .disabled(false)
+                    .accessibilityLabel("提交115并直接播放")
                     Spacer(minLength: 0)
                 }
                 .font(.system(size: 13, weight: .medium))
@@ -436,6 +428,44 @@ struct ThreadDetailView: View {
             nextPageURL = DiscuzParser.nextThreadPage(in: html, tid: tid, base: url, page: page)
         } catch {
             if !(error is CancellationError) { replyLoadError = error.localizedDescription }
+        }
+    }
+
+    @MainActor private func play115(_ d: ThreadDetail) async {
+        panStatus = "提取中"
+        do {
+            let settings = SHT115Settings.load()
+            try settings.validate()
+            let service = try Pan115UIService.get()
+            let existing = await service.resources().first { $0.tid == String(d.tid) && $0.parentCID == settings.parentCID && $0.directoryCID != nil }
+            var resource = existing
+            if existing?.tasks.contains(where: { $0.state == .accepted }) != true {
+                panStatus = "提交中"
+                let result = try await ResourceLinkExtractor.extractResult(detail: d, base: postURL)
+                let created = try await service.createOrReuseResource(tid: String(d.tid), title: d.title.isEmpty ? title : d.title, settings: settings)
+                resource = try await service.submit(urls: result.links, resourceID: created.id, settings: settings)
+            }
+            guard let resource else { throw SHT115Error.invalidInput }
+            panStatus = "等待文件"
+            for _ in 0..<12 {
+                guard panStatus != nil else { return }
+                let listing = try await service.listVideos(resourceID: resource.id, settings: settings)
+                if listing.videos.isEmpty {
+                    for archive in listing.archives.prefix(2) {
+                        _ = try? await service.requestExtraction(archive: archive, resourceID: resource.id, settings: settings, confirmed: true)
+                    }
+                }
+                if !listing.videos.isEmpty {
+                    playVideos = listing.videos
+                    showPlayer = true
+                    panStatus = nil
+                    return
+                }
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+            panStatus = "已提交，文件未就绪"
+        } catch {
+            panStatus = SHT115Settings.safeMessage(error)
         }
     }
 
