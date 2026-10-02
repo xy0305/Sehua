@@ -5,6 +5,7 @@ struct MemberSpaceView: View {
     var name: String
     @EnvironmentObject private var session: WebSession
     @State private var space: MemberSpace?
+    @State private var state: LoadState = .idle
     @State private var loadingMore = false
     @State private var status = ""
 
