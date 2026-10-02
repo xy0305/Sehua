@@ -6,9 +6,6 @@ import WebKit
 #if canImport(SWCompression)
 import SWCompression
 #endif
-#if canImport(SwiftArchive)
-import SwiftArchive
-#endif
 
 /// Extraction only: never submits a 115 task or writes an attachment to disk.
 /// Internal because ThreadDetail / ThreadAttachment are internal app models.
@@ -214,7 +211,7 @@ enum ResourceLinkExtractor {
 
     static func linksText(inArchive data: Data) async throws -> String {
         if data.starts(with: [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07]) {
-            return try text(from: await rarEntries(data))
+            return try text(from: rarEntries(data))
         }
         #if canImport(SWCompression)
         if data.starts(with: [0x50, 0x4B]) {
@@ -231,15 +228,12 @@ enum ResourceLinkExtractor {
         #endif
     }
 
-    private static func rarEntries(_ data: Data) async throws -> [(String, Data?)] {
-        #if canImport(SwiftArchive)
-        let entries: [ArchiveReader.EntryWithData]
-        do { entries = try await Archive.read(from: .data(data)) }
-        catch { throw ExtractionError.attachment("RAR 读取失败，请检查是否加密、分卷或不完整。") }
-        return entries.map { ($0.entry.path, $0.bytes) }
-        #else
-        throw ExtractionError.attachment("当前构建没有 RAR 读取库。")
-        #endif
+    private static func rarEntries(_ data: Data) throws -> [(String, Data?)] {
+        do {
+            return try SmallArchiveReader.entries(in: data, maximumBytes: maximumTextBytes).map { ($0.path, $0.data) }
+        } catch {
+            throw ExtractionError.attachment(error.localizedDescription)
+        }
     }
 
     private static func text(from entries: [(String, Data?)]) throws -> String {

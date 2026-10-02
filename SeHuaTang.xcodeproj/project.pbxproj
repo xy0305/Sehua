@@ -83,7 +83,7 @@
 			packageProductDependencies = (
 				BB0000000000000000000109 /* KSPlayer */,
 				BB0000000000000000000110 /* SWCompression */,
-				BB0000000000000000000111 /* SwiftArchive */,
+				BB0000000000000000000111 /* libarchive */,
 			);
 		};
 /* End PBXNativeTarget section */
@@ -199,6 +199,12 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-liconv",
+					"-lxml2",
+					"-lz",
+				);
 				MARKETING_VERSION = 1.9.10;
 				PRODUCT_BUNDLE_IDENTIFIER = app.sehuatang.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -227,6 +233,12 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-liconv",
+					"-lxml2",
+					"-lz",
 				);
 				MARKETING_VERSION = 1.9.10;
 				PRODUCT_BUNDLE_IDENTIFIER = app.sehuatang.ios;
@@ -300,10 +312,10 @@
 			package = BB0000000000000000000302 /* XCRemoteSwiftPackageReference "SWCompression" */;
 			productName = SWCompression;
 		};
-		BB0000000000000000000111 /* SwiftArchive */ = {
+		BB0000000000000000000111 /* libarchive */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = BB0000000000000000000303 /* XCRemoteSwiftPackageReference "libarchive-for-swift" */;
-			productName = SwiftArchive;
+			productName = libarchive;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
