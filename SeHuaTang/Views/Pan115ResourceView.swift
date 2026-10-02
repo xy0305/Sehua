@@ -40,6 +40,7 @@ struct Pan115ResourceView: View {
                     .disabled(extractionBusy || busy)
                 if extractionBusy { ProgressView() }
                 Toggle("包含提取链接", isOn: $includeExtracted)
+                    .disabled(busy || extractionBusy)
                 ForEach(Array(extractedURLs.enumerated()), id: \.offset) { _, url in
                     Text(url).font(.caption).textSelection(.enabled)
                 }
@@ -55,6 +56,7 @@ struct Pan115ResourceView: View {
             }
             Section("手动输入（不筛选）") {
                 TextEditor(text: $manualInput)
+                    .disabled(busy)
                     .frame(minHeight: 120)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -81,7 +83,13 @@ struct Pan115ResourceView: View {
         .navigationTitle("115 归档 / 播放")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .disabled(busy)
+        .toolbar {
+            if oneShot {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("关闭") { dismiss() }
+                }
+            }
+        }
         .task {
             guard !started else { return }
             started = true

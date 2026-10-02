@@ -48,7 +48,7 @@ public struct SHT115Settings {
     var account: String { SHT115Digest(uid) }
     /// Never render arbitrary transport errors or server bodies (may contain credentials).
     public static func safeMessage(_ error: Error) -> String {
-        (error as? SHT115Error)?.errorDescription ?? "请求失败，请检查网络与登录；未确认提交前不会锁定重试。"
+        (error as? SHT115Diagnostic)?.errorDescription ?? (error as? SHT115Error)?.errorDescription ?? "请求失败，请检查网络与登录；未确认提交前不会锁定重试。"
     }
 }
 func SHT115Digest(_ text: String) -> String {

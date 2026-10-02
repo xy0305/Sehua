@@ -36,10 +36,13 @@ public actor SHT115Service {
         return i
     }
     private func sign(_ settings: SHT115Settings) async throws -> [(String, String)] {
-        let obj = try await http.json("https://115.com/?ct=offline&ac=space&_=" + String(Int(Date().timeIntervalSince1970 * 1000)), settings: settings)
-        let sign = SHT115HTTP.string(obj["sign"]), time = SHT115HTTP.string(obj["time"])
-        guard !sign.isEmpty, !time.isEmpty else { throw SHT115Error.rejected }
-        return [("sign", sign), ("time", time)]
+        let timestamp = String(Int(Date().timeIntervalSince1970 * 1000))
+        let obj = try await http.json("https://115.com/?ct=offline&ac=space&_=" + timestamp, settings: settings)
+        let sign = SHT115HTTP.string(obj["sign"])
+        let returnedTime = SHT115HTTP.string(obj["time"])
+        guard !sign.isEmpty else { throw SHT115Diagnostic(stage: "signature", outcome: "未提交：签名为空", code: SHT115Diagnostic.apiCode(obj)) }
+        // Same fallback as tang115 and Pan115Client; keep server time when present.
+        return [("sign", sign), ("time", returnedTime.isEmpty ? timestamp : returnedTime)]
     }
     public func validateSettings(_ settings: SHT115Settings) async throws {
         try begin(); defer { operating = false }
@@ -119,29 +122,44 @@ public actor SHT115Service {
         let i = try index(resourceID, settings)
         let links = Array(Set(urls.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })).sorted()
         guard !links.isEmpty, links.count <= 50, links.allSatisfy({ link in
-            guard !link.contains("\n"), !link.contains("\r"), let url = URL(string: link), let scheme = url.scheme else { return false }
-            return ["magnet", "ed2k", "http", "https"].contains(scheme.lowercased())
+            guard !link.contains("\n"), !link.contains("\r") else { return false }
+            // Raw ed2k pipes/spaces are valid payload, not an HTTP URL to navigate.
+            // Foundation URL parsing differs across OS versions; do not block the POST on it.
+            if link.lowercased().hasPrefix("ed2k://|file|") {
+                let parts = link.components(separatedBy: "|")
+                guard parts.count >= 6, !parts[2].isEmpty, let size = UInt64(parts[3]), size > 0 else { return false }
+                return parts[4].count == 32 && parts[4].utf8.allSatisfy { (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) } && parts.last == "/"
+            }
+            guard let url = URL(string: link), let scheme = url.scheme else { return false }
+            return ["magnet", "http", "https"].contains(scheme.lowercased())
         }), let cid = records[i].directoryCID, !records[i].directoryWritePending else { throw SHT115Error.invalidInput }
         let prior = records[i].tasks.flatMap { $0.state == .rejected ? [] : $0.urls }
         guard links.allSatisfy({ !prior.contains($0) }) else {
             if records[i].tasks.contains(where: { ($0.state == .unknown || $0.state == .submitting) && !$0.urls.filter(links.contains).isEmpty }) { throw SHT115Error.uncertainWrite }
             throw SHT115Error.alreadySubmitted
         }
-        try await http.verify(cid: cid, parent: records[i].parentCID, settings: settings)
-        let signature = try await sign(settings)
+        do { try await http.verify(cid: cid, parent: records[i].parentCID, settings: settings) }
+        catch { throw SHT115Diagnostic(stage: "verify-before-submit", outcome: "未提交：目标路径无法验证", code: "") }
+        let signature: [(String, String)]
+        do { signature = try await sign(settings) }
+        catch let error as SHT115Diagnostic { throw error }
+        catch { throw SHT115Diagnostic(stage: "signature", outcome: "未提交：签名请求失败", code: "") }
         records[i].tasks.append(SHT115Task(id: UUID(), urls: links, state: .submitting, progress: [], updatedAt: Date())); try save()
         let t = records[i].tasks.count - 1
         let fields = Self.submissionFields(links: links, cid: cid, uid: settings.uid, signature: signature)
+        var apiCode = ""
         do {
             let action = links.count == 1 ? "add_task_url" : "add_task_urls"
             let obj = try await http.json("https://115.com/web/lixian/?ct=lixian&ac=" + action, settings: settings, fields: fields)
+            apiCode = SHT115Diagnostic.apiCode(obj)
             records[i].tasks[t].state = Self.submissionState(obj, count: links.count)
             records[i].tasks[t].updatedAt = Date(); try save()
         } catch {
-            records[i].tasks[t].state = .unknown; records[i].tasks[t].updatedAt = Date(); try save(); throw SHT115Error.uncertainWrite
+            records[i].tasks[t].state = .unknown; records[i].tasks[t].updatedAt = Date(); try save()
+            throw SHT115Diagnostic(stage: "submit", outcome: "结果未知：传输或响应无法确认", code: "")
         }
-        if records[i].tasks[t].state == .unknown { throw SHT115Error.uncertainWrite }
-        if records[i].tasks[t].state == .rejected { throw SHT115Error.rejected }
+        if records[i].tasks[t].state == .unknown { throw SHT115Diagnostic(stage: "submit", outcome: "结果未知：响应未确认完整受理", code: apiCode) }
+        if records[i].tasks[t].state == .rejected { throw SHT115Diagnostic(stage: "submit", outcome: "API明确拒绝", code: apiCode) }
         return records[i]
     }
     public func listVideos(resourceID: String, settings: SHT115Settings, maxDepth: Int = 3) async throws -> SHT115VideoListing {

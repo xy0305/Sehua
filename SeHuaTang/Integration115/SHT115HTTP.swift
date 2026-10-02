@@ -32,7 +32,8 @@ struct SHT115HTTP {
         }
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
-            throw fields == nil ? SHT115Error.rejected : SHT115Error.uncertainWrite
+            let status = (response as? HTTPURLResponse)?.statusCode
+            throw SHT115Diagnostic(stage: fields == nil ? "http-read" : "http-write", outcome: fields == nil ? "读取失败" : "写入结果未知", code: status.map(String.init) ?? "")
         }
         return (data, response.url ?? url)
     }
