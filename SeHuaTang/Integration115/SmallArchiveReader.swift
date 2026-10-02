@@ -36,7 +36,7 @@ enum SmallArchiveReader {
             if next == ARCHIVE_EOF { break }
             guard next == ARCHIVE_OK, let header else { throw message(archive, "压缩包目录读取失败。") }
             let rawPath = archive_entry_pathname(header).map { String(cString: $0) } ?? ""
-            if archive_entry_filetype(header) == AE_IFDIR { continue }
+            if archive_entry_filetype(header) == 0o040000 { continue }
             let size = archive_entry_size(header)
             guard size >= 0, size <= Int64(maximumBytes) else { throw ReadError.unreadable("压缩包内文件超过读取限制。") }
             var bytes = Data()
