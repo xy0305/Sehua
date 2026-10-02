@@ -14,6 +14,7 @@ struct ThreadItem: Identifiable, Hashable {
     var views: String
     var isSticky: Bool
     var fid: Int?
+    var previewURLs: [URL] = []
 }
 
 struct ThreadType: Identifiable, Hashable {

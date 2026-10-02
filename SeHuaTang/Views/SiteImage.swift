@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct SiteImage<Placeholder: View>: View {
     let url: URL?
@@ -21,7 +22,9 @@ struct SiteImage<Placeholder: View>: View {
         .task(id: url) { await load() }
     }
 
+    @MainActor
     private func load() async {
+        image = nil
         guard let url else { return }
         var req = URLRequest(url: url)
         req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
@@ -31,6 +34,7 @@ struct SiteImage<Placeholder: View>: View {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
                   let img = UIImage(data: data) else { return }
+            try Task.checkCancellation()
             image = img
         } catch {
             return

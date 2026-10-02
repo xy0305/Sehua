@@ -76,7 +76,7 @@ struct Pan115ResourceView: View {
                         .font(.footnote).foregroundStyle(.orange)
                     Link("在115核对", destination: URL(string: "https://115.com/")!)
                 }
-                Text("不会自动删除、解压或自动重试。离线完成后手动刷新选择视频；压缩包离线完成仍不能直接播放。iOS 关掉应用后不会持续轮询。")
+                Text("详情页自动读取视频并云解压到当前资源目录；保留原包，不绕密码，未知写入不重发。前台有界刷新，关闭应用停止。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
@@ -96,11 +96,14 @@ struct Pan115ResourceView: View {
             await loadExisting()
             if oneShot { await runOneShot() } else { await extract() }
         }
+        .navigationDestination(isPresented: $showTasks) {
+            if let resource { Pan115TaskDetailView(resource: resource) }
+        }
         .confirmationDialog("创建 / 复用此帖独立目录并提交 \(submissionURLs.count) 个链接？", isPresented: $showConfirmation, titleVisibility: .visible) {
             Button("确认创建目录并提交") { Task { await submit() } }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("请先核对上方全部 URL 和来源警告。这会向115发起真实写入操作，不执行解压或删除。")
+            Text("请先核对上方全部 URL 和来源警告。这会向115发起真实写入操作；详情自动云解压到当前资源目录，不删除原包。")
         }
     }
 
@@ -159,6 +162,10 @@ struct Pan115ResourceView: View {
     }
 
     @MainActor private func runOneShot() async {
+        if let resource, resource.directoryCID != nil {
+            showTasks = true
+            return
+        }
         guard !busy, !uncertainWrite else { return }
         stage = "提取链接"
         await extract()
@@ -183,7 +190,7 @@ struct Pan115ResourceView: View {
             let created = try await service.createOrReuseResource(tid: String(detail.tid), title: detail.title, settings: settings)
             resource = created
             resource = try await service.submit(urls: urls, resourceID: created.id, settings: settings)
-            message = "已记录提交结果，请进入任务详情手动刷新。任务接受不等于离线完成。"
+            message = "已记录提交结果；任务详情将自动读取视频并检查云解压。任务接受不等于离线完成。"
         } catch let error as SHT115Error where error != .uncertainWrite {
             message = SHT115Settings.safeMessage(error)
         } catch {

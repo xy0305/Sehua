@@ -15,6 +15,7 @@ public actor SHT115Service {
         } else { records = [] }
         for r in records.indices {
             for t in records[r].tasks.indices where records[r].tasks[t].state == .submitting { records[r].tasks[t].state = .unknown }
+            for (key, value) in records[r].extractions ?? [:] where value == .submitting { records[r].extractions?[key] = .unknown }
         }
     }
     public func resources() -> [SHT115Resource] { records }
@@ -171,25 +172,28 @@ public actor SHT115Service {
         guard let root = records[i].directoryCID else { throw SHT115Error.invalidInput }
         try await http.verify(cid: root, parent: records[i].parentCID, settings: settings)
         let depthLimit = max(0, min(5, maxDepth))
-        var queue = [(root, 0)], visited = Set<String>(), videos: [SHT115Video] = [], archives: [SHT115Archive] = []
+        var queue = [(root, 0, records[i].parentCID)], visited = Set<String>(), videos: [SHT115Video] = [], archives: [SHT115Archive] = []
         var truncated = false
         let videoExtensions = Set(["mp4", "m4v", "mov", "mkv", "avi", "wmv", "ts", "m2ts", "webm", "flv", "mpg", "mpeg"])
         let archiveExtensions = Set(["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "001"])
         while !queue.isEmpty {
             if visited.count >= 100 { truncated = true; break }
-            let (cid, depth) = queue.removeFirst()
+            let (cid, depth, parent) = queue.removeFirst()
             guard visited.insert(cid).inserted else { truncated = true; continue }
             let entries: [SHT115Entry]
-            do { entries = try await http.allEntries(cid: cid, settings: settings) }
+            do {
+                try await http.verify(cid: cid, parent: parent, settings: settings)
+                entries = try await http.allEntries(cid: cid, settings: settings)
+            }
             catch SHT115Error.unsafeListing { truncated = true; continue }
             for entry in entries {
                 if entry.isDirectory {
-                    if depth < depthLimit { queue.append((entry.id, depth + 1)) } else { truncated = true }
+                    if depth < depthLimit { queue.append((entry.id, depth + 1, cid)) } else { truncated = true }
                 } else {
                     let ext = (entry.name as NSString).pathExtension.lowercased()
                     if videoExtensions.contains(ext), !entry.pickCode.isEmpty {
                         videos.append(SHT115Video(id: entry.id, resourceID: resourceID, directoryCID: cid, name: entry.name, pickCode: entry.pickCode, size: entry.size))
-                    } else if archiveExtensions.contains(ext) { archives.append(SHT115Archive(id: entry.id, name: entry.name, directoryCID: cid)) }
+                    } else if archiveExtensions.contains(ext) { archives.append(SHT115Archive(id: entry.id, name: entry.name, directoryCID: cid, pickCode: entry.pickCode)) }
                 }
             }
         }
@@ -199,19 +203,20 @@ public actor SHT115Service {
         try begin(); defer { operating = false }
         let i = try index(resourceID, settings)
         guard let target = records[i].directoryCID else { throw SHT115Error.invalidInput }
-        var remote: [[String: Any]] = [], seen = Set<String>(), truncated = true
-        for page in 1...20 {
-            let obj = try await http.json("https://115.com/web/lixian/?ct=lixian&ac=task_lists&page=\(page)", settings: settings)
-            guard SHT115HTTP.success(obj) else { throw SHT115Error.rejected }
-            let data = obj["data"] as? [String: Any] ?? [:]
-            guard let tasks = (obj["tasks"] as? [[String: Any]]) ?? (data["tasks"] as? [[String: Any]]) else { throw SHT115Error.unsafeListing }
-            let signature = tasks.map { SHT115HTTP.string($0["info_hash"] ?? $0["url"]) }.joined(separator: "|")
-            if tasks.isEmpty { truncated = false; break }
-            if !seen.insert(signature).inserted { break }
-            remote += tasks
-            let pageCount = Int(SHT115HTTP.string(obj["page_count"] ?? data["page_count"]))
-            if let pageCount = pageCount, page >= pageCount { truncated = false; break }
+        // Directory availability is independent of the account's offline task history.
+        let listing = try await scan(resourceID: resourceID, settings: settings, maxDepth: 3)
+        var remote: [[String: Any]] = [], truncated = false
+        let hashes = Array(Set(records[i].tasks.flatMap { $0.urls }.map(Self.infoHash).filter { !$0.isEmpty })).sorted()
+        for hash in hashes.prefix(32) {
+            do {
+                let obj = try await http.json("https://115.com/web/lixian/?ct=lixian&ac=task_lists&page=1&info_hash=" + hash, settings: settings)
+                guard SHT115HTTP.success(obj) else { throw SHT115Error.rejected }
+                let data = obj["data"] as? [String: Any] ?? [:]
+                guard let rows = (obj["tasks"] as? [[String: Any]]) ?? (data["tasks"] as? [[String: Any]]) else { throw SHT115Error.unsafeListing }
+                remote += rows
+            } catch { truncated = true }
         }
+        if hashes.count > 32 { truncated = true }
         for t in records[i].tasks.indices {
             var matches: [SHT115Progress] = []
             for link in records[i].tasks[t].urls {
@@ -228,10 +233,17 @@ public actor SHT115Service {
             records[i].tasks[t].updatedAt = Date()
         }
         try save()
-        let listing = try await scan(resourceID: resourceID, settings: settings, maxDepth: 3)
         return SHT115Inspection(resource: records[i], listing: listing, taskPagesTruncated: truncated)
     }
-    private static func infoHash(_ link: String) -> String {
+    static func infoHash(_ link: String) -> String {
+        if link.lowercased().hasPrefix("ed2k://|file|") {
+            let parts = link.components(separatedBy: "|")
+            if parts.count > 4 {
+                let hash = parts[4].lowercased()
+                if hash.count == 32 && hash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) { return hash }
+            }
+            return ""
+        }
         guard let components = URLComponents(string: link), let xt = components.queryItems?.first(where: { $0.name == "xt" })?.value, xt.lowercased().hasPrefix("urn:btih:") else { return "" }
         let raw = String(xt.dropFirst(9)).lowercased()
         if raw.count == 40, raw.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) { return raw }
@@ -274,10 +286,65 @@ public actor SHT115Service {
         guard let regex = try? NSRegularExpression(pattern: "(?:[:,])" + key + "=([^,]+)"), let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)), let range = Range(match.range(at: 1), in: line) else { return nil }
         return String(line[range]).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
     }
+    /// One persisted write intent per archive and phase. Unknown writes are never replayed.
     public func requestExtraction(archive: SHT115Archive, resourceID: String, settings: SHT115Settings, confirmed: Bool) async throws -> SHT115ExtractionResult {
-        let listing = try await listVideos(resourceID: resourceID, settings: settings)
-        guard listing.archives.contains(where: { $0.id == archive.id && $0.directoryCID == archive.directoryCID }) else { throw SHT115Error.invalidInput }
-        if !confirmed { return SHT115ExtractionResult(state: .awaitingConfirmation, message: "压缩包尚未解压。云解压属于账号写操作，需要用户明确确认。") }
-        return SHT115ExtractionResult(state: .unsupported, message: "当前版本尚未验证完整云解压协议，未发送解压请求。请在115将此包解压到当前资源目录，然后手动刷新；不删除原包，不绕过密码。")
+        try begin(); defer { operating = false }
+        let i = try index(resourceID, settings)
+        guard confirmed else { return SHT115ExtractionResult(state: .awaitingConfirmation, message: "尚未授权云解压") }
+        guard let target = records[i].directoryCID else { throw SHT115Error.invalidInput }
+        let listing = try await scan(resourceID: resourceID, settings: settings, maxDepth: 3)
+        guard !listing.truncated, let current = listing.archives.first(where: { $0.id == archive.id && $0.directoryCID == archive.directoryCID }),
+              let pick = current.pickCode, !pick.isEmpty, pick.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) }) else { throw SHT115Error.unsafeListing }
+        let key = archive.id
+        var state = records[i].extractions?[key]
+        if let state, [.accepted, .unknown, .rejected, .passwordRequired].contains(state) {
+            return SHT115ExtractionResult(state: state, message: "云解压状态：" + state.rawValue + "；不重复发送，不删除原包")
+        }
+        func persist(_ value: SHT115ExtractionState) throws {
+            if records[i].extractions == nil { records[i].extractions = [:] }
+            records[i].extractions?[key] = value
+            try save()
+        }
+        if state == nil {
+            try persist(.submitting)
+            do {
+                let obj = try await http.json("https://webapi.115.com/files/push_extract", settings: settings, fields: [("pick_code", pick), ("secret", "")])
+                guard SHT115HTTP.success(obj) else {
+                    let explicit = ["0", "false"].contains(SHT115HTTP.string(obj["state"]))
+                    try persist(explicit ? .rejected : .unknown)
+                    return SHT115ExtractionResult(state: explicit ? .rejected : .unknown, message: "解析未确认成功；停止自动写入，请在115核对密码与状态")
+                }
+                try persist(.parsing); state = .parsing
+            } catch { try persist(.unknown); throw SHT115Error.uncertainWrite }
+        }
+        let obj = try await http.json("https://webapi.115.com/files/push_extract?pick_code=" + pick, settings: settings)
+        guard SHT115HTTP.success(obj) else { throw SHT115Error.rejected }
+        let data = obj["data"] as? [String: Any] ?? [:]
+        let status = data["extract_status"] as? [String: Any] ?? [:]
+        guard SHT115HTTP.string(status["unzip_status"]) == "4", (Double(SHT115HTTP.string(status["progress"])) ?? 0) >= 100 else {
+            return SHT115ExtractionResult(state: .parsing, message: "压缩包解析中；前台刷新继续查询，不重发解析请求")
+        }
+        let info = try await http.json("https://webapi.115.com/files/extract_info?" + SHT115HTTP.form([("pick_code", pick), ("file_name", ""), ("paths", "文件"), ("page_count", "999")]), settings: settings)
+        let contents = info["data"] as? [String: Any] ?? [:]
+        guard SHT115HTTP.success(info), let entries = contents["list"] as? [[String: Any]], !entries.isEmpty, entries.count < 999 else { throw SHT115Error.unsafeListing }
+        if let total = Int(SHT115HTTP.string(contents["count"])), total != entries.count { throw SHT115Error.unsafeListing }
+        var fields = [("pick_code", pick), ("to_pid", target), ("paths", "文件")]
+        var names = Set<String>()
+        for entry in entries {
+            let name = SHT115HTTP.string(entry["file_name"] ?? entry["name"] ?? entry["n"])
+            guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\\"), !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }), names.insert(name).inserted else { throw SHT115Error.unsafeListing }
+            let directory = SHT115HTTP.string(entry["size"]) == "0" && SHT115HTTP.string(entry["ico"]).isEmpty
+            fields.append((directory ? "extract_dir[]" : "extract_file[]", name))
+        }
+        // Revalidate destination immediately before the only extraction write.
+        try await http.verify(cid: target, parent: records[i].parentCID, settings: settings)
+        try persist(.submitting)
+        do {
+            let result = try await http.json("https://webapi.115.com/files/add_extract_file", settings: settings, fields: fields)
+            if SHT115HTTP.success(result) { try persist(.accepted) }
+            else if ["0", "false"].contains(SHT115HTTP.string(result["state"])) { try persist(.rejected) }
+            else { try persist(.unknown) }
+        } catch { try persist(.unknown); throw SHT115Error.uncertainWrite }
+        return SHT115ExtractionResult(state: records[i].extractions?[key] ?? .unknown, message: "已记录云解压结果；接受不代表完成，保留原包，等待目录出现视频")
     }
 }

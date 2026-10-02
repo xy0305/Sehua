@@ -121,23 +121,28 @@ struct ThreadDetailView: View {
                     .padding(.top, 20)
                     .padding(.bottom, 16)
 
-                Button { oneShotPresented = true } label: {
-                    Label("一键115提取并提交", systemImage: "externaldrive.badge.plus")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(maxWidth: .infinity, minHeight: 44)
+                HStack(spacing: 8) {
+                    Button { oneShotPresented = true } label: {
+                        Label("一键115", systemImage: "externaldrive.badge.plus")
+                            .padding(.horizontal, 10)
+                            .frame(minHeight: 36)
+                            .background(ForumChrome.blue.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                    }
+                    .accessibilityLabel("一键115提取并提交")
+                    NavigationLink {
+                        Pan115ResourceView(detail: d, base: postURL)
+                    } label: {
+                        Label("高级 / 播放", systemImage: "slider.horizontal.3")
+                            .frame(minHeight: 44)
+                    }
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.borderedProminent)
+                .font(.system(size: 13, weight: .medium))
+                .buttonStyle(.plain)
+                .foregroundStyle(ForumChrome.blue)
                 .padding(.horizontal, 16)
-                NavigationLink {
-                    Pan115ResourceView(detail: d, base: postURL)
-                } label: {
-                    Label("115 手动高级 / 播放", systemImage: "slider.horizontal.3")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                }
-                .buttonStyle(.bordered)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 16)
+                .padding(.bottom, 10)
 
                 if let post = d.posts.first {
                     authorBar(post)
@@ -147,12 +152,13 @@ struct ThreadDetailView: View {
 
                 if !d.magnets.isEmpty || !d.attachments.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("下载").font(.system(size: 15, weight: .semibold))
+                        Text("下载附件").font(.caption.weight(.medium)).foregroundStyle(ForumChrome.secondary)
                         ForEach(d.magnets + d.attachments) { m in
                             HStack {
                                 Image(systemName: m.isMagnet ? "link" : "arrow.down.doc")
                                     .foregroundStyle(ForumChrome.blue)
-                                Text(m.isMagnet ? "磁力链接" : (m.isED2K ? "eD2k" : m.name)).lineLimit(1)
+                                Text(m.isMagnet ? "磁力链接" : (m.isED2K ? "eD2k" : m.name))
+                                    .fixedSize(horizontal: false, vertical: true)
                                 Spacer()
                                 Button(copiedAttachmentID == m.id ? "已复制" : "复制") {
                                     UIPasteboard.general.string = m.url.absoluteString
@@ -167,7 +173,9 @@ struct ThreadDetailView: View {
                                         .font(.system(size: 13, weight: .semibold))
                                 }
                             }
-                            .font(.system(size: 14))
+                            .font(.system(size: 13))
+                            .buttonStyle(.plain)
+                            .frame(minHeight: 36)
                         }
                     }
                     .padding(16)
@@ -207,7 +215,7 @@ struct ThreadDetailView: View {
                         if d.posts.first?.id != post.id {
                             authorBar(post, isOriginal: false)
                         }
-                        ForEach(Array(HTML.orderedContent(in: post.htmlBody, base: postURL).enumerated()), id: \.offset) { _, fragment in
+                        ForEach(Array(bodyBlocks(post.htmlBody).enumerated()), id: \.offset) { _, fragment in
                             switch fragment {
                             case .text(let text):
                                 Text(text)
@@ -216,8 +224,8 @@ struct ThreadDetailView: View {
                                     .lineSpacing(6)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .textSelection(.enabled)
-                            case .image(let url):
-                                imageStrip([url])
+                            case .images(let urls):
+                                imageStrip(urls)
                             }
                         }
                     }
@@ -261,7 +269,7 @@ struct ThreadDetailView: View {
     }
 
     private func actionBar(_ d: ThreadDetail) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             if let url = d.replyURL {
                 NavigationLink {
                     LoginWebView(url: url, title: "回复 · 网页表单")
@@ -286,8 +294,8 @@ struct ThreadDetailView: View {
                     .frame(maxWidth: .infinity, minHeight: 40)
             }
         }
-        .font(.system(size: 15, weight: .semibold))
-        .buttonStyle(.bordered)
+        .font(.system(size: 12, weight: .medium))
+        .buttonStyle(.plain)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.ultraThinMaterial)
@@ -329,21 +337,63 @@ struct ThreadDetailView: View {
         .clipShape(Circle())
     }
 
-    private func imageStrip(_ urls: [URL]) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(urls, id: \.self) { url in
-                    NavigationLink {
-                        ImagePage(url: url)
-                    } label: {
-                        SiteImage(url: url) {
-                            ForumChrome.page
-                        }
-                        .frame(width: 160, height: 210)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                    }
-                    .buttonStyle(.plain)
+    // Coalesce only adjacent image fragments; text always stays at its original position.
+    private enum BodyBlock {
+        case text(String)
+        case images([URL])
+    }
+
+    private func bodyBlocks(_ html: String) -> [BodyBlock] {
+        var result: [BodyBlock] = []
+        for fragment in HTML.orderedContent(in: html, base: postURL) {
+            switch fragment {
+            case .text(let text): result.append(.text(text))
+            case .image(let url):
+                if case .images(let urls)? = result.last {
+                    result[result.count - 1] = .images(urls + [url])
+                } else {
+                    result.append(.images([url]))
                 }
+            }
+        }
+        return result
+    }
+
+    @ViewBuilder
+    private func imageStrip(_ urls: [URL]) -> some View {
+        if urls.count == 1, let url = urls.first {
+            NavigationLink {
+                ImagePage(url: url)
+            } label: {
+                SiteImage(url: url, contentMode: .fit) {
+                    ProgressView().frame(maxWidth: .infinity).frame(height: 120)
+                }
+                .frame(maxWidth: .infinity)
+                .background(ForumChrome.page)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("查看原图")
+        } else {
+            ScrollView(.horizontal, showsIndicators: true) {
+                HStack(alignment: .top, spacing: 8) {
+                    ForEach(Array(urls.enumerated()), id: \.offset) { _, url in
+                        NavigationLink {
+                            ImagePage(url: url)
+                        } label: {
+                            SiteImage(url: url, contentMode: .fit) {
+                                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                            }
+                            .frame(height: 180)
+                            .frame(minWidth: 100, maxWidth: 280)
+                            .background(ForumChrome.page)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("查看原图")
+                    }
+                }
+                .padding(.bottom, 4)
             }
         }
     }
@@ -419,7 +469,7 @@ struct ThreadDetailView: View {
 private struct ImagePage: View {
     let url: URL
     var body: some View {
-        ScrollView([.horizontal, .vertical]) {
+        ScrollView(.vertical) {
             SiteImage(url: url, contentMode: .fit) {
                 ProgressView()
             }

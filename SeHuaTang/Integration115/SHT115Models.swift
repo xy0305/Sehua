@@ -77,6 +77,7 @@ public struct SHT115Resource: Codable, Identifiable {
     public var directoryCID: String?
     public var directoryWritePending: Bool
     public var tasks: [SHT115Task]
+    public var extractions: [String: SHT115ExtractionState]? = nil
 }
 public struct SHT115Video: Codable, Identifiable {
     public let id: String
@@ -86,7 +87,7 @@ public struct SHT115Video: Codable, Identifiable {
     public let pickCode: String
     public let size: Int64
 }
-public enum SHT115ExtractionState: String, Codable { case awaitingConfirmation, unsupported }
+public enum SHT115ExtractionState: String, Codable { case awaitingConfirmation, unsupported, parsing, submitting, accepted, rejected, unknown, passwordRequired }
 public struct SHT115ExtractionResult {
     public let state: SHT115ExtractionState
     public let message: String
@@ -95,6 +96,7 @@ public struct SHT115Archive: Codable, Identifiable {
     public let id: String
     public let name: String
     public let directoryCID: String
+    public var pickCode: String? = nil
 }
 public struct SHT115VideoListing {
     public let videos: [SHT115Video]

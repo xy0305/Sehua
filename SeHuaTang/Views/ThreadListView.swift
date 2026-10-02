@@ -179,60 +179,59 @@ struct ThreadCard: View {
     let item: ThreadItem
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            if let url = item.coverURL {
-                SiteImage(url: url) { ForumChrome.page }
-                    .frame(width: 60, height: 60)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .accessibilityHidden(true)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    if item.isSticky {
-                        Text("置顶")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(ForumChrome.blue)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 2)
-                            .background(ForumChrome.blue.opacity(0.08))
-                    }
-                    Text(item.title)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(ForumChrome.text)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text(item.author.isEmpty ? "匿名" : item.author)
+                if !item.dateText.isEmpty { Text("·"); Text(item.dateText) }
+                Spacer(minLength: 0)
+                if item.isSticky {
+                    Text("置顶").foregroundStyle(ForumChrome.blue)
                 }
-                HStack(spacing: 6) {
-                    Text(item.author.isEmpty ? "匿名" : item.author)
-                        .lineLimit(1)
-                    if !item.dateText.isEmpty {
-                        Text("·")
-                        Text(item.dateText).lineLimit(1)
+            }
+            .font(.caption)
+            .foregroundStyle(ForumChrome.secondary)
+            Text(item.title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(ForumChrome.text)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            if !item.excerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(item.excerpt)
+                    .font(.system(size: 14))
+                    .foregroundStyle(ForumChrome.secondary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+            }
+            if !item.previewURLs.isEmpty {
+                GeometryReader { geometry in
+                    let previews = Array(item.previewURLs.prefix(3))
+                    let width = max(0, (geometry.size.width - CGFloat(previews.count - 1) * 8) / CGFloat(previews.count))
+                    HStack(spacing: 8) {
+                        ForEach(previews, id: \.self) { url in
+                            SiteImage(url: url, contentMode: .fit) { ForumChrome.page }
+                                .frame(width: width, height: 132)
+                                .background(ForumChrome.page)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .accessibilityLabel("帖子图片预览")
+                        }
                     }
                 }
-                .font(.system(size: 11))
-                .foregroundStyle(ForumChrome.secondary)
+                .frame(height: 132)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            VStack(spacing: 3) {
-                Text(item.replies.isEmpty ? "0" : item.replies)
-                    .font(.system(size: 14, weight: .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(ForumChrome.secondary)
-                Text("回复")
-                    .font(.system(size: 10))
-                    .foregroundStyle(ForumChrome.secondary)
+            HStack(spacing: 16) {
+                Label(item.replies.isEmpty ? "0" : item.replies, systemImage: "bubble")
+                if !item.likes.isEmpty { Label(item.likes, systemImage: "hand.thumbsup") }
+                if !item.views.isEmpty { Label(item.views, systemImage: "eye") }
             }
-            .frame(minWidth: 34)
+            .font(.caption)
+            .foregroundStyle(ForumChrome.secondary)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(ForumChrome.bar)
         .contentShape(Rectangle())
         .overlay(alignment: .bottom) {
-            ForumChrome.line.frame(height: 0.5).padding(.leading, 16)
+            ForumChrome.line.frame(height: 0.5).padding(.horizontal, 16)
         }
     }
 }

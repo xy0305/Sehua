@@ -58,6 +58,11 @@ jobs:
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/SubmissionFixtures.swift -o /tmp/submission-fixtures
           /tmp/submission-fixtures
 
+      - name: Directory and extraction fixtures
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/ExtractionFixtures.swift -o /tmp/extraction-fixtures
+          /tmp/extraction-fixtures
+
       - name: Build unsigned (iphoneos)
         run: |
           set -euo pipefail

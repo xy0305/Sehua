@@ -140,7 +140,10 @@ enum DiscuzParser {
                 .replacingOccurrences(of: "发布", with: "")
                 .trimmingCharacters(in: .whitespaces)
             let avatarURL = avatarURL(in: card, base: listBase)
-            let coverURL = HTML.imageURLs(in: card, base: listBase).first
+            let previewURLs = Array(HTML.imageURLs(in: card, base: listBase)
+                .filter { $0 != avatarURL }
+                .prefix(3))
+            let coverURL = previewURLs.first
             let replies = statistic("n5_hthfcs", in: card)
             let likes = statistic("n5_htdzcs", in: card)
             let views = statistic("n5_htsccs", in: card)
@@ -149,7 +152,7 @@ enum DiscuzParser {
                 id: tid, title: title, excerpt: excerpt, author: author,
                 authorID: authorID, avatarURL: avatarURL, coverURL: coverURL,
                 dateText: dateText, replies: replies, likes: likes, views: views,
-                isSticky: false, fid: fid
+                isSticky: false, fid: fid, previewURLs: previewURLs
             ))
         }
 
@@ -347,13 +350,25 @@ private enum ParserRegressionTests {
         <div class="n5_htmk"><h1 class="n5_htnrbt"><a href="forum.php?mod=viewthread&amp;tid=42">正常帖子</a></h1>
         <div class="show-text">合法摘要</div><span class="n5_hthfcs"><a>123</a></span>
         <span class="n5_htdzcs"><a>45</a></span><span class="n5_htsccs"><a>6,789</a></span>
-        <img src="/static/image/loading.gif" data-original="//img.example/cover.jpg"></div>
+        <img src="/uc_server/avatar.php?uid=7"><img src="/static/image/icon.png">
+        <div><img src="/static/image/loading.gif" data-original="//img.example/cover.jpg"></div>
+        <div><img src="https://img.example/cover.jpg"><img file="/images/second.jpg" src="/static/image/loading.gif"></div>
+        <div><img data-src="//img.example/third.jpg"><img zoomfile="/images/fourth.jpg"></div></div>
         <div class="n5_htmk"><h1><a href="forum.php?mod=viewthread&amp;tid=43">第二个帖子</a></h1></div>
         """#
         let list = DiscuzParser.parseThreadList(listHTML, fid: 103, page: 1)
         precondition(list.threads.count == 2)
         precondition(list.threads[0].replies == "123" && list.threads[0].likes == "45" && list.threads[0].views == "6,789")
         precondition(list.threads[0].coverURL?.absoluteString == "https://img.example/cover.jpg")
+        precondition(list.threads[0].previewURLs.map { $0.absoluteString } == [
+            "https://img.example/cover.jpg",
+            "https://\(SiteConfig.defaultHost)/images/second.jpg",
+            "https://img.example/third.jpg"
+        ])
+        precondition(list.threads[0].coverURL == list.threads[0].previewURLs.first)
+        precondition(list.threads[1].previewURLs.isEmpty && list.threads[1].coverURL == nil)
+        let oneImage = DiscuzParser.parseThreadList(#"<div class='n5_htmk'><h1><a href='forum.php?mod=viewthread&amp;tid=44'>单图帖子</a></h1><img src='//img.example/only.jpg'><img src='//img.example/only.jpg'></div>"#, fid: 103, page: 1)
+        precondition(oneImage.threads.count == 1 && oneImage.threads[0].previewURLs.count == 1)
         let detailHTML = #"""
         <title>测试帖子 - 测试版块 - 论坛</title>
         <a href="home.php?type=thread&amp;id=42&amp;mod=spacecp&amp;ac=favorite">收藏</a>

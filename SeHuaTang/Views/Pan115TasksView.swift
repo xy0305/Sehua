@@ -8,7 +8,7 @@ struct Pan115TasksView: View {
         List {
             Section {
                 NavigationLink("115 设置", destination: Pan115SettingsView())
-                Text("仅显示本机记录；不自动刷新或重试写入。应用关闭后不会继续轮询。")
+                Text("仅显示本机记录；详情自动读取目录，前台有界刷新。未知写入不重发。")
                     .font(.footnote).foregroundStyle(.secondary)
                 Button("重新读取本机记录") { Task { await load() } }
                 if let message { Text(message).font(.footnote) }
@@ -50,8 +50,7 @@ struct Pan115TasksView: View {
 struct Pan115TaskDetailView: View {
     @State var resource: SHT115Resource
     @State private var listing: SHT115VideoListing?
-    @State private var selectedArchive: SHT115Archive?
-    @State private var confirmExtraction = false
+    @Environment(\.scenePhase) private var scenePhase
     @State private var busy = false
     @State private var message: String?
 
@@ -75,7 +74,7 @@ struct Pan115TaskDetailView: View {
                     }
                 }.disabled(busy)
                 if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
-                Text("iOS 关闭应用后不持续轮询；列表只在手动刷新时读取。只查询本资源目录，不搜索整个网盘。")
+                Text("进入页面自动读取；前台每15秒刷新，最多20轮。关闭应用停止。仅扫描本资源目录。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("提交记录") {
@@ -121,13 +120,9 @@ struct Pan115TaskDetailView: View {
                     ForEach(listing.archives) { archive in
                         VStack(alignment: .leading, spacing: 6) {
                             Label(archive.name, systemImage: "doc.zipper")
-                            Text("压缩包不能直接播放。尚未解压；当前服务未验证完整云解压协议，不会自动解压或删除原文件。")
+                            Text("自动云解压到本资源目录；保留原包，不绕过密码。状态：" + (resource.extractions?[archive.id]?.rawValue ?? "等待解析"))
                                 .font(.caption).foregroundStyle(.orange)
-                            Button("确认检查云解压支持（不会删除原包）") {
-                                selectedArchive = archive
-                                confirmExtraction = true
-                            }.disabled(busy)
-                            Link("去115解压到本资源目录，再手动刷新", destination: URL(string: "https://115.com/")!)
+                            Link("在115核对密码或未知结果", destination: URL(string: "https://115.com/")!)
                         }
                     }
                 } else {
@@ -139,24 +134,15 @@ struct Pan115TaskDetailView: View {
         .navigationTitle("归档任务详情")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .confirmationDialog("确认检查此压缩包的云解压支持？", isPresented: $confirmExtraction, titleVisibility: .visible) {
-            Button("确认检查，不删除原包") { Task { await requestExtraction() } }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("当前服务能力门控将返回不支持，不会发送解压写请求。请在115解压到该资源目录后手动刷新；不会删除原包或绕过密码。")
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            await refresh()
+            for _ in 0..<20 {
+                do { try await Task.sleep(nanoseconds: 15_000_000_000) } catch { return }
+                guard !Task.isCancelled, scenePhase == .active else { return }
+                await refresh()
+            }
         }
-    }
-
-    @MainActor private func requestExtraction() async {
-        guard let archive = selectedArchive, !busy else { return }
-        busy = true
-        defer { busy = false }
-        do {
-            let service = try Pan115UIService.get()
-            let outcome = try await service.requestExtraction(archive: archive, resourceID: resource.id,
-                settings: SHT115Settings.load(), confirmed: true)
-            message = outcome.message
-        } catch { message = "无法确认压缩包状态；没有执行自动解压或删除。请在115核对。" }
     }
 
     private func submissionStatus(_ state: SHT115SubmissionState) -> String {
@@ -170,14 +156,28 @@ struct Pan115TaskDetailView: View {
     }
 
     @MainActor private func refresh() async {
+        guard !busy else { return }
         busy = true
         defer { busy = false }
         do {
             let service = try Pan115UIService.get()
-            let inspection = try await service.inspect(resourceID: resource.id, settings: SHT115Settings.load())
+            let settings = SHT115Settings.load()
+            // Publish videos before any task query or archive write can fail.
+            let current = try await service.listVideos(resourceID: resource.id, settings: settings)
+            listing = current
+            if !current.truncated {
+                for archive in current.archives.prefix(4) {
+                    guard !Task.isCancelled, scenePhase == .active else { return }
+                    do {
+                        let outcome = try await service.requestExtraction(archive: archive, resourceID: resource.id, settings: settings, confirmed: true)
+                        message = outcome.message
+                    } catch { message = SHT115Settings.safeMessage(error) }
+                }
+            }
+            let inspection = try await service.inspect(resourceID: resource.id, settings: settings)
             resource = inspection.resource
             listing = inspection.listing
-            message = inspection.taskPagesTruncated ? "任务分页达到上限，进度可能不完整。" : "已刷新；没有执行创建、推送、解压或删除。"
-        } catch { message = "刷新失败，请检查115设置与网络。未执行写入重试。" }
+            if inspection.taskPagesTruncated { message = "视频目录已读取；定向任务查询失败或达到上限，进度可能不完整。" }
+        } catch { message = SHT115Settings.safeMessage(error) }
     }
 }
