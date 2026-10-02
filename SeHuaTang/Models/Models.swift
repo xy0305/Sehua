@@ -95,6 +95,19 @@ struct PortalItem: Identifiable, Hashable {
     var avatarURL: URL?
 }
 
+struct MemberSpace {
+    var uid: Int
+    var name: String
+    var avatarURL: URL?
+    var threads: [ThreadItem]
+}
+
+struct MemberRoute: Identifiable, Hashable {
+    let uid: Int
+    var name: String
+    var id: Int { uid }
+}
+
 struct PortalPage {
     var notices: [SiteNotice]
     var sections: [PortalSection]

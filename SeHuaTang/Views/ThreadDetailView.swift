@@ -18,6 +18,7 @@ struct ThreadDetailView: View {
     @State private var loadedPage = 1
     @State private var loadingReplies = false
     @State private var replyLoadError: String?
+    @State private var profile: MemberRoute?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,6 +46,9 @@ struct ThreadDetailView: View {
         .toolbar(.hidden, for: .navigationBar)
         .fullScreenCover(isPresented: $showPlayer) {
             Pan115InlinePlayer(title: detail?.title.isEmpty == false ? (detail?.title ?? title) : title, videos: playVideos)
+        }
+        .navigationDestination(item: $profile) { route in
+            MemberSpaceView(uid: route.uid, name: route.name)
         }
         .task {
             library.record(readingItem)
@@ -294,22 +298,30 @@ struct ThreadDetailView: View {
     }
 
     private func authorBar(_ post: ThreadPost, isOriginal: Bool = true) -> some View {
-        HStack(spacing: 10) {
-            avatar(post.avatarURL)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(post.author.isEmpty ? (isOriginal ? "楼主" : "回复者") : post.author)
-                    .font(.system(size: 15, weight: .semibold))
-                if !post.dateText.isEmpty {
-                    Text(post.dateText)
-                        .font(.system(size: 12))
-                        .foregroundStyle(ForumChrome.secondary)
+        Button {
+            if let uid = post.authorID { profile = MemberRoute(uid: uid, name: post.author) }
+        } label: {
+            HStack(spacing: 10) {
+                avatar(post.avatarURL)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(post.author.isEmpty ? (isOriginal ? "楼主" : "回复者") : post.author)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    if !post.dateText.isEmpty {
+                        Text(post.dateText)
+                            .font(.system(size: 12))
+                            .foregroundStyle(ForumChrome.secondary)
+                    }
                 }
+                Spacer()
+                Text(isOriginal ? "楼主" : "回复")
+                    .font(.system(size: 12))
+                    .foregroundStyle(ForumChrome.blue)
             }
-            Spacer()
-            Text(isOriginal ? "楼主" : "回复")
-                .font(.system(size: 12))
-                .foregroundStyle(ForumChrome.blue)
         }
+        .buttonStyle(.plain)
+        .disabled(post.authorID == nil)
+        .accessibilityLabel("打开\(post.author.isEmpty ? "用户" : post.author)的主页")
     }
 
     private func avatar(_ url: URL?) -> some View {

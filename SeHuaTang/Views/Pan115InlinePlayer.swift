@@ -160,6 +160,14 @@ struct KSChromePlayer: View {
             scheduleHide()
             OrientationLock.set(.landscapeRight, keepLocked: true)
         }
+        .onChange(of: url) { _, _ in
+            hasStarted = false
+            isBuffering = true
+            currentTime = 0
+            duration = 0
+            showChrome = true
+            scheduleHide()
+        }
         .onDisappear {
             hideTask?.cancel()
             tickTask?.cancel()
@@ -180,13 +188,28 @@ struct KSChromePlayer: View {
                 .highPriorityGesture(sideDrag(width: width, height: height))
                 .padding(.top, 72)
                 .padding(.bottom, 92)
+                .zIndex(1)
             if !hasStarted {
                 ProgressView().tint(.white).scaleEffect(1.15)
+                    .allowsHitTesting(false)
             }
             if let overlay {
                 overlayHUD(overlay).allowsHitTesting(false)
             }
-            if showChrome { chromeOverlay }
+            if showChrome { chromeOverlay.zIndex(20) }
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 52, height: 52)
+                    .background(Color.black.opacity(0.45), in: Circle())
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.leading, 16)
+            .padding(.top, 12)
+            .zIndex(40)
         }
         .frame(maxWidth: .infinity)
         .frame(height: height)
@@ -275,8 +298,10 @@ struct KSChromePlayer: View {
                         .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 52, height: 52)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .zIndex(30)
                 Text(title.isEmpty ? "正在播放" : title)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.white)

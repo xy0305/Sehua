@@ -303,6 +303,26 @@ enum DiscuzParser {
         return ThreadDetail(tid: tid, title: title, boardName: boardName, fid: fid, replyCount: replyCount, favoriteURL: favorite.flatMap { HTML.absURL($0, base: base) }, replyURL: reply.flatMap { HTML.absURL($0, base: base) }, posts: posts, magnets: magnets, attachments: attachments, images: images)
     }
 
+    static func parseMemberSpace(_ html: String, uid: Int, base: URL) -> MemberSpace {
+        let name = HTML.stripTags(HTML.firstMatch(#"<h2[^>]*>([\s\S]*?)</h2>"#, in: html) ?? "")
+        var threads: [ThreadItem] = []
+        var seen = Set<Int>()
+        let pattern = #"<a[^>]+href="([^"]*tid=\d+[^"]*)"[^>]*>([\s\S]*?)</a>"#
+        let hrefs = HTML.allMatches(pattern, in: html, group: 1)
+        let titles = HTML.allMatches(pattern, in: html, group: 2)
+        for pair in zip(hrefs, titles) {
+            guard let tid = HTML.queryInt("tid", in: pair.0), seen.insert(tid).inserted else { continue }
+            let title = HTML.stripTags(pair.1)
+            if title.isEmpty || SiteConfig.isAdText(title) || title == "更多" { continue }
+            threads.append(ThreadItem(
+                id: tid, title: title, excerpt: "", author: name, authorID: uid,
+                avatarURL: nil, coverURL: nil, dateText: "", replies: "", likes: "",
+                views: "", isSticky: false, fid: HTML.queryInt("fid", in: pair.0)
+            ))
+        }
+        return MemberSpace(uid: uid, name: name, avatarURL: avatarURL(in: html, base: base), threads: threads)
+    }
+
     static func messageBodies(in html: String) -> [String] {
         HTML.elements(in: html, inner: true) {
             HTML.hasClass("message", in: $0)
@@ -468,6 +488,14 @@ private enum ParserRegressionTests {
         precondition(mobile.posts[0].author == "移动作者" && mobile.posts[0].authorID == 9)
         precondition(mobile.posts[0].dateText == "8 小时前" && mobile.posts[0].plainText.hasSuffix("尾段"))
         print("PASS: production parser regression fixtures")
+        let spaceHTML = #"""
+        <h2 class="mt">楼主甲</h2><img src="/uc_server/avatar.php?uid=7">
+        <a href="forum.php?mod=viewthread&tid=88&mobile=2">主题一</a>
+        <a href="forum.php?mod=viewthread&tid=89">主题二</a>
+        """#
+        let space = DiscuzParser.parseMemberSpace(spaceHTML, uid: 7, base: base)
+        precondition(space.name == "楼主甲" && space.threads.map(\.id) == [88, 89])
+        precondition(space.threads[0].authorID == 7 && space.avatarURL?.path == "/uc_server/avatar.php")
     }
 }
 #endif
