@@ -20,7 +20,7 @@ struct Pan115VideoView: View {
                 if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
                 ForEach(Array(preferredSources.enumerated()), id: \.offset) { _, source in
                     NavigationLink {
-                        Pan115NativePlayerView(title: video.name, url: source.url, headers: source.headers)
+                        KSSourcePlayer(title: video.name, source: source)
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             Label(source.label, systemImage: "play.circle")
@@ -60,5 +60,14 @@ struct Pan115VideoView: View {
             sources = []
             message = "获取播放源失败，请检查115设置、转码状态与网络。"
         }
+    }
+}
+
+private struct KSSourcePlayer: View {
+    let title: String
+    let source: SHT115PlaybackSource
+    var body: some View {
+        KSChromePlayer(url: source.url, title: title, subtitle: source.label, headers: source.headers)
+            .toolbar(.hidden, for: .navigationBar)
     }
 }
