@@ -10,7 +10,7 @@ struct MemberSpaceView: View {
     var body: some View {
         VStack(spacing: 0) {
             ForumTopBar(title: displayName)
-            Group {
+            VStack(spacing: 0) {
                 if state == .loading && space == nil {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let error = state.errorMessage, space == nil {
@@ -37,7 +37,7 @@ struct MemberSpaceView: View {
                                         Divider().padding(.leading, 76)
                                     }
                                 }
-                                .background(ForumChrome.card)
+                                .background(ForumChrome.bar)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                             } else if state != .loading {
                                 ContentUnavailableView("没有可显示的主题", systemImage: "text.bubble", description: Text("已打开该用户主页。主题可能需要登录，或页面结构未能识别。"))
@@ -68,7 +68,7 @@ struct MemberSpaceView: View {
             Spacer()
         }
         .padding(14)
-        .background(ForumChrome.card)
+        .background(ForumChrome.bar)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
