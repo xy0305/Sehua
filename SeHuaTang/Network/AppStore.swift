@@ -8,7 +8,25 @@ final class AppStore: ObservableObject {
 
     @Published var threads: [ThreadItem] = []
     @Published var threadTypes: [ThreadType] = []
+    // threadPage is the last accumulated page; selected page is the range start.
     @Published var threadPage = 1
+    @Published var threadSelectedPage = 1
+    @Published var threadTotalPages: Int?
+    @Published var threadReplacementRevision = 0
+    @Published var threadPageError: String?
+
+    func validateThreadPage(_ page: Int) -> String? {
+        if page < 1 { return "页码必须是大于零的整数" }
+        if let total = threadTotalPages, page > total { return "页码不能超过 \(total)" }
+        return nil
+    }
+
+    func selectThreadPage(_ page: Int) async {
+        guard let fid = currentFID, threadState != .loading else { return }
+        if let error = validateThreadPage(page) { threadPageError = error; return }
+        threadPageError = nil
+        await loadThreads(fid: fid, page: page, typeid: currentTypeID, order: currentOrder)
+    }
     @Published var threadHasNext = false
     @Published var threadState: LoadState = .idle
     @Published var currentFID: Int?
@@ -29,6 +47,13 @@ final class AppStore: ObservableObject {
         let append: Bool
     }
     private var activeThreadRequest: ThreadRequest?
+    private var failedThreadRequest: ThreadRequest?
+
+    func retryThreadRequest() async {
+        guard let request = failedThreadRequest else { return }
+        await loadThreads(fid: request.fid, page: request.page, typeid: request.typeID,
+                          order: request.order, append: request.append)
+    }
     private var threadGeneration = UUID()
     private var forumGeneration = UUID()
     private var portalGeneration = UUID()
@@ -57,7 +82,13 @@ final class AppStore: ObservableObject {
     }
 
     func loadThreads(fid: Int, page: Int = 1, typeid: Int = 0, order: String = "dateline", append: Bool = false) async {
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, page > 0 else { return }
+        let sameContext = currentFID == fid && currentTypeID == typeid && currentOrder == order
+        if sameContext, let total = threadTotalPages, page > total {
+            threadPageError = "页码不能超过 \(total)"
+            return
+        }
+        threadPageError = nil
         let request = ThreadRequest(fid: fid, page: page, typeID: typeid, order: order, append: append)
         // Coalesce repeated last-row appearances / identical refreshes before suspension.
         guard activeThreadRequest != request else { return }
@@ -69,6 +100,7 @@ final class AppStore: ObservableObject {
         let generation = UUID()
         threadGeneration = generation
         activeThreadRequest = request
+        failedThreadRequest = request
         defer {
             if threadGeneration == generation { activeThreadRequest = nil }
         }
@@ -79,6 +111,8 @@ final class AppStore: ObservableObject {
             threads = []
             threadTypes = []
             threadPage = 0
+            threadSelectedPage = 1
+            threadTotalPages = nil
             threadHasNext = false
             boardTitle = ""
         }
@@ -98,6 +132,11 @@ final class AppStore: ObservableObject {
                 return
             }
             let parsed = DiscuzParser.parseThreadList(html, fid: fid, page: page)
+            if let total = parsed.totalPages, page > total {
+                threadTotalPages = total
+                threadState = .failed("页码超出范围，当前共 \(total) 页")
+                return
+            }
             if append {
                 var seen = Set(threads.map(\.id))
                 threads.append(contentsOf: parsed.threads.filter { seen.insert($0.id).inserted })
@@ -105,9 +144,15 @@ final class AppStore: ObservableObject {
                 var seen = Set<Int>()
                 threads = parsed.threads.filter { seen.insert($0.id).inserted }
             }
+            if !append {
+                threadSelectedPage = page
+                threadReplacementRevision += 1
+            }
+            threadTotalPages = parsed.totalPages
             threadTypes = parsed.types
             threadPage = page
             threadHasNext = parsed.hasNext
+            failedThreadRequest = nil
             if !parsed.boardName.isEmpty { boardTitle = parsed.boardName }
             threadState = .idle
         } catch {

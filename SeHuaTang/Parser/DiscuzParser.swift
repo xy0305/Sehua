@@ -156,8 +156,57 @@ enum DiscuzParser {
             ))
         }
 
-        let hasNext = html.contains("page=\(page + 1)") || html.contains(">下一页<")
-        return ThreadListPage(threads: threads, types: types, page: page, hasNext: hasNext, boardName: boardName)
+        let pagination = threadPagination(html, fid: fid, page: page)
+        return ThreadListPage(threads: threads, types: types, page: page,
+                              hasNext: pagination.hasNext, boardName: boardName,
+                              totalPages: pagination.total)
+    }
+
+    // Only pagination containers are authoritative; thread/reply links are not totals.
+    private static func threadPagination(_ html: String, fid: Int, page: Int) -> (total: Int?, hasNext: Bool) {
+        let boxes = ["pg", "page", "pgs", "n5_fy", "n5_page"].flatMap { HTML.elements(in: html, className: $0) }
+        var totals: [Int] = []
+        var next = false
+        for box in boxes {
+            let decoded = HTML.unescape(box)
+            if let text = HTML.firstMatch(#"(?:共\s*|/\s*)(\d+)\s*页"#, in: decoded), let n = Int(text), n > 0 { totals.append(n) }
+            var numbers = Set<Int>()
+            var truncated = decoded.contains("...") || decoded.contains("…")
+            for anchor in HTML.allMatches(#"(<a\b[^>]*>[\s\S]*?</a>)"#, in: decoded) {
+                guard let href = HTML.firstMatch(#"href\s*=\s*["']([^"']+)["']"#, in: anchor),
+                      HTML.queryInt("fid", in: href) == fid,
+                      let n = HTML.queryInt("page", in: href), n > 0 else { continue }
+                let label = HTML.stripTags(anchor).trimmingCharacters(in: .whitespacesAndNewlines)
+                if n > page { next = true }
+                let last = HTML.firstMatch(#"class\s*=\s*["'][^"']*\blast\b"#, in: anchor, group: 0) != nil || label.contains("末页") || label.contains("最后")
+                if last { totals.append(n) }
+                if let numeric = Int(label), numeric == n { numbers.insert(n) }
+                if label.contains("...") || label.contains("…") { truncated = true }
+            }
+            for current in HTML.allMatches(#"<(?:strong|span)[^>]*>\s*(\d+)\s*</(?:strong|span)>"#, in: decoded) {
+                if let n = Int(current), n > 0 { numbers.insert(n) }
+            }
+            // A complete 1...N numeric bar (without an omitted window) gives a real total.
+            if !truncated, !decoded.contains("下一页"),
+               HTML.firstMatch(#"class\s*=\s*["'][^"']*\bnxt\b"#, in: decoded, group: 0) == nil,
+               let maximum = numbers.max(), numbers.min() == 1,
+               numbers.count == maximum,
+               !HTML.allMatches(#"href\s*=\s*["']([^"']+)["']"#, in: decoded).contains(where: {
+                   HTML.queryInt("fid", in: $0) == fid && (HTML.queryInt("page", in: $0) ?? 0) > maximum
+               }) { totals.append(maximum) }
+        }
+        let total = totals.max()
+        if let total { return (total, page < total) }
+        // Older mobile skins expose a next link without a recognised wrapper.
+        if boxes.isEmpty {
+            for anchor in HTML.allMatches(#"(<a\b[^>]*>[\s\S]*?</a>)"#, in: HTML.unescape(html)) {
+                guard let href = HTML.firstMatch(#"href\s*=\s*["']([^"']+)["']"#, in: anchor),
+                      HTML.queryInt("fid", in: href) == fid,
+                      HTML.queryInt("page", in: href) == page + 1 else { continue }
+                next = true
+            }
+        }
+        return (nil, next)
     }
 
     static func parseThreadDetail(_ html: String, tid: Int, base: URL, fallbackTitle: String = "") -> ThreadDetail {
@@ -356,6 +405,20 @@ private enum ParserRegressionTests {
         <div><img data-src="//img.example/third.jpg"><img zoomfile="/images/fourth.jpg"></div></div>
         <div class="n5_htmk"><h1><a href="forum.php?mod=viewthread&amp;tid=43">第二个帖子</a></h1></div>
         """#
+        let numericPages = #"<div class='pg'><strong>1</strong><a href='forum.php?mod=forumdisplay&amp;fid=103&amp;page=2'>2</a><a href='forum.php?mod=forumdisplay&amp;fid=103&amp;page=3'>3</a></div>"#
+        let numeric = DiscuzParser.parseThreadList(numericPages, fid: 103, page: 1)
+        precondition(numeric.totalPages == 3 && numeric.hasNext)
+        let lastPages = #"<div class='pg'><strong>1</strong><a class='last' href='forum.php?mod=forumdisplay&amp;fid=103&amp;page=123'>... 123</a></div>"#
+        precondition(DiscuzParser.parseThreadList(lastPages, fid: 103, page: 1).totalPages == 123)
+        precondition(!DiscuzParser.parseThreadList(lastPages, fid: 103, page: 123).hasNext)
+        let unknownPages = #"<div class='page'><a href='forum.php?mod=forumdisplay&amp;fid=103&amp;page=8'>下一页</a></div><a href='forum.php?mod=viewthread&amp;tid=9&amp;page=999'>回复</a>"#
+        let unknown = DiscuzParser.parseThreadList(unknownPages, fid: 103, page: 7)
+        precondition(unknown.totalPages == nil && unknown.hasNext)
+        let windowPages = #"<div class='pg'><strong>1</strong><a href='forum.php?fid=103&amp;page=2'>2</a><a href='forum.php?fid=103&amp;page=3'>下一页</a></div>"#
+        precondition(DiscuzParser.parseThreadList(windowPages, fid: 103, page: 1).totalPages == nil)
+        precondition(DiscuzParser.parseThreadList("<div>没有分页</div>", fid: 103, page: 1).totalPages == nil)
+        let compatibility = ThreadListPage(threads: [], types: [], page: 1, hasNext: false, boardName: "")
+        precondition(compatibility.totalPages == nil)
         let list = DiscuzParser.parseThreadList(listHTML, fid: 103, page: 1)
         precondition(list.threads.count == 2)
         precondition(list.threads[0].replies == "123" && list.threads[0].likes == "45" && list.threads[0].views == "6,789")

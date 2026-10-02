@@ -28,6 +28,7 @@ struct ThreadListPage {
     var page: Int
     var hasNext: Bool
     var boardName: String
+    var totalPages: Int? = nil
 }
 
 struct ThreadAttachment: Identifiable, Hashable {

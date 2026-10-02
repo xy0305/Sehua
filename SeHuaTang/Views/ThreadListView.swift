@@ -7,6 +7,8 @@ struct ThreadListView: View {
     @State private var typeID = 0
     @State private var order = "dateline"
     @State private var visibleThreadID: Int?
+    @State private var pageInput = ""
+    @FocusState private var pageInputFocused: Bool
 
     private let orders: [(String, String)] = [
         ("dateline", "最新"),
@@ -25,6 +27,7 @@ struct ThreadListView: View {
                 typeBar
             }
             orderBar
+            pageBar
             ChallengeBanner()
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -60,11 +63,11 @@ struct ThreadListView: View {
                     } else if let error = store.threadState.errorMessage, !store.threads.isEmpty {
                         VStack(spacing: 8) {
                             Text(error).font(.footnote).foregroundStyle(ForumChrome.secondary)
-                            Button("重试加载下一页") { Task { await store.loadMore() } }
+                            Button("重试") { Task { await store.retryThreadRequest() } }
                         }
                         .padding(16)
                     } else if !store.threads.isEmpty {
-                        Text(store.threadHasNext ? "上滑加载更多" : "已显示全部帖子")
+                        Text(store.threadHasNext ? "上滑累计加载下一页" : "已到最后一页")
                             .font(.caption)
                             .foregroundStyle(ForumChrome.secondary)
                             .padding(16)
@@ -80,6 +83,10 @@ struct ThreadListView: View {
         .tint(ForumChrome.blue)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
+        .onChange(of: store.threadReplacementRevision) { _, _ in
+            visibleThreadID = store.threads.first?.id
+            pageInput = ""
+        }
         .task {
             // A popped detail must not clear the list or fetch page one again.
             if store.currentFID == board.id,
@@ -168,6 +175,47 @@ struct ThreadListView: View {
         .frame(height: 36)
         .background(ForumChrome.bar)
         .overlay(alignment: .bottom) { ForumChrome.line.frame(height: 0.5) }
+    }
+
+    private var pageBar: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 10) {
+                Button("上一页") { Task { await store.selectThreadPage(store.threadSelectedPage - 1) } }
+                    .disabled(store.threadSelectedPage <= 1 || store.threadState == .loading)
+                Text("第 \(store.threadSelectedPage) 页" + (store.threadTotalPages.map { " / \($0)" } ?? ""))
+                    .monospacedDigit()
+                Button("下一页") { Task { await store.selectThreadPage(store.threadSelectedPage + 1) } }
+                    .disabled(store.threadState == .loading || (store.threadTotalPages.map { store.threadSelectedPage >= $0 } ?? (!store.threadHasNext && store.threadPage == store.threadSelectedPage)))
+                Spacer(minLength: 0)
+                TextField("页码", text: $pageInput)
+                    .keyboardType(.numberPad)
+                    .focused($pageInputFocused)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 58)
+                    .accessibilityLabel("输入要跳转的页码")
+                Button("跳转") {
+                    guard !pageInput.isEmpty, pageInput.allSatisfy({ $0.isASCII && $0.isNumber }), let page = Int(pageInput) else {
+                        store.threadPageError = "请输入有效的整数页码"
+                        return
+                    }
+                    pageInputFocused = false
+                    Task { await store.selectThreadPage(page) }
+                }
+                .disabled(store.threadState == .loading)
+            }
+            if store.threadPage > store.threadSelectedPage {
+                Text("已累计加载第 \(store.threadSelectedPage)–\(store.threadPage) 页；选页将替换列表")
+                    .foregroundStyle(ForumChrome.secondary)
+            } else {
+                Text("选页替换列表 · 上滑累计加载")
+                    .foregroundStyle(ForumChrome.secondary)
+            }
+            if let error = store.threadPageError { Text(error).foregroundStyle(.red) }
+        }
+        .font(.caption)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(ForumChrome.bar)
     }
 
     private func reload() async {
