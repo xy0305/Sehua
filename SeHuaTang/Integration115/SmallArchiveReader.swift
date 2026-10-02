@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(libarchive)
 import libarchive
+#endif
 
 /// Reads one non-solid, unencrypted RAR/zip/7z layer from memory. Never writes the archive.
 enum SmallArchiveReader {
@@ -16,6 +18,7 @@ enum SmallArchiveReader {
     }
 
     static func entries(in data: Data, maximumBytes: Int) throws -> [Entry] {
+        #if canImport(libarchive)
         guard let archive = archive_read_new() else { throw ReadError.unreadable("无法创建压缩包读取器。") }
         defer { archive_read_free(archive) }
         guard archive_read_support_filter_all(archive) == ARCHIVE_OK,
@@ -49,8 +52,12 @@ enum SmallArchiveReader {
             output.append(Entry(path: rawPath, data: bytes))
         }
         return output
+        #else
+        throw ReadError.unreadable("当前构建没有 RAR 读取库。")
+        #endif
     }
 
+    #if canImport(libarchive)
     private static func message(_ archive: OpaquePointer, _ fallback: String) -> ReadError {
         let raw = archive_error_string(archive).map { String(cString: $0) } ?? ""
         if raw.localizedCaseInsensitiveContains("pass") || raw.localizedCaseInsensitiveContains("encrypt") {
@@ -58,4 +65,5 @@ enum SmallArchiveReader {
         }
         return .unreadable(fallback)
     }
+    #endif
 }
