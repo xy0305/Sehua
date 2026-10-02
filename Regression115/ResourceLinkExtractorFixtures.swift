@@ -75,7 +75,7 @@ import Foundation
             require(warnings.count == 1, "empty error carries warnings")
         }
         do {
-            _ = try await ResourceLinkExtractor.extractResult(detail: detail(a, [archive]), base: base) { _, _ in throw CancellationError() }
+            _ = try await ResourceLinkExtractor.extractResult(detail: detail(a, [archive]), base: base, dataLoader: { _, _ in throw CancellationError() }) { _, _ in throw CancellationError() }
             preconditionFailure("cancellation must propagate")
         } catch is CancellationError {}
         print("ResourceLinkExtractor offline fixtures passed")
