@@ -60,7 +60,7 @@ final class ExtractionMockProtocol: URLProtocol, @unchecked Sendable {
                 let name = unsafe ? "../escape" : "movie.mp4"
                 return "{\"state\":true,\"data\":{\"count\":2,\"list\":[{\"file_name\":\"" + name + "\",\"size\":42,\"ico\":\"mp4\"},{\"file_name\":\"folder\",\"size\":0}]}}"
             }
-            precondition(path == "/files/add_extract_file")
+            precondition(path == "/files/add_extract_file", "Unexpected mock endpoint: " + path)
             let body = form(request)
             precondition(body.contains("to_pid=20") && body.contains("extract_file%5B%5D=movie.mp4") && body.contains("extract_dir%5B%5D=folder"))
             precondition(!body.contains("delete") && !body.contains("password"))
