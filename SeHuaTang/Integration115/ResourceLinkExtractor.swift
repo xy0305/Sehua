@@ -6,6 +6,9 @@ import WebKit
 #if canImport(SWCompression)
 import SWCompression
 #endif
+#if canImport(SwiftArchive)
+import SwiftArchive
+#endif
 
 /// Extraction only: never submits a 115 task or writes an attachment to disk.
 /// Internal because ThreadDetail / ThreadAttachment are internal app models.
@@ -67,10 +70,10 @@ enum ResourceLinkExtractor {
             let query = URLComponents(url: url, resolvingAgainstBaseURL: true)?.queryItems ?? []
             let names = ([name, url.lastPathComponent] + query.filter { ["filename", "name"].contains($0.name.lowercased()) }.compactMap(\.value))
                 .map { entities($0.removingPercentEncoding ?? $0) }.joined(separator: " ")
-            guard matches(#"\.(?:txt|zip|7z)(?:$|[\s?&#）)])"#, names)
-                    || ["txt", "zip", "7z"].contains(url.pathExtension.lowercased()) else { return }
+            guard matches(#"\.(?:txt|zip|7z|rar)(?:$|[\s?&#）)])"#, names)
+                    || ["txt", "zip", "7z", "rar"].contains(url.pathExtension.lowercased()) else { return }
             let excluded = matches(#"目录[树樹]|目錄[树樹]|封面|说明|說明|readme|(?:directory|file)[ _-]*tree"#, names)
-            let archive = matches(#"\.(?:zip|7z)(?:$|[\s?&#）)])"#, names) || ["zip", "7z"].contains(url.pathExtension.lowercased())
+            let archive = matches(#"\.(?:zip|7z|rar)(?:$|[\s?&#）)])"#, names) || ["zip", "7z", "rar"].contains(url.pathExtension.lowercased())
                 || matches(#"压缩包|壓縮包|打包|合集[ _-]*[压壓][缩縮]|[压壓][缩縮]合集|(?:^|[\s_.-])(?:archives?|packed|zip|rar|7z)(?:[\s_.-]|$)"#, names)
             if let i = attachments.firstIndex(where: { $0.url == url }) {
                 attachments[i].name += " " + name
@@ -97,10 +100,10 @@ enum ResourceLinkExtractor {
                 try Task.checkCancellation()
                 do {
                     let text: String
-                    if isBinaryArchive(item.name) || ["zip", "7z"].contains(item.url.pathExtension.lowercased()) {
+                    if isBinaryArchive(item.name) || ["zip", "7z", "rar"].contains(item.url.pathExtension.lowercased()) {
                         let data = try await dataLoader(item.url, base)
                         guard data.count <= maximumArchiveBytes else { throw ExtractionError.attachment("压缩包超过 1 MB，不在 App 内解压。") }
-                        text = try linksText(inArchive: data)
+                        text = try await linksText(inArchive: data)
                     } else {
                         text = try await loader(item.url, base)
                     }
@@ -206,10 +209,13 @@ enum ResourceLinkExtractor {
     }
 
     private static func isBinaryArchive(_ name: String) -> Bool {
-        matches(#"\.(?:zip|7z)(?:$|[\s?&#）)])"#, name)
+        matches(#"\.(?:zip|7z|rar)(?:$|[\s?&#）)])"#, name)
     }
 
-    static func linksText(inArchive data: Data) throws -> String {
+    static func linksText(inArchive data: Data) async throws -> String {
+        if data.starts(with: [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07]) {
+            return try text(from: await rarEntries(data))
+        }
         #if canImport(SWCompression)
         if data.starts(with: [0x50, 0x4B]) {
             let entries = try ZipContainer.open(container: data)
@@ -219,9 +225,20 @@ enum ResourceLinkExtractor {
             let entries = try SevenZipContainer.open(container: data)
             return try text(from: entries.map { ($0.info.name, $0.data) })
         }
-        throw ExtractionError.attachment("不是可读取的 zip 或 7z。")
+        throw ExtractionError.attachment("不是可读取的 zip、7z 或 rar。")
         #else
         throw ExtractionError.attachment("当前构建没有压缩包读取库。")
+        #endif
+    }
+
+    private static func rarEntries(_ data: Data) async throws -> [(String, Data?)] {
+        #if canImport(SwiftArchive)
+        let entries: [ArchiveReader.EntryWithData]
+        do { entries = try await Archive.read(from: .data(data)) }
+        catch { throw ExtractionError.attachment("RAR 读取失败，请检查是否加密、分卷或不完整。") }
+        return entries.map { ($0.entry.path, $0.bytes) }
+        #else
+        throw ExtractionError.attachment("当前构建没有 RAR 读取库。")
         #endif
     }
 
