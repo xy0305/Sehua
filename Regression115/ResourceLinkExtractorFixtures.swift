@@ -60,6 +60,12 @@ import Foundation
             return b
         }
         require(fromHTML.links == [b], "TXT title metadata / relative URL")
+        let smallArchive = attachment("links.zip", "/links.zip")
+        let opened = try await ResourceLinkExtractor.extractResult(detail: detail(a, [smallArchive]), base: base, dataLoader: { url, referer in
+            require(url == smallArchive.url && referer == base, "archive request")
+            throw ResourceLinkExtractor.ExtractionError.attachment("fixture archive")
+        })
+        require(opened.links == [a], "failed small archive falls back")
         let duplicate = try await ResourceLinkExtractor.extractResult(detail: detail(a, [ordinary]), base: base) { _, _ in a }
         require(duplicate.resources.count == 1 && duplicate.resources[0].sources.count == 2, "duplicate retains provenance")
         do {

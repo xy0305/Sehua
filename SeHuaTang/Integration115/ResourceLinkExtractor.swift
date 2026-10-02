@@ -3,6 +3,9 @@ import CoreFoundation
 #if canImport(WebKit)
 import WebKit
 #endif
+#if canImport(SWCompression)
+import SWCompression
+#endif
 
 /// Extraction only: never submits a 115 task or writes an attachment to disk.
 /// Internal because ThreadDetail / ThreadAttachment are internal app models.
@@ -39,7 +42,9 @@ enum ResourceLinkExtractor {
         }
     }
     typealias TextLoader = (URL, URL) async throws -> String
+    typealias DataLoader = (URL, URL) async throws -> Data
     static let maximumTextBytes = 4 * 1024 * 1024
+    static let maximumArchiveBytes = 1024 * 1024
 
     static func extract(detail: ThreadDetail, base: URL) async throws -> [String] {
         try await extractResult(detail: detail, base: base).links
@@ -48,7 +53,8 @@ enum ResourceLinkExtractor {
     /// Inject a loader for deterministic, offline tests. base is the page Referer.
     /// Manual mode bypasses both name exclusions and archive preference.
     static func extractResult(detail: ThreadDetail, base: URL, mode: Mode = .automatic,
-                              loader: TextLoader = readTextAttachment) async throws -> Result {
+                              loader: TextLoader = readTextAttachment,
+                              dataLoader: DataLoader = readSmallAttachment) async throws -> Result {
         struct Attachment {
             let url: URL
             var name: String
@@ -61,9 +67,11 @@ enum ResourceLinkExtractor {
             let query = URLComponents(url: url, resolvingAgainstBaseURL: true)?.queryItems ?? []
             let names = ([name, url.lastPathComponent] + query.filter { ["filename", "name"].contains($0.name.lowercased()) }.compactMap(\.value))
                 .map { entities($0.removingPercentEncoding ?? $0) }.joined(separator: " ")
-            guard matches(#"\.txt(?:$|[\s?&#）)])"#, names) || url.path.lowercased().hasSuffix(".txt") else { return }
+            guard matches(#"\.(?:txt|zip|7z)(?:$|[\s?&#）)])"#, names)
+                    || ["txt", "zip", "7z"].contains(url.pathExtension.lowercased()) else { return }
             let excluded = matches(#"目录[树樹]|目錄[树樹]|封面|说明|說明|readme|(?:directory|file)[ _-]*tree"#, names)
-            let archive = matches(#"压缩包|壓縮包|打包|合集[ _-]*[压壓][缩縮]|[压壓][缩縮]合集|(?:^|[\s_.-])(?:archives?|packed|zip|rar|7z)(?:[\s_.-]|$)"#, names)
+            let archive = matches(#"\.(?:zip|7z)(?:$|[\s?&#）)])"#, names) || ["zip", "7z"].contains(url.pathExtension.lowercased())
+                || matches(#"压缩包|壓縮包|打包|合集[ _-]*[压壓][缩縮]|[压壓][缩縮]合集|(?:^|[\s_.-])(?:archives?|packed|zip|rar|7z)(?:[\s_.-]|$)"#, names)
             if let i = attachments.firstIndex(where: { $0.url == url }) {
                 attachments[i].name += " " + name
                 attachments[i].excluded = attachments[i].excluded || excluded
@@ -88,7 +96,14 @@ enum ResourceLinkExtractor {
             for item in items {
                 try Task.checkCancellation()
                 do {
-                    let text = try await loader(item.url, base)
+                    let text: String
+                    if isBinaryArchive(item.name) || ["zip", "7z"].contains(item.url.pathExtension.lowercased()) {
+                        let data = try await dataLoader(item.url, base)
+                        guard data.count <= maximumArchiveBytes else { throw ExtractionError.attachment("压缩包超过 1 MB，不在 App 内解压。") }
+                        text = try linksText(inArchive: data)
+                    } else {
+                        text = try await loader(item.url, base)
+                    }
                     try Task.checkCancellation()
                     guard !isHTMLResponse(text) else { throw ExtractionError.attachment("返回登录、验证或权限 HTML，而非 TXT。") }
                     let found = links(in: text)
@@ -108,6 +123,12 @@ enum ResourceLinkExtractor {
         }
         let archiveItems = candidates.filter { $0.archive && !$0.excluded }
         let archiveLinks = deduplicate(try await read(archiveItems))
+        let usedOpenedArchive = archiveLinks.contains { link in
+            link.sources.contains { source in
+                if case .attachment(let name, _) = source { return isBinaryArchive(name) }
+                return false
+            }
+        }
         if mode == .automatic, !archiveLinks.isEmpty {
             return Result(resources: archiveLinks, warnings: warnings, usedArchiveGroup: true)
         }
@@ -122,7 +143,7 @@ enum ResourceLinkExtractor {
         all += archiveLinks
         all += try await read(candidates.filter { candidate in !archiveItems.contains(where: { $0.url == candidate.url }) })
         all = deduplicate(all)
-        if mode == .automatic {
+        if mode == .automatic, !usedOpenedArchive {
             let archives = all.filter { matches(#"\.(?:zip|rar|7z|tar|tgz|tbz2|txz|gz|bz2|xz|z\d{2}|r\d{2})(?:\.\d{1,4})?$"#, fileName($0.value)) }
             if !archives.isEmpty { all = archives }
         }
@@ -182,6 +203,73 @@ enum ResourceLinkExtractor {
     }
     private static func isHTMLResponse(_ text: String) -> Bool {
         matches(#"^\s*(?:<!doctype\s+html|<html\b|<head\b|<body\b)|人机验证|人機驗證"#, text.replacingOccurrences(of: "\u{FEFF}", with: ""))
+    }
+
+    private static func isBinaryArchive(_ name: String) -> Bool {
+        matches(#"\.(?:zip|7z)(?:$|[\s?&#）)])"#, name)
+    }
+
+    static func linksText(inArchive data: Data) throws -> String {
+        #if canImport(SWCompression)
+        if data.starts(with: [0x50, 0x4B]) {
+            let entries = try ZipContainer.open(container: data)
+            return try text(from: entries.map { ($0.info.name, $0.data) })
+        }
+        if data.starts(with: [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C]) {
+            let entries = try SevenZipContainer.open(container: data)
+            return try text(from: entries.map { ($0.info.name, $0.data) })
+        }
+        throw ExtractionError.attachment("不是可读取的 zip 或 7z。")
+        #else
+        throw ExtractionError.attachment("当前构建没有压缩包读取库。")
+        #endif
+    }
+
+    private static func text(from entries: [(String, Data?)]) throws -> String {
+        var output = ""
+        for (name, data) in entries {
+            let lower = name.lowercased()
+            if lower.hasSuffix(".zip") || lower.hasSuffix(".7z") || lower.hasSuffix(".rar") { continue }
+            guard let data, data.count <= maximumTextBytes else { continue }
+            guard let text = decode(data) else { continue }
+            output += text + "\n"
+        }
+        if output.isEmpty { throw ExtractionError.attachment("压缩包内没有可读取的文本链接。") }
+        return output
+    }
+
+    private static func decode(_ data: Data) -> String? {
+        let gb18030 = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
+        if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]) { return String(data: data, encoding: .utf16) }
+        return String(data: data, encoding: .utf8) ?? String(data: data, encoding: gb18030)
+    }
+
+    static func readSmallAttachment(_ url: URL, referer: URL) async throws -> Data {
+        guard ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { throw ExtractionError.attachment("不支持的附件协议。") }
+        #if canImport(WebKit)
+        let cookies = await defaultCookies()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 25
+        configuration.timeoutIntervalForResource = 30
+        configuration.urlCache = nil
+        for cookie in cookies { configuration.httpCookieStorage?.setCookie(cookie) }
+        let client = URLSession(configuration: configuration)
+        defer { client.invalidateAndCancel() }
+        var request = URLRequest(url: url)
+        request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        let (bytes, response) = try await client.bytes(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { throw ExtractionError.attachment("附件 HTTP 请求失败，请检查登录及下载权限。") }
+        guard response.expectedContentLength <= Int64(maximumArchiveBytes) else { throw ExtractionError.attachment("压缩包超过 1 MB，不在 App 内解压。") }
+        var data = Data()
+        for try await byte in bytes {
+            guard data.count < maximumArchiveBytes else { throw ExtractionError.attachment("压缩包超过 1 MB，不在 App 内解压。") }
+            data.append(byte)
+        }
+        return data
+        #else
+        throw ExtractionError.attachment("当前平台没有 WebKit，请注入离线压缩包数据。")
+        #endif
     }
 
     /// Same in-memory transport as TextAttachmentView; no UI dependency.

@@ -82,6 +82,7 @@
 			productType = "com.apple.product-type.application";
 			packageProductDependencies = (
 				BB0000000000000000000109 /* KSPlayer */,
+				BB0000000000000000000110 /* SWCompression */,
 			);
 		};
 /* End PBXNativeTarget section */
@@ -115,6 +116,7 @@
 			projectRoot = "";
 			packageReferences = (
 				BB0000000000000000000301 /* XCRemoteSwiftPackageReference "KSPlayer" */,
+				BB0000000000000000000302 /* XCRemoteSwiftPackageReference "SWCompression" */,
 			);
 			targets = (
 				AA0000000000000000000006 /* SeHuaTang */,
@@ -183,7 +185,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = SeHuaTang/Info.plist;
@@ -195,7 +197,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.9.8;
+				MARKETING_VERSION = 1.9.9;
 				PRODUCT_BUNDLE_IDENTIFIER = app.sehuatang.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -212,7 +214,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = SeHuaTang/Info.plist;
@@ -224,7 +226,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.9.8;
+				MARKETING_VERSION = 1.9.9;
 				PRODUCT_BUNDLE_IDENTIFIER = app.sehuatang.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -267,6 +269,14 @@
 				minimumVersion = 2.3.4;
 			};
 		};
+		BB0000000000000000000302 /* XCRemoteSwiftPackageReference "SWCompression" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tsolomko/SWCompression.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.9.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -274,6 +284,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = BB0000000000000000000301 /* XCRemoteSwiftPackageReference "KSPlayer" */;
 			productName = KSPlayer;
+		};
+		BB0000000000000000000110 /* SWCompression */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BB0000000000000000000302 /* XCRemoteSwiftPackageReference "SWCompression" */;
+			productName = SWCompression;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
