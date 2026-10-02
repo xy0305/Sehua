@@ -245,6 +245,7 @@ enum ResourceLinkExtractor {
     }
 
     static func readSmallAttachment(_ url: URL, referer: URL) async throws -> Data {
+        try Task.checkCancellation()
         guard ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { throw ExtractionError.attachment("不支持的附件协议。") }
         #if canImport(WebKit)
         let cookies = await defaultCookies()
