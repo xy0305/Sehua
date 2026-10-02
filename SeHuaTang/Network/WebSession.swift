@@ -260,7 +260,7 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
                     let ready = html.contains("n5_htnrbt") || html.contains("class=\"btdb\"") || html.contains("n5_bbsbk")
                         || html.contains("class=\"message\"") || html.contains("n5_htmk")
                         || html.contains("n5_hdlbmk")
-                        || isSpacePage(html, target: target)
+                        || self.isSpacePage(html, target: target)
                     if !ready && attempt < 8 {
                         self.collectHTML(attempt: attempt + 1, id: id, gen: gen)
                         return
