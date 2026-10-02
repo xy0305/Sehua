@@ -74,7 +74,7 @@ struct Pan115TaskDetailView: View {
                     }
                 }.disabled(busy)
                 if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
-                Text("进入页面自动读取；前台每15秒刷新，最多20轮。关闭应用停止。仅扫描本资源目录。")
+                Text("进入页面后自动读取并解压，切到后台仍继续。系统挂起或杀掉 App 后无法保证；未知结果不重发。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("提交记录") {
@@ -134,12 +134,12 @@ struct Pan115TaskDetailView: View {
         .navigationTitle("归档任务详情")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .task(id: scenePhase) {
-            guard scenePhase == .active else { return }
+        .task {
+            // Keep polling while the app is backgrounded. iOS may still suspend or kill it.
             await refresh(background: true)
-            for _ in 0..<20 {
+            for _ in 0..<40 {
                 do { try await Task.sleep(nanoseconds: 15_000_000_000) } catch { return }
-                guard !Task.isCancelled, scenePhase == .active else { return }
+                guard !Task.isCancelled else { return }
                 await refresh(background: true)
             }
         }
@@ -167,7 +167,7 @@ struct Pan115TaskDetailView: View {
             listing = current
             if !current.truncated {
                 for archive in current.archives.prefix(4) {
-                    guard !Task.isCancelled, scenePhase == .active else { return }
+                    guard !Task.isCancelled else { return }
                     do {
                         let outcome = try await service.requestExtraction(archive: archive, resourceID: resource.id, settings: settings, confirmed: true, background: true)
                         message = outcome.message
