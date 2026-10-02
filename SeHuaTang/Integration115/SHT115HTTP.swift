@@ -122,12 +122,18 @@ extension SHT115HTTP {
 /// No automatic retry, especially no retry of an ambiguous POST.
 private actor SHT115RequestPacer {
     static let shared = SHT115RequestPacer()
-    private var next: UInt64 = 0
+    private var lastStart: UInt64 = 0
     func wait() async throws {
-        try Task.checkCancellation()
-        let now = DispatchTime.now().uptimeNanoseconds
-        let slot = max(now, next)
-        next = slot + 1_000_000_000
-        if slot > now { try await Task.sleep(nanoseconds: slot - now) }
+        // Recheck after suspension: delayed callers must not bunch into old slots.
+        while true {
+            try Task.checkCancellation()
+            let now = DispatchTime.now().uptimeNanoseconds
+            let earliest = lastStart + 1_100_000_000
+            if now >= earliest {
+                lastStart = now
+                return
+            }
+            try await Task.sleep(nanoseconds: earliest - now)
+        }
     }
 }
