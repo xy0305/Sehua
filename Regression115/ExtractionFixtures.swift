@@ -46,7 +46,7 @@ final class ExtractionMockProtocol: URLProtocol, @unchecked Sendable {
             if path == "/files" {
                 return "{\"state\":true,\"count\":2,\"path\":[{\"cid\":0},{\"cid\":10},{\"cid\":20}],\"data\":[{\"fid\":21,\"n\":\"fixture.zip\",\"pc\":\"archivePC\"},{\"fid\":22,\"n\":\"existing.mp4\",\"pc\":\"videoPC\"}]}"
             }
-            if path == "/web/lixian/" {
+            if path == "/web/lixian/" || path == "/web/lixian" {
                 precondition(url.query!.contains("info_hash=" + hash))
                 precondition(!url.query!.contains("page=2"))
                 if taskFailure { throw URLError(.timedOut) }
