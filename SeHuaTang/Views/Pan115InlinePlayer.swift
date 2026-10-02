@@ -197,19 +197,6 @@ struct KSChromePlayer: View {
                 overlayHUD(overlay).allowsHitTesting(false)
             }
             if showChrome { chromeOverlay.zIndex(20) }
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 52, height: 52)
-                    .background(Color.black.opacity(0.45), in: Circle())
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.leading, 16)
-            .padding(.top, 12)
-            .zIndex(40)
         }
         .frame(maxWidth: .infinity)
         .frame(height: height)

@@ -100,6 +100,9 @@ struct MemberSpace {
     var name: String
     var avatarURL: URL?
     var threads: [ThreadItem]
+    var page: Int = 1
+    var totalPages: Int? = nil
+    var hasNext: Bool = false
 }
 
 struct MemberRoute: Identifiable, Hashable {

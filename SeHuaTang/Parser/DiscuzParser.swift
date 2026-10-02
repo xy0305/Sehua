@@ -320,7 +320,34 @@ enum DiscuzParser {
                 views: "", isSticky: false, fid: HTML.queryInt("fid", in: pair.0)
             ))
         }
-        return MemberSpace(uid: uid, name: name, avatarURL: avatarURL(in: html, base: base), threads: threads)
+        let paging = memberSpacePage(html, uid: uid, current: HTML.queryInt("page", in: base.absoluteString) ?? 1)
+        return MemberSpace(uid: uid, name: name, avatarURL: avatarURL(in: html, base: base), threads: threads, page: paging.page, totalPages: paging.total, hasNext: paging.hasNext)
+    }
+
+    static func memberSpacePage(_ html: String, uid: Int, current: Int) -> (page: Int, total: Int?, hasNext: Bool, nextURL: URL?) {
+        let boxes = ["pg", "page", "pgs", "n5_fy", "n5_page"].flatMap { HTML.elements(in: html, className: $0) }
+        let scope = boxes.isEmpty ? html : boxes.joined(separator: "\n")
+        let decoded = HTML.unescape(scope)
+        var total = HTML.firstMatch(#"(?:共\s*|/\s*)(\d+)\s*页"#, in: decoded).flatMap(Int.init)
+        var page = current
+        var hasNext = false
+        var nextURL: URL?
+        for anchor in HTML.allMatches(#"(<a\b[^>]*>[\s\S]*?</a>)"#, in: decoded) {
+            guard let href = HTML.firstMatch(#"href\s*=\s*["']([^"']+)["']"#, in: anchor) else { continue }
+            let belongs = HTML.queryInt("uid", in: href) == uid || href.contains("space-uid-\(uid)")
+            guard belongs, let n = HTML.queryInt("page", in: href), n > 0 else { continue }
+            let label = HTML.stripTags(anchor)
+            if label.contains("末页") || label.contains("最后") { total = max(total ?? 0, n) }
+            if n == current + 1 || label.contains("下一页") {
+                hasNext = true
+                if n == current + 1, let url = URL(string: HTML.unescape(href), relativeTo: URL(string: "https://www.sehuatang.org")!) {
+                    nextURL = url
+                }
+            }
+            if label == "\(n)", n == current { page = n }
+        }
+        if let total, page >= total { hasNext = false }
+        return (page, total, hasNext, nextURL)
     }
 
     static func messageBodies(in html: String) -> [String] {
@@ -496,6 +523,11 @@ private enum ParserRegressionTests {
         let space = DiscuzParser.parseMemberSpace(spaceHTML, uid: 7, base: base)
         precondition(space.name == "楼主甲" && space.threads.map(\.id) == [88, 89])
         precondition(space.threads[0].authorID == 7 && space.avatarURL?.path == "/uc_server/avatar.php")
+        let paged = #"""
+        <div class="pg"><strong>1</strong><a href="home.php?mod=space&amp;uid=7&amp;page=2">2</a><a href="home.php?mod=space&amp;uid=7&amp;page=3">下一页</a><span>共 3 页</span></div>
+        """#
+        let paging = DiscuzParser.memberSpacePage(paged, uid: 7, current: 1)
+        precondition(paging.total == 3 && paging.hasNext && paging.page == 1)
     }
 }
 #endif
