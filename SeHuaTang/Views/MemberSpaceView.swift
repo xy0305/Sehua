@@ -90,15 +90,42 @@ struct MemberSpaceView: View {
     @MainActor private func load() async {
         guard state != .loading else { return }
         state = .loading
-        let path = "home.php?mod=space&uid=\(uid)&do=thread&view=me&from=space&mobile=2"
+        let paths = [
+            "home.php?mod=space&uid=\(uid)&do=thread&view=me&from=space&mobile=2",
+            "home.php?mod=space&uid=\(uid)&mobile=2"
+        ]
         do {
-            let html = try await session.fetchHTML(path)
+            var html = ""
+            var lastError: Error = URLError(.timedOut)
+            for path in paths {
+                do {
+                    html = try await withTimeout(12) { try await session.fetchHTML(path, timeout: 10) }
+                    lastError = URLError(.timedOut)
+                    break
+                } catch {
+                    lastError = error
+                }
+            }
+            if html.isEmpty { throw lastError }
             var parsed = DiscuzParser.parseMemberSpace(html, uid: uid, base: session.baseURL)
             if parsed.name.isEmpty { parsed.name = name }
             space = parsed
             state = .idle
         } catch {
-            state = .failed(error.localizedDescription)
+            state = .failed("个人主页加载超时，请重试")
+        }
+    }
+
+    private func withTimeout<T>(_ seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw URLError(.timedOut)
+            }
+            let value = try await group.next()!
+            group.cancelAll()
+            return value
         }
     }
 }

@@ -260,7 +260,8 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
                     let ready = html.contains("n5_htnrbt") || html.contains("class=\"btdb\"") || html.contains("n5_bbsbk")
                         || html.contains("class=\"message\"") || html.contains("n5_htmk")
                         || html.contains("n5_hdlbmk")
-                    if !ready && attempt < 24 {
+                        || isSpacePage(html, target: target)
+                    if !ready && attempt < 8 {
                         self.collectHTML(attempt: attempt + 1, id: id, gen: gen)
                         return
                     }
@@ -268,6 +269,17 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
                 }
             }
         }
+    }
+
+    private func isSpacePage(_ html: String, target: URL?) -> Bool {
+        guard let target else { return false }
+        let query = URLComponents(url: target, resolvingAgainstBaseURL: true)?.queryItems ?? []
+        let space = query.contains { $0.name == "mod" && $0.value == "space" }
+            || target.absoluteString.contains("space-uid-")
+        guard space else { return false }
+        let lower = html.lowercased()
+        return lower.contains("uid=") || lower.contains("viewthread") || lower.contains("thread")
+            || lower.contains("个人空间") || lower.contains("主题") || lower.contains("space")
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
