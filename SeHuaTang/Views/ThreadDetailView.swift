@@ -231,32 +231,6 @@ struct ThreadDetailView: View {
                     .overlay(alignment: .bottom) { ForumChrome.line.frame(height: 0.5) }
                 }
 
-                if let body = d.posts.first?.htmlBody, !SiteLinks.links(in: body, base: postURL).isEmpty {
-                    let links = SiteLinks.links(in: body, base: postURL)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("链接").font(.system(size: 15, weight: .semibold))
-                        ForEach(links, id: \.absoluteString) { url in
-                            Button {
-                                openBodyLink(url)
-                            } label: {
-                                HStack {
-                                    Image(systemName: SiteLinks.staysInApp(url) ? "doc.text" : "safari")
-                                    Text(url.host ?? url.absoluteString).lineLimit(1)
-                                    Spacer()
-                                    Text("应用内打开")
-                                        .font(.system(size: 12, weight: .semibold))
-                                }
-                                .font(.system(size: 14))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(ForumChrome.page)
-                    .overlay(alignment: .bottom) { ForumChrome.line.frame(height: 0.5) }
-                }
-
                 ForEach(d.posts) { post in
                     VStack(alignment: .leading, spacing: 10) {
                         if d.posts.first?.id != post.id {
@@ -266,14 +240,16 @@ struct ThreadDetailView: View {
                             switch fragment {
                             case .richText(let runs):
                                 Text(attributedBody(runs))
-                                    .font(.system(size: 16))
+                                    .multilineTextAlignment(runs.first?.alignment == "center" ? .center : runs.first?.alignment == "right" ? .trailing : .leading)
+                                    .frame(maxWidth: .infinity, alignment: runs.first?.alignment == "center" ? .center : runs.first?.alignment == "right" ? .trailing : .leading)
+                                    .font(.body)
                                     .foregroundStyle(ForumChrome.text)
                                     .lineSpacing(6)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .textSelection(.enabled)
                             case .text(let text):
                                 Text(text)
-                                    .font(.system(size: 16))
+                                    .font(.body)
                                     .foregroundStyle(ForumChrome.text)
                                     .lineSpacing(6)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -415,11 +391,7 @@ struct ThreadDetailView: View {
             case .richText(let runs): result.append(.richText(runs))
             case .text(let text): result.append(.text(text))
             case .image(let url):
-                if case .images(let urls)? = result.last {
-                    result[result.count - 1] = .images(urls + [url])
-                } else {
-                    result.append(.images([url]))
-                }
+                result.append(.images([url]))
             }
         }
         return result
@@ -434,10 +406,24 @@ struct ThreadDetailView: View {
         var result = AttributedString()
         for run in runs {
             var text = AttributedString(run.text)
+            if run.bold { text.font = .body.bold() }
+            if let color = run.color { text.foregroundColor = bodyColor(color) }
             if let url = run.url, SiteRoute.resolve(url) != nil { text.link = url }
             result.append(text)
         }
         return result
+    }
+
+    private func bodyColor(_ value: String) -> Color {
+        let named: [String: Color] = ["red": .red, "pink": .pink, "blue": .blue, "green": .green, "purple": .purple, "orange": .orange]
+        if let color = named[value.lowercased()] { return color }
+        let hex = value.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        if hex.count == 6, let rgb = UInt32(hex, radix: 16) {
+            // Semantic accent colors remain legible in both appearance modes.
+            if rgb == 0 || rgb == 0xffffff { return ForumChrome.text }
+            return Color(red: Double((rgb >> 16) & 255) / 255, green: Double((rgb >> 8) & 255) / 255, blue: Double(rgb & 255) / 255)
+        }
+        return ForumChrome.text
     }
 
     @ViewBuilder

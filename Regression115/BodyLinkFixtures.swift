@@ -22,6 +22,13 @@ struct BodyLinkFixtures {
         let trick = URL(string: "https://sehuatang.org.evil.test/thread-42-1-1.html")!
         precondition(SiteRoute.resolve(trick) == .web(trick))
         precondition(SiteRoute.resolve(URL(string: "magnet:?xt=urn:btih:test")!) != nil)
+        let semantic = HTML.orderedContent(in: "<center><font color='red'><b>提示</b></font><p><a href='thread-42-1-1.html'>完整资源<br>第二行标题</a></p><img src='/static/image/decor.gif'></center>", base: base)
+        guard case .richText(let heading) = semantic[0], case .richText(let title) = semantic[1], case .image = semantic[2] else { fatalError("semantic order") }
+        precondition(heading.first?.alignment == "center" && heading.first?.color == "red" && heading.first?.bold == true)
+        precondition(title.map(\.text).joined() == "完整资源\n第二行标题")
+        precondition(title.allSatisfy { $0.alignment == "center" && $0.url != nil && $0.color == nil && !$0.bold })
+        precondition(title.filter { $0.text == "完整资源" }.count == 1)
+        print("PASS alignment/color/bold nesting, complete multiline inline title, decoration retained, no duplicate body title")
         print("PASS body links: text/image order, labels, entity/relative URL, full query, native routes, external in-app, blocked schemes")
     }
 }

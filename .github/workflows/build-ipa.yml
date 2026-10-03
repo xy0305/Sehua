@@ -58,6 +58,11 @@ jobs:
           xcrun swiftc -parse-as-library SeHuaTang/Parser/HTML.swift SeHuaTang/Models/SiteRoute.swift SeHuaTang/Config/SiteConfig.swift Regression115/BodyLinkFixtures.swift -o /tmp/body-link-fixtures
           /tmp/body-link-fixtures
 
+      - name: Animated signature and decoding fixtures
+        run: |
+          xcrun swiftc -parse-as-library Regression115/AnimatedImageFixtures.swift -o /tmp/animated-fixtures
+          /tmp/animated-fixtures
+
       - name: Offline submission fixtures
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/SubmissionFixtures.swift -o /tmp/submission-fixtures

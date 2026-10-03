@@ -146,6 +146,9 @@ enum HTML {
         var text: String
         var href: String?
         var url: URL?
+        var alignment: String = "left"
+        var color: String? = nil
+        var bold: Bool = false
     }
 
     enum Content: Hashable {
@@ -160,18 +163,23 @@ enum HTML {
         var result: [Content] = []
         var runs: [Inline] = []
         var href: String?
+        var style = Inline(text: "")
+        var stack: [(String, Inline)] = []
         var cursor = html.startIndex
         func append(_ text: String) {
             let value = unescape(text)
             guard !value.isEmpty else { return }
-            runs.append(Inline(text: value, href: href, url: href.flatMap { absURL($0, base: base) }))
+            var run = style
+            run.text = value
+            run.href = href
+            run.url = href.flatMap { absURL($0, base: base) }
+            runs.append(run)
         }
         func flush() {
-            if runs.contains(where: { $0.href != nil }) {
-                result.append(.richText(runs))
-            } else {
-                let text = plainText(runs.map { $0.text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;") }.joined())
-                if !text.isEmpty { result.append(.text(text)) }
+            if runs.contains(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+                if runs.allSatisfy({ $0.href == nil && $0.alignment == "left" && $0.color == nil && !$0.bold }) {
+                    result.append(.text(runs.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)))
+                } else { result.append(.richText(runs)) }
             }
             runs = []
         }
@@ -181,8 +189,24 @@ enum HTML {
             case "a": href = token.closing ? nil : attribute("href", in: token.raw)
             case "img":
                 flush()
-                if let url = imageURLs(in: token.raw, base: base).first { result.append(.image(url)) }
-            case "br", "p", "div", "li", "blockquote", "tr", "section", "pre": append("\n")
+                if let url = imageURLs(in: token.raw, base: base, excludingDecorations: false).first { result.append(.image(url)) }
+            case "br": append("\n")
+            case "p", "div", "center", "li", "blockquote", "tr", "section", "pre", "font", "span", "b", "strong":
+                let block = ["p", "div", "center", "li", "blockquote", "tr", "section", "pre"].contains(token.name)
+                if block { flush() }
+                if token.closing {
+                    if let index = stack.lastIndex(where: { $0.0 == token.name }) {
+                        style = stack[index].1
+                        stack.removeSubrange(index...)
+                    }
+                } else {
+                    stack.append((token.name, style))
+                    let css = attribute("style", in: token.raw) ?? ""
+                    if token.name == "center" { style.alignment = "center" }
+                    if let alignment = attribute("align", in: token.raw) ?? firstMatch(#"(?:^|;)\s*text-align\s*:\s*(left|center|right)"#, in: css) { style.alignment = alignment.lowercased() }
+                    if let color = attribute("color", in: token.raw) ?? firstMatch(#"(?:^|;)\s*color\s*:\s*([^;]+)"#, in: css) { style.color = color.trimmingCharacters(in: .whitespaces) }
+                    if ["b", "strong"].contains(token.name) || css.lowercased().contains("font-weight:bold") || css.lowercased().contains("font-weight: bold") { style.bold = true }
+                }
             default: break
             }
             cursor = token.range.upperBound
