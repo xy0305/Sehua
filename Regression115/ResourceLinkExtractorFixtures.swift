@@ -78,6 +78,37 @@ import Foundation
             _ = try await ResourceLinkExtractor.extractResult(detail: detail(a, [archive]), base: base, loader: { _, _ in throw CancellationError() }, dataLoader: { _, _ in throw CancellationError() })
             preconditionFailure("cancellation must propagate")
         } catch is CancellationError {}
+        let extensionless = attachment("eD2k", "/forum.php?mod=attachment&aid=fixture")
+        let noSuffix = try await ResourceLinkExtractor.extractResult(detail: detail("", [extensionless]), base: base) { url, _ in
+            require(url == extensionless.url, "explicit extensionless attachment")
+            return ed
+        }
+        require(noSuffix.links == [ed], "extensionless eD2k metadata is read")
+        let relative = try await ResourceLinkExtractor.extractResult(detail: detail("<a href='forum.php?mod=attachment&amp;aid=fixture'>eD2k</a>"), base: base) { url, _ in
+            require(ResourceLinkExtractor.isDiscuzAttachment(url), "relative Discuz attachment endpoint")
+            return ed
+        }
+        require(relative.links == [ed], "relative extensionless anchor")
+        let page = try await ResourceLinkExtractor.extractResult(detail: detail(a + "<a href='/forum.php?mod=viewthread&amp;tid=9'>eD2k</a><a href='/ordinary'>eD2k</a>"), base: base) { _, _ in
+            preconditionFailure("ordinary pages must not be downloaded")
+        }
+        require(page.links == [a], "ordinary webpage ignored")
+        let login = try await ResourceLinkExtractor.extractResult(detail: detail(a, [extensionless]), base: base) { _, _ in
+            try ResourceLinkExtractor.attachmentText(Data("<!doctype html><html>login</html>".utf8))
+        }
+        require(login.links == [a] && login.warnings.count == 1, "extensionless login HTML fallback")
+        let binary = try await ResourceLinkExtractor.extractResult(detail: detail(a, [extensionless]), base: base) { _, _ in
+            try ResourceLinkExtractor.attachmentText(Data([0x50, 0x4B, 0x03, 0x04, 0, 1]))
+        }
+        require(binary.links == [a] && binary.warnings.count == 1, "binary fallback")
+        let decodedUTF8 = try ResourceLinkExtractor.attachmentText(Data(ed.utf8), mimeType: "application/octet-stream")
+        require(decodedUTF8 == ed, "UTF8 octet-stream signature")
+        let decodedUTF16 = try ResourceLinkExtractor.attachmentText(ed.data(using: .utf16)!)
+        require(decodedUTF16 == ed, "UTF16 BOM")
+        do {
+            _ = try ResourceLinkExtractor.attachmentText(Data(ed.utf8), mimeType: "text/html")
+            preconditionFailure("HTML MIME must be rejected")
+        } catch ResourceLinkExtractor.ExtractionError.attachment {}
         print("ResourceLinkExtractor offline fixtures passed")
     }
 }

@@ -36,7 +36,7 @@ enum ResourceLinkExtractor {
         var errorDescription: String? {
             switch self {
             case .noValidLinks(let warnings):
-                return "未提取到有效磁力或 ed2k 链接。" + warnings.map { "\($0.attachmentName)：\($0.message)" }.joined(separator: "；")
+                return "资源提取阶段：未提取到有效磁力或 ed2k 链接。" + warnings.map { "\($0.attachmentName)：\($0.message)" }.joined(separator: "；")
             case .attachment(let message): return message
             }
         }
@@ -67,7 +67,7 @@ enum ResourceLinkExtractor {
             let query = URLComponents(url: url, resolvingAgainstBaseURL: true)?.queryItems ?? []
             let names = ([name, url.lastPathComponent] + query.filter { ["filename", "name"].contains($0.name.lowercased()) }.compactMap(\.value))
                 .map { entities($0.removingPercentEncoding ?? $0) }.joined(separator: " ")
-            guard matches(#"\.(?:txt|zip|7z|rar)(?:$|[\s?&#）)])"#, names)
+            guard isDiscuzAttachment(url) || matches(#"\.(?:txt|zip|7z|rar)(?:$|[\s?&#）)])"#, names)
                     || ["txt", "zip", "7z", "rar"].contains(url.pathExtension.lowercased()) else { return }
             let excluded = matches(#"目录[树樹]|目錄[树樹]|封面|说明|說明|readme|(?:directory|file)[ _-]*tree"#, names)
             let archive = matches(#"\.(?:zip|7z|rar)(?:$|[\s?&#）)])"#, names) || ["zip", "7z", "rar"].contains(url.pathExtension.lowercased())
@@ -115,7 +115,8 @@ enum ResourceLinkExtractor {
                     try Task.checkCancellation()
                     let message: String
                     if let error = error as? ExtractionError { message = error.localizedDescription }
-                    else { message = "附件读取失败，请检查登录、权限或网络；已允许回退。" }
+                    else if let error = error as? URLError { message = "附件下载阶段：网络错误（\(error.code.rawValue)）；已允许回退。" }
+                    else { message = "附件下载阶段：读取失败，请检查登录、权限或网络；已允许回退。" }
                     warnings.append(Warning(attachmentName: item.name, message: message))
                 }
             }
@@ -201,8 +202,31 @@ enum ResourceLinkExtractor {
         // URLComponents decodes individual query values exactly once, including dn.
         return URLComponents(string: link)?.queryItems?.first(where: { $0.name.lowercased() == "dn" })?.value ?? ""
     }
-    private static func isHTMLResponse(_ text: String) -> Bool {
+    static func isHTMLResponse(_ text: String) -> Bool {
         matches(#"^\s*(?:<!doctype\s+html|<html\b|<head\b|<body\b)|人机验证|人機驗證"#, text.replacingOccurrences(of: "\u{FEFF}", with: ""))
+    }
+
+    /// Only an explicit Discuz download endpoint may bypass filename extensions.
+    static func isDiscuzAttachment(_ url: URL) -> Bool {
+        guard url.lastPathComponent.lowercased() == "forum.php" else { return false }
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: true)?.queryItems ?? []
+        return query.contains { $0.name.lowercased() == "mod" && $0.value?.lowercased() == "attachment" }
+            && query.contains { ["aid", "id"].contains($0.name.lowercased()) && !($0.value ?? "").isEmpty }
+    }
+
+    static func attachmentText(_ data: Data, mimeType: String? = nil) throws -> String {
+        guard data.count <= maximumTextBytes else { throw ExtractionError.attachment("附件超过 4 MB 内存读取上限。") }
+        let mime = mimeType?.lowercased() ?? ""
+        guard !mime.contains("html") else { throw ExtractionError.attachment("附件下载返回登录、验证或权限 HTML。") }
+        guard !data.starts(with: [0x50, 0x4B]), !data.starts(with: [0x52, 0x61, 0x72, 0x21]),
+              !data.starts(with: [0x37, 0x7A]), !data.starts(with: [0x89, 0x50, 0x4E, 0x47]),
+              !data.starts(with: [0xFF, 0xD8]), !data.starts(with: Array("%PDF".utf8)),
+              let text = decode(data),
+              !text.unicodeScalars.contains(where: { $0.value < 32 && ![9, 10, 13].contains($0.value) }) else {
+            throw ExtractionError.attachment("附件不是可识别的 UTF-8、UTF-16 或 GB18030 文本。")
+        }
+        guard !isHTMLResponse(text) else { throw ExtractionError.attachment("附件下载返回登录、验证或权限 HTML。") }
+        return text
     }
 
     private static func isBinaryArchive(_ name: String) -> Bool {
@@ -309,13 +333,7 @@ enum ResourceLinkExtractor {
             data.append(byte)
         }
         try Task.checkCancellation()
-        let gb18030 = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
-        let text: String?
-        if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]) { text = String(data: data, encoding: .utf16) }
-        else { text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: gb18030) }
-        guard let text else { throw ExtractionError.attachment("无法识别 TXT 编码。") }
-        guard !isHTMLResponse(text) else { throw ExtractionError.attachment("返回登录、验证或权限 HTML，而非 TXT。") }
-        return text
+        return try attachmentText(data, mimeType: response.mimeType)
         #else
         throw ExtractionError.attachment("当前平台没有 WebKit，请注入离线 TXT loader。")
         #endif

@@ -150,7 +150,7 @@ struct ThreadDetailView: View {
                     .padding(16)
                     .background(ForumChrome.page)
                 }
-                Text(d.title.isEmpty ? title : d.title)
+                SelectableDetailText(text: NSAttributedString(string: d.title.isEmpty ? title : d.title, attributes: [.font: UIFont.preferredFont(forTextStyle: .headline)]), onLink: openBodyLink)
                     .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -239,7 +239,7 @@ struct ThreadDetailView: View {
                         ForEach(Array(bodyBlocks(post.htmlBody).enumerated()), id: \.offset) { _, fragment in
                             switch fragment {
                             case .richText(let runs):
-                                Text(attributedBody(runs))
+                                SelectableDetailText(text: attributedBody(runs), alignment: runs.first?.alignment == "center" ? .center : runs.first?.alignment == "right" ? .right : .left, onLink: openBodyLink)
                                     .multilineTextAlignment(runs.first?.alignment == "center" ? .center : runs.first?.alignment == "right" ? .trailing : .leading)
                                     .frame(maxWidth: .infinity, alignment: runs.first?.alignment == "center" ? .center : runs.first?.alignment == "right" ? .trailing : .leading)
                                     .font(.body)
@@ -248,7 +248,7 @@ struct ThreadDetailView: View {
                                     .fixedSize(horizontal: false, vertical: true)
                                     .textSelection(.enabled)
                             case .text(let text):
-                                Text(text)
+                                SelectableDetailText(text: NSAttributedString(string: text), onLink: openBodyLink)
                                     .font(.body)
                                     .foregroundStyle(ForumChrome.text)
                                     .lineSpacing(6)
@@ -411,14 +411,15 @@ struct ThreadDetailView: View {
         if case .resource = route { SiteLinks.open(url) } else if linkRoute == nil { tappedLinkURL = url; linkRoute = route }
     }
 
-    private func attributedBody(_ runs: [HTML.Inline]) -> AttributedString {
-        var result = AttributedString()
+    private func attributedBody(_ runs: [HTML.Inline]) -> NSAttributedString {
+        let result = NSMutableAttributedString()
         for run in runs {
-            var text = AttributedString(run.text)
-            if run.bold { text.font = .body.bold() }
-            if let color = run.color { text.foregroundColor = bodyColor(color) }
-            if let url = run.url, SiteRoute.resolve(url) != nil { text.link = url }
-            result.append(text)
+            var attributes: [NSAttributedString.Key: Any] = [
+                .font: run.bold ? UIFont(descriptor: UIFont.preferredFont(forTextStyle: .body).fontDescriptor.withSymbolicTraits(.traitBold) ?? UIFont.preferredFont(forTextStyle: .body).fontDescriptor, size: 0) : UIFont.preferredFont(forTextStyle: .body),
+                .foregroundColor: run.color.map { UIColor(bodyColor($0)) } ?? UIColor.label
+            ]
+            if let url = run.url, SiteRoute.resolve(url) != nil { attributes[.link] = url }
+            result.append(NSAttributedString(string: run.text, attributes: attributes))
         }
         return result
     }
@@ -650,5 +651,53 @@ private struct ImagePage: View {
         .background(Color.black)
         .navigationTitle("图片")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Native selection handles, non-editable and non-scrolling: the parent owns scrolling.
+private struct SelectableDetailText: UIViewRepresentable {
+    let text: NSAttributedString
+    var alignment: NSTextAlignment = .left
+    var onLink: (URL) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onLink: onLink) }
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false
+        view.isSelectable = true
+        view.isScrollEnabled = false
+        view.backgroundColor = .clear
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        view.delegate = context.coordinator
+        view.adjustsFontForContentSizeCategory = true
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return view
+    }
+    func updateUIView(_ view: UITextView, context: Context) {
+        context.coordinator.onLink = onLink
+        let styled = NSMutableAttributedString(attributedString: text)
+        let range = NSRange(location: 0, length: styled.length)
+        styled.enumerateAttributes(in: range) { attributes, part, _ in
+            if attributes[.font] == nil { styled.addAttribute(.font, value: UIFont.preferredFont(forTextStyle: .body), range: part) }
+            if attributes[.foregroundColor] == nil { styled.addAttribute(.foregroundColor, value: UIColor.label, range: part) }
+        }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = alignment
+        paragraph.lineSpacing = 6
+        styled.addAttribute(.paragraphStyle, value: paragraph, range: range)
+        if view.attributedText != styled { view.attributedText = styled }
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width > 0 else { return nil }
+        return uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+    }
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var onLink: (URL) -> Void
+        init(onLink: @escaping (URL) -> Void) { self.onLink = onLink }
+        func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
+            if interaction == .invokeDefaultAction { onLink(URL) }
+            return false
+        }
     }
 }
