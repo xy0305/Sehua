@@ -66,16 +66,22 @@ struct ThreadDetailView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(ForumChrome.secondary)
             Spacer()
-            Button {
-                library.toggleFavorite(readingItem)
+            NavigationLink {
+                LoginWebView(url: session.url("home.php?mod=spacecp&ac=favorite&type=thread&id=\(tid)&mobile=2"), title: "站点收藏 · 确认表单")
             } label: {
-                Label(library.isFavorite(tid) ? "已收藏 · 本机" : "收藏到本机",
-                      systemImage: library.isFavorite(tid) ? "star.fill" : "star")
+                Label("站点收藏", systemImage: "star")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ForumChrome.blue)
                     .frame(minHeight: 44)
             }
             .buttonStyle(.plain)
+            NavigationLink {
+                LoginWebView(url: session.url("forum.php?mod=viewthread&tid=\(tid)&mobile=2"), title: "购买 / 查看原帖")
+            } label: {
+                Label("购买 / 原帖", systemImage: "cart")
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(minHeight: 44)
+            }
         }
         .padding(.horizontal, 16)
         .background(ForumChrome.bar)

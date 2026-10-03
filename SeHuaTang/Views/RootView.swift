@@ -15,8 +15,8 @@ struct RootView: View {
             }
             .tabItem { Label("首页", systemImage: "house.fill") }
 
-            NavigationStack { ReadingLibraryView(isHistory: false) }
-                .tabItem { Label("收藏", systemImage: "star") }
+            NavigationStack { SiteFollowingView() }
+                .tabItem { Label("关注", systemImage: "person.2") }
 
             NavigationStack { ReadingLibraryView(isHistory: true) }
                 .tabItem { Label("历史", systemImage: "clock.arrow.circlepath") }

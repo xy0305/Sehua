@@ -9,6 +9,17 @@ struct MineView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 accountCard
+                section("我的积分", symbol: "creditcard") {
+                    NavigationLink {
+                        LoginWebView(url: session.url("home.php?mod=spacecp&ac=credit&showcredit=1&mobile=2"), title: "我的积分 · 余额与明细")
+                    } label: {
+                        webRow("查看站点实际积分 / 明细")
+                    }
+                    .buttonStyle(.plain)
+                    Text("余额及积分类型以站点登录页为准；未登录时请完成验证后重试。")
+                        .font(.footnote)
+                        .foregroundStyle(ForumChrome.secondary)
+                }
                 section("每日签到", symbol: "calendar.badge.checkmark") {
                     NavigationLink {
                         LoginWebView(url: URL(string: "https://sehuatang.org/plugin.php?id=dd_sign&mobile=2")!, title: "每日签到")
