@@ -105,12 +105,19 @@ enum DiscuzParser {
         var threads: [ThreadItem] = []
         var seenTID = Set<Int>()
 
-        // Discuz metadata, never subject text or typeid (which is a category).
+        // Collect excluded IDs from the FULL document before any row/card extraction.
+        // Live n5 forumdisplay (fid 95 and 103) uses n5_zdtys > ul > li > i + a
+        // for its fixed top notices; those li have no displayorder/pin metadata.
+        // This scope is forum lists only: portal notices and ordinary date li remain intact.
         let stickyBlocks = HTML.elements(in: html) { tag in
-            let id = HTML.attribute("id", in: tag) ?? ""
-            return id.hasPrefix("stickthread_") || HTML.hasClass("stickthread", in: tag)
+            isStickyContainer(tag) || HTML.hasClass("n5_zdtys", in: tag)
         }
-        let stickyIDs = Set(stickyBlocks.flatMap { block in
+        let markedRows = HTML.elements(in: html) { tag in
+            HTML.hasClass("n5_htmk", in: tag)
+                || (HTML.attribute("id", in: tag) ?? "").hasPrefix("normalthread_")
+                || HTML.firstMatch(#"^<(li)\b"#, in: tag) != nil
+        }.filter { isStickyThread($0) }
+        let stickyIDs = Set((stickyBlocks + markedRows).flatMap { block in
             HTML.allMatches(#"(?:tid=|thread-)(\d+)"#, in: HTML.unescape(block)).compactMap(Int.init)
         })
         // Compact mobile notice rows are not sticky merely because they use <li><i>date</i>.
@@ -188,14 +195,19 @@ enum DiscuzParser {
                               totalPages: pagination.total)
     }
 
+    private static func isStickyContainer(_ tag: String) -> Bool {
+        let id = (HTML.attribute("id", in: tag) ?? "").lowercased()
+        if id.hasPrefix("stickthread_") || HTML.hasClass("stickthread", in: tag) { return true }
+        for key in ["displayorder", "data-displayorder", "data-sticky"] {
+            if let value = HTML.attribute(key, in: tag).flatMap(Int.init), value > 0 { return true }
+        }
+        return false
+    }
+
     private static func isStickyThread(_ block: String) -> Bool {
         // Inspect attributes/icons only. A normal title containing “置顶” is not metadata.
         for tag in HTML.allMatches(#"(<[A-Za-z][^>]*>)"#, in: block) {
-            let id = HTML.attribute("id", in: tag) ?? ""
-            if id.hasPrefix("stickthread_") || HTML.hasClass("stickthread", in: tag) { return true }
-            for key in ["displayorder", "data-displayorder", "data-sticky"] {
-                if let value = HTML.attribute(key, in: tag).flatMap(Int.init), value > 0 { return true }
-            }
+            if isStickyContainer(tag) { return true }
             if let src = HTML.attribute("src", in: tag),
                HTML.firstMatch(#"(?:^|/)pin_[123]\.(?:gif|png)(?:\?|$)"#, in: src, group: 0) != nil { return true }
             if HTML.firstMatch(#"^<img\b"#, in: tag, group: 0) != nil,
@@ -532,6 +544,28 @@ private enum ParserRegressionTests {
         precondition(emptyPage.threads.isEmpty && emptyPage.hasNext && emptyPage.totalPages == nil)
         let endPage = DiscuzParser.parseThreadList(emptySticky + numericPages, fid: 103, page: 3)
         precondition(endPage.threads.isEmpty && !endPage.hasNext && endPage.totalPages == 3)
+        // Structural fixture reconstructed from live DOM on 2026-10-03, not authenticated HTML.
+        // n5_zdtys contains an orderby sibling and bare dated li; no sticky attrs/icons.
+        let n5TopNotices = #"""
+        <div class='bg'><div class='n5_zdtys'><div class='orderby'><a href='forum.php?fid=95'>排序</a></div>
+        <ul><li><i>2026-08-01</i><a href='forum.php?mod=viewthread&amp;tid=201'>公告甲</a></li>
+        <li><i>2026-03-11</i><a href='forum.php?mod=viewthread&amp;tid=202'>公告乙</a></li></ul></div>
+        <div class='n5_htmk'><h1><a href='forum.php?mod=viewthread&amp;tid=201'>重复移动卡片</a></h1></div>
+        <tbody id='normalthread_202'><tr><th><a class='s xst' href='forum.php?tid=202'>重复PC行</a></th></tr></tbody>
+        <li><i>2026-10-03</i><a href='forum.php?tid=203'>普通日期公告</a></li>
+        <div data-displayorder='2'><section><div class='n5_htmk'><h1><a href='forum.php?mod=viewthread&amp;tid=204'>父级置顶</a></h1></div></section></div>
+        <li><i>2026-10-03</i><a href='forum.php?tid=205'>先出现的fallback</a></li>
+        <div class='n5_htmk'><img src='pin_1.gif'><h1><a href='forum.php?mod=viewthread&amp;tid=205'>后出现的置顶卡片</a></h1></div>
+        <div class='n5_htmk' data-displayorder='0'><h1><a href='forum.php?mod=viewthread&amp;tid=206'>永久访问 置顶 公告</a></h1><span class='n5_hthfcs'>0</span></div>
+        </div>
+        """#
+        for testFID in [95, 103, 97] {
+            let result = DiscuzParser.parseThreadList(n5TopNotices + numericPages, fid: testFID, page: 1)
+            precondition(Set(result.threads.map(\.id)) == Set([203, 206]))
+        }
+        let onlyNotices = #"<div class='n5_zdtys'><ul><li><i>10-01</i><a href='forum.php?tid=207'>公告</a></li></ul></div>"#
+        let noticesPage = DiscuzParser.parseThreadList(onlyNotices + unknownPages, fid: 103, page: 7)
+        precondition(noticesPage.threads.isEmpty && noticesPage.hasNext && noticesPage.totalPages == nil)
         let compatibility = ThreadListPage(threads: [], types: [], page: 1, hasNext: false, boardName: "")
         precondition(compatibility.totalPages == nil)
         let list = DiscuzParser.parseThreadList(listHTML, fid: 103, page: 1)
