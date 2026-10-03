@@ -9,6 +9,17 @@ struct MineView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 accountCard
+                section("每日签到", symbol: "calendar.badge.checkmark") {
+                    NavigationLink {
+                        LoginWebView(url: URL(string: "https://sehuatang.org/plugin.php?id=dd_sign&mobile=2")!, title: "每日签到")
+                    } label: {
+                        webRow("打开站内签到页")
+                    }
+                    .buttonStyle(.plain)
+                    Text("复用站点登录会话；请在网页中手动签到。")
+                        .font(.footnote)
+                        .foregroundStyle(ForumChrome.secondary)
+                }
                 section("外观", symbol: "paintpalette") {
                     VStack(alignment: .leading, spacing: 12) {
                         Picker("主题", selection: $appearanceMode) {

@@ -120,7 +120,7 @@ struct Pan115TaskDetailView: View {
                     ForEach(listing.archives) { archive in
                         VStack(alignment: .leading, spacing: 6) {
                             Label(archive.name, systemImage: "doc.zipper")
-                            Text("自动云解压到本资源目录；保留原包，不绕过密码。状态：" + (resource.extractions?[archive.id]?.rawValue ?? "等待解析"))
+                            Text("自动云解压到本资源目录；确认释放完成且新输出验证后原包移入回收站，不绕过密码。状态：" + (resource.extractions?[archive.id]?.rawValue ?? "等待解析"))
                                 .font(.caption).foregroundStyle(.orange)
                             Link("在115核对密码或未知结果", destination: URL(string: "https://115.com/")!)
                         }

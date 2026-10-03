@@ -78,6 +78,7 @@ public struct SHT115Resource: Codable, Identifiable {
     public var directoryWritePending: Bool
     public var tasks: [SHT115Task]
     public var extractions: [String: SHT115ExtractionState]? = nil
+    public var extractionJobs: [String: SHT115ExtractionJob]? = nil
 }
 public struct SHT115Video: Codable, Identifiable {
     public let id: String
@@ -115,3 +116,19 @@ public struct SHT115PlaybackSource {
     /// Contains credentials; do not print or persist. Use same headers in AVURLAsset.
     public let headers: [String: String]
 }
+
+// Optional persisted metadata keeps old records readable. No metadata => no cleanup.
+public struct SHT115ExtractionOutput: Codable {
+    public let name: String
+    public let directory: Bool
+    public let size: Int64
+}
+public struct SHT115ExtractionJob: Codable {
+    public let extractID: String
+    public let source: SHT115Archive
+    public let targetCID: String
+    public let outputs: [SHT115ExtractionOutput]
+    public let priorIDs: [String]
+    public var cleanup: SHT115CleanupState
+}
+public enum SHT115CleanupState: String, Codable { case waiting, submitting, recycled, rejected, unknown }

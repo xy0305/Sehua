@@ -18,6 +18,10 @@ public actor SHT115Service {
         for r in records.indices {
             for t in records[r].tasks.indices where records[r].tasks[t].state == .submitting { records[r].tasks[t].state = .unknown }
             for (key, value) in records[r].extractions ?? [:] where value == .submitting { records[r].extractions?[key] = .unknown }
+            for (key, value) in records[r].extractionJobs ?? [:] where value.cleanup == .submitting {
+                var job = value
+                job.cleanup = .unknown; records[r].extractionJobs?[key] = job
+            }
         }
     }
     public func resources() -> [SHT115Resource] { records }
@@ -312,6 +316,9 @@ public actor SHT115Service {
         let i = try index(resourceID, settings)
         guard confirmed else { return SHT115ExtractionResult(state: .awaitingConfirmation, message: "尚未授权云解压") }
         guard let target = records[i].directoryCID else { throw SHT115Error.invalidInput }
+        if records[i].extractions?[archive.id] == .accepted {
+            return try await cleanupExtraction(index: i, archive: archive, settings: settings)
+        }
         let listing = try await scan(resourceID: resourceID, settings: settings, maxDepth: 3)
         guard !listing.truncated, let current = listing.archives.first(where: { $0.id == archive.id && $0.directoryCID == archive.directoryCID }),
               let pick = current.pickCode, !pick.isEmpty, pick.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) }) else { throw SHT115Error.unsafeListing }
@@ -350,21 +357,104 @@ public actor SHT115Service {
         if let total = Int(SHT115HTTP.string(contents["count"])), total != entries.count { throw SHT115Error.unsafeListing }
         var fields = [("pick_code", pick), ("to_pid", target), ("paths", "文件")]
         var names = Set<String>()
+        var outputs: [SHT115ExtractionOutput] = []
         for entry in entries {
             let name = SHT115HTTP.string(entry["file_name"] ?? entry["name"] ?? entry["n"])
             guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\\"), !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }), names.insert(name).inserted else { throw SHT115Error.unsafeListing }
             let directory = SHT115HTTP.string(entry["size"]) == "0" && SHT115HTTP.string(entry["ico"]).isEmpty
+            outputs.append(SHT115ExtractionOutput(name: name, directory: directory, size: Int64(SHT115HTTP.string(entry["size"])) ?? -1))
             fields.append((directory ? "extract_dir[]" : "extract_file[]", name))
         }
         // Revalidate destination immediately before the only extraction write.
         try await http.verify(cid: target, parent: records[i].parentCID, settings: settings)
+        let before = try await http.allEntries(cid: target, settings: settings)
         try persist(.submitting)
         do {
             let result = try await http.json("https://webapi.115.com/files/add_extract_file", settings: settings, fields: fields)
-            if SHT115HTTP.success(result) { try persist(.accepted) }
+            if SHT115HTTP.success(result) {
+                let data = result["data"] as? [String: Any] ?? [:]
+                let extractID = SHT115HTTP.string(data["extract_id"])
+                if SHT115Settings.isCID(extractID), extractID != "0" {
+                    if records[i].extractionJobs == nil { records[i].extractionJobs = [:] }
+                    records[i].extractionJobs?[key] = SHT115ExtractionJob(extractID: extractID, source: current, targetCID: target, outputs: outputs, priorIDs: before.map(\.id), cleanup: .waiting)
+                }
+                try persist(.accepted)
+            }
             else if ["0", "false"].contains(SHT115HTTP.string(result["state"])) { try persist(.rejected) }
             else { try persist(.unknown) }
         } catch { try persist(.unknown); throw SHT115Error.uncertainWrite }
-        return SHT115ExtractionResult(state: records[i].extractions?[key] ?? .unknown, message: "已记录云解压结果；接受不代表完成，保留原包，等待目录出现视频")
+        return SHT115ExtractionResult(state: records[i].extractions?[key] ?? .unknown, message: "已记录云解压结果；接受不代表完成；确认释放完成且新输出存在后，原包移入回收站")
+    }
+
+    // Only accepted jobs with their own persisted manifest may reach a single-file recycle write.
+    private func cleanupExtraction(index i: Int, archive: SHT115Archive, settings: SHT115Settings) async throws -> SHT115ExtractionResult {
+        func result(_ message: String) -> SHT115ExtractionResult { SHT115ExtractionResult(state: .accepted, message: message) }
+        guard var job = records[i].extractionJobs?[archive.id], job.source.id == archive.id,
+              job.source.directoryCID == archive.directoryCID, job.source.name == archive.name,
+              job.source.pickCode == archive.pickCode, job.targetCID == records[i].directoryCID else {
+            return result("已接受；缺少可验证任务记录，保留原包")
+        }
+        guard job.cleanup == .waiting else { return result("原包清理：" + job.cleanup.rawValue + "；不自动重发删除") }
+        let response = try await http.json("https://webapi.115.com/files/add_extract_file?" + SHT115HTTP.form([("extract_id", job.extractID)]), settings: settings)
+        let data = response["data"] as? [String: Any] ?? [:]
+        // Missing/error/unknown percent is not completion. Never use push_extract (parse) progress here.
+        guard SHT115HTTP.success(response), SHT115HTTP.string(data["percent"]) == "100" else {
+            return result("解压释放未明确完成，保留原包")
+        }
+        try await http.verify(cid: job.targetCID, parent: records[i].parentCID, settings: settings)
+        let targetEntries = try await http.allEntries(cid: job.targetCID, settings: settings)
+        guard !job.outputs.isEmpty else { return result("输出清单为空，保留原包") }
+        for output in job.outputs {
+            let matches = targetEntries.filter { $0.name == output.name && $0.isDirectory == output.directory }
+            guard matches.count == 1, let entry = matches.first, entry.id != job.source.id,
+                  !job.priorIDs.contains(entry.id) else { return result("新输出无法唯一验证，保留原包") }
+            if output.directory {
+                guard try await verifiedNonemptyOutput(cid: entry.id, parent: job.targetCID, settings: settings, depth: 0) else {
+                    return result("输出目录尚未验证到文件，保留原包")
+                }
+            } else {
+                guard output.size > 0, entry.size == output.size else { return result("输出大小无法验证，保留原包") }
+            }
+        }
+        // Refresh exact source parent and identity immediately before deletion; no wildcard, CID or batch.
+        let listing = try await scan(resourceID: records[i].id, settings: settings, maxDepth: 3)
+        guard !listing.truncated, listing.archives.contains(where: {
+            $0.id == job.source.id && $0.directoryCID == job.source.directoryCID && $0.name == job.source.name && $0.pickCode == job.source.pickCode
+        }), SHT115Settings.isCID(job.source.id), job.source.id != "0",
+             job.source.id != job.targetCID, job.source.id != job.source.directoryCID else {
+            return result("原包身份或路径已变化，保留原包")
+        }
+        job.cleanup = .submitting
+        records[i].extractionJobs?[archive.id] = job
+        try save() // durable intent BEFORE POST; on crash/timeout this can never be replayed
+        do {
+            let deleted = try await http.json("https://webapi.115.com/rb/delete", settings: settings,
+                fields: [("fid[0]", job.source.id), ("pid", job.source.directoryCID)])
+            job.cleanup = SHT115HTTP.success(deleted) ? .recycled :
+                (["0", "false"].contains(SHT115HTTP.string(deleted["state"]).lowercased()) ? .rejected : .unknown)
+        } catch {
+            job.cleanup = .unknown
+        }
+        records[i].extractionJobs?[archive.id] = job
+        try save()
+        return result(job.cleanup == .recycled ? "解压完成且新输出已验证；本任务原压缩包已移入115回收站" :
+            "原包清理：" + job.cleanup.rawValue + "；未确认删除，不自动重发，请到115核对")
+    }
+    private func verifiedNonemptyOutput(cid: String, parent: String, settings: SHT115Settings, depth: Int) async throws -> Bool {
+        guard depth < 5 else { return false }
+        try await http.verify(cid: cid, parent: parent, settings: settings)
+        let entries = try await http.allEntries(cid: cid, settings: settings)
+        guard !entries.isEmpty, entries.count < 1000 else { return false }
+        var foundFile = false
+        for entry in entries {
+            if entry.isDirectory {
+                guard try await verifiedNonemptyOutput(cid: entry.id, parent: cid, settings: settings, depth: depth + 1) else { return false }
+                foundFile = true
+            } else {
+                guard entry.size > 0 else { return false }
+                foundFile = true
+            }
+        }
+        return foundFile
     }
 }

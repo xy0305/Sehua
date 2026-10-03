@@ -76,7 +76,7 @@ struct Pan115ResourceView: View {
                         .font(.footnote).foregroundStyle(.orange)
                     Link("在115核对", destination: URL(string: "https://115.com/")!)
                 }
-                Text("详情页自动读取视频并云解压到当前资源目录；保留原包，不绕密码，未知写入不重发。前台有界刷新，关闭应用停止。")
+                Text("详情页自动读取视频并云解压到当前资源目录；确认释放完成且新输出验证后原包移入回收站，不绕密码，未知写入不重发。前台有界刷新，关闭应用停止。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
@@ -103,7 +103,7 @@ struct Pan115ResourceView: View {
             Button("确认创建目录并提交") { Task { await submit() } }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("请先核对上方全部 URL 和来源警告。这会向115发起真实写入操作；详情自动云解压到当前资源目录，不删除原包。")
+            Text("请先核对上方全部 URL 和来源警告。这会向115发起真实写入操作；详情自动云解压到当前资源目录，仅解压明确完成且新输出验证后将本任务原包移入回收站。")
         }
     }
 

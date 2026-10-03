@@ -68,6 +68,11 @@ jobs:
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/SequenceFixtures.swift -o /tmp/sequence-fixtures
           /tmp/sequence-fixtures
 
+      - name: Guarded archive recycle mock fixtures
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/CleanupFixtures.swift -o /tmp/cleanup-fixtures
+          /tmp/cleanup-fixtures
+
       - name: Build unsigned (iphoneos)
         run: |
           set -euo pipefail
