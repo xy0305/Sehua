@@ -3,11 +3,14 @@ import SwiftUI
 /// Standalone native board directory; the same groups also appear below the portal.
 struct ForumHomeView: View {
     @EnvironmentObject var store: AppStore
+    @State private var requestedInitialLoad = false
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                // Directory cards contain variable-height expanded groups;
+                // eager layout avoids lazy estimates shifting the scroll offset.
+                VStack(alignment: .leading, spacing: 12) {
                     ForumLoadStatus(state: store.forumState, title: "版块") {
                         Task { await store.loadForums() }
                     }
@@ -20,7 +23,11 @@ struct ForumHomeView: View {
         .background(ForumChrome.page)
         .tint(ForumChrome.accent)
         .forumNavigation(title: "全部版块")
-        .task { await store.loadForums() }
+        .task {
+            guard !requestedInitialLoad else { return }
+            requestedInitialLoad = true
+            if store.categories == BuiltinForums.categories { await store.loadForums() }
+        }
     }
 }
 

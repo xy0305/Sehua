@@ -56,6 +56,7 @@ struct ThreadListView: View {
                             .id("continuation-\(store.threadPage)")
                             .onAppear { Task { await store.loadMore() } }
                     }
+                    Group {
                     if store.threadState == .loading {
                         ProgressView().padding()
                     } else if let error = store.threadState.errorMessage, !store.threads.isEmpty {
@@ -70,8 +71,13 @@ struct ThreadListView: View {
                             .foregroundStyle(ForumChrome.secondary)
                             .padding(16)
                     }
+                    }
+                    .frame(minHeight: 64)
                 }
                 .scrollTargetLayout()
+                // Appending and asynchronous preview completion are not user
+                // navigation. Do not animate layout or write a new scroll ID.
+                .transaction { $0.animation = nil }
             }
             .scrollPosition(id: $visibleThreadID, anchor: .top)
             .background(ForumChrome.page)
@@ -270,7 +276,7 @@ struct ThreadCard: View {
                     let width = max(0, (geometry.size.width - CGFloat(previews.count - 1) * 8) / CGFloat(previews.count))
                     HStack(spacing: 8) {
                         ForEach(previews, id: \.self) { url in
-                            SiteImage(url: url, contentMode: .fit) { ForumChrome.page }
+                            SiteImage(url: url, contentMode: .fit, preservesIntrinsicAspectRatio: false) { ForumChrome.page }
                                 .frame(width: width, height: 132)
                                 .background(ForumChrome.page)
                                 .clipShape(RoundedRectangle(cornerRadius: 6))

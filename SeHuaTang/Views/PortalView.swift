@@ -5,6 +5,7 @@ struct PortalView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject var store: AppStore
     @State private var showsAllDiscussions = false
+    @State private var requestedInitialLoad = false
 
     // The portal supplies its own ordering; don't mutate the shared thread-list store.
     private var discussions: [PortalItem] {
@@ -22,7 +23,10 @@ struct PortalView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
+                // These are a handful of composite cards, not individual rows.
+                // Eager layout keeps their real heights instead of LazyVStack's
+                // estimates changing when the tall directory enters the viewport.
+                VStack(alignment: .leading, spacing: 16) {
                     ForumLoadStatus(state: store.portalState, title: "讨论") {
                         Task { await store.loadPortal() }
                     }
@@ -44,7 +48,13 @@ struct PortalView: View {
         .background(ForumChrome.page)
         .tint(ForumChrome.accent)
         .forumNavigation(title: "色花堂")
-        .task { await reload() }
+        .task {
+            guard !requestedInitialLoad else { return }
+            requestedInitialLoad = true
+            // Returning from a detail must not replace the page being read.
+            if store.portal.sections.isEmpty { await store.loadPortal() }
+            if store.categories == BuiltinForums.categories { await store.loadForums() }
+        }
     }
 
     private func reload() async {
@@ -145,7 +155,7 @@ private struct PortalRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            SiteImage(url: item.avatarURL) {
+            SiteImage(url: item.avatarURL, preservesIntrinsicAspectRatio: false) {
                 ZStack {
                     ForumChrome.side
                     Image(systemName: "person.fill")

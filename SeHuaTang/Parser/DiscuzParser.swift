@@ -317,20 +317,21 @@ enum DiscuzParser {
             let dateText = HTML.stripTags(HTML.elements(in: header, className: "n5_mktbsj", inner: true).first
                 ?? HTML.elements(in: header, className: "n5_sjydhf", inner: true).first.flatMap { HTML.elements(in: $0, tag: "dt", inner: true).first }
                 ?? HTML.elements(in: header, idPrefix: "authorposton", inner: true).first ?? "")
-            let bodyFallback = messageBodies(in: block).joined(separator: "\n")
+            let bodyFallback = messageBodies(in: block).map(cleanRatingComponents).joined(separator: "\n")
             guard !bodyFallback.isEmpty, seenPosts.insert(pid).inserted else { continue }
             let plain = HTML.plainText(bodyFallback)
             if SiteConfig.isAdText(plain) && plain.count < 80 { continue }
             posts.append(ThreadPost(id: pid, author: author, authorID: authorID,
                 avatarURL: avatarURL(in: header, base: base), dateText: dateText,
-                htmlBody: bodyFallback, plainText: HTML.plainText(bodyFallback), images: HTML.imageURLs(in: bodyFallback, base: base)))
+                htmlBody: bodyFallback, plainText: HTML.plainText(bodyFallback), images: HTML.imageURLs(in: bodyFallback, base: base), ratings: parseRatings(in: block, base: base)))
         }
         // Some mobile skins omit post_<pid>; still extract only the actual message,
         // never turn navigation, advertisements and footer text into a synthetic post.
         if posts.isEmpty {
-            for (index, body) in messageBodies(in: html).enumerated() {
+            for (index, rawBody) in messageBodies(in: html).enumerated() {
+                let body = cleanRatingComponents(rawBody)
                 posts.append(ThreadPost(id: "unwrapped-\(HTML.queryInt("page", in: base.absoluteString) ?? HTML.firstMatch(#"thread-\d+-(\d+)-\d+\.html"#, in: base.absoluteString).flatMap(Int.init) ?? 1)-\(index)", author: "", authorID: nil, avatarURL: nil,
-                    dateText: "", htmlBody: body, plainText: HTML.plainText(body), images: HTML.imageURLs(in: body, base: base)))
+                    dateText: "", htmlBody: body, plainText: HTML.plainText(body), images: HTML.imageURLs(in: body, base: base), ratings: parseRatings(in: rawBody, base: base)))
             }
         }
         var seenImages = Set<String>()
@@ -362,6 +363,64 @@ enum DiscuzParser {
         let replyCount = HTML.firstMatch(#"网友回复（(\d+)条）"#, in: html) ?? ""
 
         return ThreadDetail(tid: tid, title: title, boardName: boardName, fid: fid, replyCount: replyCount, favoriteURL: favorite.flatMap { HTML.absURL($0, base: base) }, replyURL: reply.flatMap { HTML.absURL($0, base: base) }, posts: posts, magnets: magnets, attachments: attachments, images: images)
+    }
+
+    // Select component identity, not generic tables/images or the word 评分 in body text.
+    static func isRatingComponent(_ tag: String) -> Bool {
+        let id = (HTML.attribute("id", in: tag) ?? "").lowercased()
+        return id.hasPrefix("ratelog") || id.hasPrefix("ratewater")
+            || ["ratl", "ratelog", "ratewater", "rating-list"].contains { HTML.hasClass($0, in: tag) }
+    }
+
+    static func ratingComponents(in html: String) -> [String] {
+        HTML.elements(in: html, matching: isRatingComponent)
+    }
+
+    static func cleanRatingComponents(_ html: String) -> String {
+        var result = html
+        for component in ratingComponents(in: html) {
+            result = result.replacingOccurrences(of: component, with: "")
+        }
+        return result
+    }
+
+    static func parseRatings(in html: String, base: URL) -> PostRatings? {
+        let components = ratingComponents(in: html)
+        guard !components.isEmpty else { return nil }
+        let scope = components.joined(separator: "\n")
+        var participants: String?
+        var totals: [String] = []
+        var entries: [RatingEntry] = []
+        for row in HTML.elements(in: scope, tag: "tr") {
+            let cells = HTML.elements(in: row) { tag in
+                HTML.firstMatch(#"^<(?:td|th)\b"#, in: tag, group: 0) != nil
+            }
+            let texts = cells.map(HTML.stripTags)
+            let rowText = HTML.stripTags(row)
+            if rowText.contains("参与人数") {
+                participants = HTML.firstMatch(#"参与人数\s*(\d+)"#, in: rowText)
+                totals = texts.compactMap { text in
+                    guard !text.contains("参与人数"), !text.contains("理由"), !text.contains("收起"), !text.contains("展开"),
+                          HTML.firstMatch(#"[+−-]\s*\d+"#, in: text, group: 0) != nil else { return nil }
+                    return text
+                }
+                continue
+            }
+            guard let first = cells.first else { continue }
+            let members = HTML.elements(in: first, tag: "a").filter { anchor in
+                HTML.firstMatch(#"(?:uid=|space-uid-)(\d+)"#, in: HTML.unescape(anchor)) != nil
+            }
+            let member = members.first { !HTML.stripTags($0).isEmpty } ?? members.first
+            // Never fabricate users from a malformed summary/header row.
+            guard let member else { continue }
+            let uid = HTML.firstMatch(#"(?:uid=|space-uid-)(\d+)"#, in: HTML.unescape(member)).flatMap(Int.init)
+            let name = HTML.stripTags(member)
+            let reason = cells.count >= 3 ? HTML.plainText(cells.last ?? "") : ""
+            let values = cells.count >= 3 ? Array(texts.dropFirst().dropLast()).filter { !$0.isEmpty } : []
+            entries.append(RatingEntry(id: entries.count, name: name, uid: uid,
+                avatarURL: HTML.imageURLs(in: first, base: base).first, values: values, reason: reason))
+        }
+        return PostRatings(participants: participants, totals: totals, entries: entries)
     }
 
     static func parseMemberSpace(_ html: String, uid: Int, base: URL) -> MemberSpace {

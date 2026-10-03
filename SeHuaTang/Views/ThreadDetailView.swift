@@ -258,6 +258,7 @@ struct ThreadDetailView: View {
                                 imageStrip(urls)
                             }
                         }
+                        if let ratings = post.ratings { ratingsCard(ratings) }
                     }
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -463,6 +464,56 @@ struct ThreadDetailView: View {
                 .padding(.bottom, 4)
             }
         }
+    }
+
+    private func ratingsCard(_ ratings: PostRatings) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("评分").font(.subheadline.bold())
+            // Wrap on small screens / large accessibility text sizes rather than clip.
+            Text(([ratings.participants.map { "参与人数 " + $0 }].compactMap { $0 } + ratings.totals).joined(separator: " · "))
+                .font(.caption).fixedSize(horizontal: false, vertical: true)
+            if !ratings.entries.isEmpty {
+                DisclosureGroup("评分明细（已加载 \(ratings.entries.count) 条）") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(ratings.entries) { entry in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 8) {
+                                    Button {
+                                        if let uid = entry.uid { profile = MemberRoute(uid: uid, name: entry.name) }
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            SiteImage(url: entry.avatarURL, preservesIntrinsicAspectRatio: false) {
+                                                Image(systemName: "person.crop.square").resizable().scaledToFit()
+                                            }
+                                            .frame(width: 28, height: 28).clipped()
+                                            Text(entry.name.isEmpty ? "用户" : entry.name).font(.caption)
+                                                .lineLimit(2)
+                                        }
+                                    }
+                                    .buttonStyle(.plain).disabled(entry.uid == nil)
+                                    Spacer(minLength: 4)
+                                    Text(entry.values.joined(separator: " · ")).font(.caption)
+                                }
+                                if !entry.reason.isEmpty {
+                                    Text(entry.reason).font(.caption).fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                    }.padding(.top, 6)
+                }.font(.caption)
+            } else {
+                Text("评分明细未能安全解析，请查看原帖评分。")
+                    .font(.caption).foregroundStyle(ForumChrome.secondary)
+            }
+            NavigationLink {
+                LoginWebView(url: postURL, title: "原帖评分")
+            } label: {
+                Label("查看原帖评分 / 完整记录", systemImage: "globe").font(.caption)
+            }
+        }
+        .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+        .background(ForumChrome.side)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     private func cleaned(_ s: String) -> String {

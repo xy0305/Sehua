@@ -58,6 +58,9 @@ struct SiteImage<Placeholder: View>: View {
     let url: URL?
     var referer: String = "https://www.sehuatang.org/"
     var contentMode: ContentMode = .fill
+    // Fixed-size thumbnails/avatars use their container's geometry; only
+    // document media should derive layout from decoded image dimensions.
+    var preservesIntrinsicAspectRatio = true
     @ViewBuilder var placeholder: () -> Placeholder
 
     @State private var image: UIImage?
@@ -65,8 +68,12 @@ struct SiteImage<Placeholder: View>: View {
     var body: some View {
         Group {
             if let image {
-                AnimatedSiteImage(image: image, mode: contentMode)
-                    .aspectRatio(image.size.width / max(image.size.height, 1), contentMode: contentMode)
+                if preservesIntrinsicAspectRatio {
+                    AnimatedSiteImage(image: image, mode: contentMode)
+                        .aspectRatio(image.size.width / max(image.size.height, 1), contentMode: contentMode)
+                } else {
+                    AnimatedSiteImage(image: image, mode: contentMode)
+                }
             } else {
                 placeholder()
             }

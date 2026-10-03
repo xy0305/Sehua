@@ -48,6 +48,7 @@ struct ThreadPost: Identifiable, Hashable {
     var htmlBody: String
     var plainText: String
     var images: [URL]
+    var ratings: PostRatings? = nil
 }
 
 struct ThreadDetail {
@@ -120,4 +121,19 @@ enum LoadState: Equatable {
     case idle
     case loading
     case failed(String)
+}
+
+// Optional fields reflect only values exposed by the server, never inferred totals.
+struct RatingEntry: Identifiable, Hashable {
+    var id: Int
+    var name: String
+    var uid: Int?
+    var avatarURL: URL?
+    var values: [String]
+    var reason: String
+}
+struct PostRatings: Hashable {
+    var participants: String?
+    var totals: [String]
+    var entries: [RatingEntry]
 }

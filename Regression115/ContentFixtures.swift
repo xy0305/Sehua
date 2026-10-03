@@ -58,6 +58,33 @@ struct ContentFixtures {
         precondition(page2.posts[0].id != unwrapped.posts[0].id)
         let seo = DiscuzParser.nextThreadPage(in: "<a href='thread-42-2-1.html'>下一页</a>", tid: 42, base: base, page: 1)
         precondition(seo?.lastPathComponent == "thread-42-2-1.html")
+        let ratingsHTML = #"""
+        <dl class="rate" id="ratelog_10"><dt>评分</dt><dd><div id="post_rate_10"></div><table class="ratl">
+        <tr><th>参与人数 <span>133</span></th><th>金钱 <b>+66</b></th><th>评分 <b>+236</b></th><th>收起 理由</th></tr>
+        <tr><td><a href="home.php?mod=space&amp;uid=7"><img src="/avatar7.jpg"></a><a href="home.php?mod=space&amp;uid=7">用户七</a></td><td></td><td>+ 2</td><td>很给力!<br>第二行</td></tr>
+        <tr><td><a href="space-uid-8.html">用户八</a></td><td>+1</td><td></td><td></td></tr>
+        </table></dd></dl>
+        """#
+        let ordinary = "<table><tr><td>真正正文表格 评分说明<img src='/body.jpg'></td></tr></table>"
+        let inside = parse("<div id='pid10'><div class='message'>前文\(ordinary)\(ratingsHTML)<p>尾文</p><div class='locked'>如果您要查看本帖隐藏内容请回复</div></div></div>")
+        let p = inside.posts[0]
+        precondition(p.images.map { $0.lastPathComponent } == ["body.jpg"])
+        precondition(inside.images == p.images)
+        precondition(p.htmlBody.contains(ordinary) && p.plainText.contains("真正正文表格") && p.plainText.contains("尾文"))
+        precondition(p.plainText.contains("隐藏内容请回复") && !p.plainText.contains("参与人数"))
+        precondition(p.ratings?.participants == "133" && p.ratings?.totals == ["金钱 +66", "评分 +236"])
+        precondition(p.ratings?.entries.count == 2 && p.ratings?.entries[0].uid == 7)
+        precondition(p.ratings?.entries[0].name == "用户七" && p.ratings?.entries[0].reason == "很给力!\n第二行")
+        precondition(p.ratings?.entries[0].avatarURL?.lastPathComponent == "avatar7.jpg")
+        let outside = parse("<div id='pid10'><div class='message'>\(ordinary)</div>\(ratingsHTML)</div>")
+        precondition(outside.posts[0].ratings == p.ratings)
+        precondition(outside.posts[0].images == p.images)
+        let missing = parse("<div id='pid1'><div class='message'>正文<dl id='ratelog_1'><table class='ratl'><tr><td>未知结构<img src='/avatar.jpg'></td></tr></table></dl></div></div>")
+        precondition(missing.posts[0].ratings != nil && missing.posts[0].ratings?.participants == nil)
+        precondition(missing.posts[0].ratings?.entries.isEmpty == true && missing.posts[0].images.isEmpty)
+        precondition(missing.posts[0].plainText == "正文")
+        precondition(parse("<div class='message'>\(ordinary)\(ratingsHTML)</div>").posts[0].ratings?.participants == "133")
+        print("PASS: rating boundary fixtures (live mobile DL/table shape, summary, users, multiline reason, avatars excluded, sibling/nested/unwrapped, missing fields, ordinary table, permission notice)")
         print("PASS: production content fixtures (mixed selectors/order, nested dedup, unwrapped posts, long tail, raw text, lazy ordered images, scoped pagination)")
     }
 }
