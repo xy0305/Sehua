@@ -38,11 +38,7 @@ struct ThreadListView: View {
                             .padding(.vertical, 32)
                     }
                     ForEach(store.threads) { item in
-                        NavigationLink {
-                            ThreadDetailView(tid: item.id, title: item.title, sourceFID: item.fid)
-                        } label: {
-                            ThreadCard(item: item)
-                        }
+                        ThreadCard(item: item)
                         .id(item.id)
                         .buttonStyle(ForumPressStyle())
                         .onAppear {
@@ -245,9 +241,17 @@ struct ThreadListView: View {
 
 struct ThreadCard: View {
     let item: ThreadItem
+    @State private var previewPage = 0
+    @State private var viewingImage = false
+
+    private var destination: some View {
+        ThreadDetailView(tid: item.id, title: item.title, sourceFID: item.fid)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            NavigationLink { destination } label: {
+            VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Text(item.author.isEmpty ? "匿名" : item.author)
                 if !item.dateText.isEmpty { Text("·"); Text(item.dateText) }
@@ -270,22 +274,48 @@ struct ThreadCard: View {
                     .lineLimit(3)
                     .multilineTextAlignment(.leading)
             }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            }
+            .buttonStyle(ForumPressStyle())
             if !item.previewURLs.isEmpty {
                 GeometryReader { geometry in
-                    let previews = Array(item.previewURLs.prefix(3))
-                    let width = max(0, (geometry.size.width - CGFloat(previews.count - 1) * 8) / CGFloat(previews.count))
-                    HStack(spacing: 8) {
-                        ForEach(previews, id: \.self) { url in
-                            SiteImage(url: url, contentMode: .fit, preservesIntrinsicAspectRatio: false) { ForumChrome.page }
-                                .frame(width: width, height: 132)
+                    let height = min(280, max(220, geometry.size.width * 0.72))
+                    TabView(selection: $previewPage) {
+                        ForEach(Array(item.previewURLs.enumerated()), id: \.offset) { index, url in
+                            Button { viewingImage = true } label: {
+                                SiteImage(url: url, contentMode: .fit, preservesIntrinsicAspectRatio: false, animationBudget: 4 * 1024 * 1024) {
+                                    ZStack { ForumChrome.page; ProgressView() }
+                                }
+                                .frame(width: geometry.size.width, height: height)
                                 .background(ForumChrome.page)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                                .accessibilityLabel("帖子图片预览")
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("查看第 \(index + 1) 张大图，可缩放")
+                            .tag(index)
                         }
                     }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                    .frame(height: height)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(alignment: .bottomTrailing) {
+                        Text("\(previewPage + 1)/\(item.previewURLs.count) · 点击放大")
+                            .font(.caption2.monospacedDigit())
+                            .padding(.horizontal, 8).padding(.vertical, 5)
+                            .foregroundStyle(.white).background(.black.opacity(0.65), in: Capsule())
+                            .padding(8).allowsHitTesting(false)
+                    }
                 }
-                .frame(height: 132)
+                // Height depends only on available card width, never decoded pixels.
+                .aspectRatio(1 / 0.72, contentMode: .fit)
+                .frame(minHeight: 220, maxHeight: 280)
+                .fullScreenCover(isPresented: $viewingImage) {
+                    ThreadPreviewViewer(url: item.previewURLs[min(previewPage, item.previewURLs.count - 1)])
+                }
             }
+            NavigationLink { destination } label: {
             HStack(spacing: 16) {
                 Label(item.replies.isEmpty ? "0" : item.replies, systemImage: "bubble")
                 if !item.likes.isEmpty { Label(item.likes, systemImage: "hand.thumbsup") }
@@ -293,6 +323,10 @@ struct ThreadCard: View {
             }
             .font(.caption)
             .foregroundStyle(ForumChrome.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            }
+            .buttonStyle(ForumPressStyle())
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -303,5 +337,81 @@ struct ThreadCard: View {
         .contentShape(RoundedRectangle(cornerRadius: 16))
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
+    }
+}
+
+/// Native full-screen preview. The image loader keeps the site's cookies,
+/// referer, bounded GIF decoder and cancellation behavior unchanged.
+private struct ThreadPreviewViewer: View {
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+            ZoomableThreadPreview(url: url).ignoresSafeArea()
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(14)
+                    .background(.black.opacity(0.65), in: Circle())
+            }
+            .padding(16)
+            .accessibilityLabel("关闭大图")
+        }
+    }
+}
+
+private struct ZoomableThreadPreview: UIViewRepresentable {
+    let url: URL
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scroll = UIScrollView()
+        scroll.backgroundColor = .black
+        scroll.minimumZoomScale = 1
+        scroll.maximumZoomScale = 12
+        scroll.bouncesZoom = true
+        scroll.delegate = context.coordinator
+        let host = UIHostingController(rootView:
+            SiteImage(url: url, contentMode: .fit, preservesIntrinsicAspectRatio: false) {
+                ProgressView().tint(.white)
+            })
+        host.view.backgroundColor = .clear
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(host.view)
+        NSLayoutConstraint.activate([
+            host.view.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+            host.view.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+            host.view.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+            host.view.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor),
+            host.view.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor)
+        ])
+        context.coordinator.host = host
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        scroll.addGestureRecognizer(doubleTap)
+        return scroll
+    }
+
+    func updateUIView(_ scroll: UIScrollView, context: Context) {}
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        var host: UIViewController?
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { host?.view }
+        @objc func doubleTap(_ gesture: UITapGestureRecognizer) {
+            guard let scroll = gesture.view as? UIScrollView, let image = host?.view else { return }
+            if scroll.zoomScale > 1 {
+                scroll.setZoomScale(1, animated: true)
+            } else {
+                let point = gesture.location(in: image)
+                let size = CGSize(width: scroll.bounds.width / 3, height: scroll.bounds.height / 3)
+                scroll.zoom(to: CGRect(x: point.x - size.width / 2, y: point.y - size.height / 2,
+                                      width: size.width, height: size.height), animated: true)
+            }
+        }
     }
 }

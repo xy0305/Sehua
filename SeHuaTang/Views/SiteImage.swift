@@ -3,11 +3,19 @@ import UIKit
 import ImageIO
 import WebKit
 
+private final class LifecycleImageView: UIImageView {
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { stopAnimating() }
+        else if image?.images != nil { startAnimating() }
+    }
+}
+
 private struct AnimatedSiteImage: UIViewRepresentable {
     let image: UIImage
     let mode: ContentMode
     func makeUIView(context: Context) -> UIImageView {
-        let view = UIImageView()
+        let view = LifecycleImageView()
         view.clipsToBounds = true
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
@@ -15,7 +23,12 @@ private struct AnimatedSiteImage: UIViewRepresentable {
     }
     func updateUIView(_ view: UIImageView, context: Context) {
         view.contentMode = mode == .fit ? .scaleAspectFit : .scaleAspectFill
-        view.image = image
+        if view.image !== image {
+            view.stopAnimating()
+            view.image = image
+        }
+        if view.window != nil, image.images != nil { view.startAnimating() }
+        else { view.stopAnimating() }
     }
     static func dismantleUIView(_ view: UIImageView, coordinator: ()) {
         view.stopAnimating()
@@ -26,7 +39,7 @@ private struct AnimatedSiteImage: UIViewRepresentable {
 /// ImageIO detects the actual signature (not the URL suffix). A bounded decode
 /// supports GIF and any multi-frame format the device ImageIO can decode.
 enum SiteImageDecoder {
-    static func decode(_ data: Data) -> UIImage? {
+    static func decode(_ data: Data, animationBudget: Int = 32 * 1024 * 1024) -> UIImage? {
         guard data.count <= 20 * 1024 * 1024,
               let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let count = CGImageSourceGetCount(source)
@@ -34,7 +47,7 @@ enum SiteImageDecoder {
         let animated = count > 1 && count <= 120
         let limit = animated ? count : 1
         // Worst-case RGBA decode stays below 32 MiB for the complete animation.
-        let side = animated ? min(768, Int(sqrt(Double(32 * 1024 * 1024 / (4 * limit))))) : 2048
+        let side = animated ? min(768, Int(sqrt(Double(min(32 * 1024 * 1024, max(1024, animationBudget)) / (4 * limit))))) : 2048
         var frames: [UIImage] = []
         var duration = 0.0
         for index in 0..<limit {
@@ -61,6 +74,7 @@ struct SiteImage<Placeholder: View>: View {
     // Fixed-size thumbnails/avatars use their container's geometry; only
     // document media should derive layout from decoded image dimensions.
     var preservesIntrinsicAspectRatio = true
+    var animationBudget = 32 * 1024 * 1024
     @ViewBuilder var placeholder: () -> Placeholder
 
     @State private var image: UIImage?
@@ -79,6 +93,7 @@ struct SiteImage<Placeholder: View>: View {
             }
         }
         .task(id: url) { await load() }
+        .onDisappear { image = nil }
     }
 
     @MainActor
@@ -99,7 +114,7 @@ struct SiteImage<Placeholder: View>: View {
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-                  let img = await Task.detached(priority: .utility, operation: { SiteImageDecoder.decode(data) }).value else { return }
+                  let img = await Task.detached(priority: .utility, operation: { SiteImageDecoder.decode(data, animationBudget: animationBudget) }).value else { return }
             try Task.checkCancellation()
             image = img
         } catch {
