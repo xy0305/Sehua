@@ -6,7 +6,6 @@ struct ForumHomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ForumTopBar(title: "全部版块", showsBack: true)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForumLoadStatus(state: store.forumState, title: "版块") {
@@ -20,7 +19,7 @@ struct ForumHomeView: View {
         }
         .background(ForumChrome.page)
         .tint(ForumChrome.accent)
-        .toolbar(.hidden, for: .navigationBar)
+        .forumNavigation(title: "全部版块")
         .task { await store.loadForums() }
     }
 }

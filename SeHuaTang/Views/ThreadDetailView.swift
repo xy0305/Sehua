@@ -22,10 +22,9 @@ struct ThreadDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ForumTopBar(title: detail?.boardName.isEmpty == false ? (detail?.boardName ?? "帖子") : "帖子")
             detailToolbar
             Group {
-                if state == .loading && detail == nil {
+                if (state == .loading || state == .idle) && detail == nil {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let error = state.errorMessage, detail == nil {
                     ContentUnavailableView {
@@ -34,7 +33,11 @@ struct ThreadDetailView: View {
                         Text(error)
                     } actions: {
                         Button("重试") { Task { await load() } }
+                        NavigationLink("登录 / 完成验证") {
+                            LoginWebView(url: session.url("forum.php?forumlist=1&mobile=2"), title: "登录 / 完成验证")
+                        }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let detail {
                     content(detail)
                 }
@@ -43,7 +46,7 @@ struct ThreadDetailView: View {
         }
         .background(ForumChrome.page)
         .tint(ForumChrome.blue)
-        .toolbar(.hidden, for: .navigationBar)
+        .forumNavigation(title: detail?.boardName.isEmpty == false ? (detail?.boardName ?? "帖子") : "帖子")
         .fullScreenCover(isPresented: $showPlayer) {
             Pan115InlinePlayer(title: detail?.title.isEmpty == false ? (detail?.title ?? title) : title, videos: playVideos)
         }
@@ -56,8 +59,7 @@ struct ThreadDetailView: View {
         }
     }
 
-    // The app uses a custom top bar and hides UINavigationBar; keep this native
-    // toolbar visible rather than attaching items to the hidden system bar.
+    // A compact local-reading action strip sits below the system navigation bar.
     private var detailToolbar: some View {
         HStack {
             Text("主题正文")
@@ -116,29 +118,41 @@ struct ThreadDetailView: View {
                     .background(ForumChrome.page)
                 }
                 Text(d.title.isEmpty ? title : d.title)
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
                     .foregroundStyle(ForumChrome.text)
                     .padding(.horizontal, 16)
-                    .padding(.top, 20)
-                    .padding(.bottom, 16)
+                    .padding(.top, 16)
+                    .padding(.bottom, 12)
 
-                HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 8) {
                     Button { if panStatus == nil { Task { await play115(d) } } else { panStatus = nil } } label: {
-                        Label(panStatus ?? "115", systemImage: "play.rectangle.fill")
-                            .padding(.horizontal, 10)
-                            .frame(minHeight: 36)
-                            .background(ForumChrome.blue.opacity(0.12))
-                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                        HStack {
+                            Label("115 归档 / 播放", systemImage: "play.rectangle.fill")
+                            Spacer()
+                            Image(systemName: panStatus == nil ? "chevron.right" : "xmark.circle")
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                     }
-                    .disabled(false)
-                    .accessibilityLabel("提交115并直接播放")
-                    Spacer(minLength: 0)
+                    .accessibilityLabel(panStatus == nil ? "提交115并直接播放" : "清除115操作状态")
+                    if let panStatus {
+                        Text(panStatus)
+                            .font(.footnote)
+                            .foregroundStyle(ForumChrome.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel("115状态：\(panStatus)")
+                    }
                 }
-                .font(.system(size: 13, weight: .medium))
                 .buttonStyle(.plain)
-                .foregroundStyle(ForumChrome.blue)
+                .foregroundStyle(ForumChrome.accent)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(ForumChrome.side, in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 16)
-                .padding(.bottom, 10)
+                .padding(.bottom, 12)
 
                 if let post = d.posts.first {
                     authorBar(post)
@@ -150,28 +164,32 @@ struct ThreadDetailView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("下载附件").font(.caption.weight(.medium)).foregroundStyle(ForumChrome.secondary)
                         ForEach(d.magnets + d.attachments) { m in
-                            HStack {
-                                Image(systemName: m.isMagnet ? "link" : "arrow.down.doc")
-                                    .foregroundStyle(ForumChrome.blue)
-                                Text(m.isMagnet ? "磁力链接" : (m.isED2K ? "eD2k" : m.name))
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Spacer()
-                                Button(copiedAttachmentID == m.id ? "已复制" : "复制") {
-                                    UIPasteboard.general.string = m.url.absoluteString
-                                    copiedAttachmentID = m.id
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: m.isMagnet ? "link" : "arrow.down.doc")
+                                        .foregroundStyle(ForumChrome.blue)
+                                    Text(m.isMagnet ? "磁力链接" : (m.isED2K ? "eD2k" : m.name))
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
-                                .font(.system(size: 13, weight: .semibold))
-                                if !m.isMagnet && !m.isED2K && (m.name.lowercased().hasSuffix(".txt") || m.url.pathExtension.lowercased() == "txt") {
-                                    NavigationLink("阅读") { TextAttachmentView(attachment: m) }
-                                        .font(.system(size: 13, weight: .semibold))
-                                } else {
-                                    Button("打开") { SiteLinks.open(m.url) }
-                                        .font(.system(size: 13, weight: .semibold))
+                                HStack(spacing: 12) {
+                                    Spacer()
+                                    Button(copiedAttachmentID == m.id ? "已复制" : "复制") {
+                                        UIPasteboard.general.string = m.url.absoluteString
+                                        copiedAttachmentID = m.id
                                 }
-                            }
-                            .font(.system(size: 13))
-                            .buttonStyle(.plain)
-                            .frame(minHeight: 36)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    if !m.isMagnet && !m.isED2K && (m.name.lowercased().hasSuffix(".txt") || m.url.pathExtension.lowercased() == "txt") {
+                                        NavigationLink("阅读") { TextAttachmentView(attachment: m) }
+                                            .font(.system(size: 13, weight: .semibold))
+                                    } else {
+                                        Button("打开") { SiteLinks.open(m.url) }
+                                            .font(.system(size: 13, weight: .semibold))
+                                }
+                                }
+                                }
+                            .font(.subheadline)
+                            .buttonStyle(.bordered)
+                            .frame(minHeight: 44)
                         }
                     }
                     .padding(16)

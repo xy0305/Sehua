@@ -11,9 +11,8 @@ struct MemberSpaceView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ForumTopBar(title: displayName)
             VStack(spacing: 0) {
-                if state == .loading && space == nil {
+                if (state == .loading || state == .idle) && space == nil {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let error = state.errorMessage, space == nil {
                     ContentUnavailableView {
@@ -27,6 +26,10 @@ struct MemberSpaceView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
                             header
+                            if !status.isEmpty {
+                                Text(status).font(.footnote).foregroundStyle(.secondary)
+                                Button("重试加载主题") { Task { await loadMore() } }
+                            }
                             if let space, !space.threads.isEmpty {
                                 LazyVStack(spacing: 0) {
                                     ForEach(space.threads) { item in
@@ -60,7 +63,7 @@ struct MemberSpaceView: View {
             }
         }
         .background(ForumChrome.page)
-        .toolbar(.hidden, for: .navigationBar)
+        .forumNavigation(title: displayName)
         .task { await load() }
     }
 

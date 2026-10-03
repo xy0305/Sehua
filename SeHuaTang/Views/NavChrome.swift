@@ -129,6 +129,28 @@ struct ForumLoadStatus: View {
 }
 
 extension View {
+    /// Use UINavigationBar's own back item so interactive edge-pop remains native.
+    func forumNavigation(title: String, refresh: (() -> Void)? = nil) -> some View {
+        self
+            .navigationTitle(title)
+            .pinnedNavBar()
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if let refresh {
+                        Button(action: refresh) {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .accessibilityLabel("刷新")
+                    } else {
+                        NavigationLink { SearchView() } label: {
+                            Image(systemName: "magnifyingglass")
+                        }
+                        .accessibilityLabel("搜索帖子")
+                    }
+                }
+            }
+    }
+
     func pinnedNavBar() -> some View {
         self
             .navigationBarTitleDisplayMode(.inline)

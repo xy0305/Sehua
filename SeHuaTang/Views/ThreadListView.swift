@@ -19,9 +19,6 @@ struct ThreadListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ForumTopBar(title: board.name) {
-                Task { await reload() }
-            }
             boardHeader
             if store.threadTypes.count > 1 {
                 typeBar
@@ -82,7 +79,7 @@ struct ThreadListView: View {
         .background(ForumChrome.page)
         .tint(ForumChrome.blue)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .navigationBar)
+        .forumNavigation(title: board.name, refresh: { Task { await reload() } })
         .onChange(of: store.threadReplacementRevision) { _, _ in
             visibleThreadID = store.threads.first?.id
             pageInput = ""

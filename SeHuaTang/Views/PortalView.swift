@@ -20,7 +20,6 @@ struct PortalView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ForumTopBar(title: "首页", showsSegment: true, segment: 0, showsBack: false)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForumLoadStatus(state: store.portalState, title: "讨论") {
@@ -43,7 +42,7 @@ struct PortalView: View {
         }
         .background(ForumChrome.page)
         .tint(ForumChrome.accent)
-        .toolbar(.hidden, for: .navigationBar)
+        .forumNavigation(title: "色花堂")
         .task { await reload() }
     }
 
