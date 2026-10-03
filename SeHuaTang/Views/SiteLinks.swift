@@ -17,16 +17,16 @@ enum SiteLinks {
     static func links(in html: String, base: URL) -> [URL] {
         var out: [URL] = []
         var seen = Set<String>()
-        let hrefs = HTML.allMatches(#"href="([^"]+)""#, in: html, group: 1)
+        let hrefs = HTML.elements(in: html, tag: "a").compactMap { HTML.attribute("href", in: $0) }
         for href in hrefs {
             guard let url = HTML.absURL(href, base: base) else { continue }
-            if staysInApp(url) { continue }
+
             let scheme = url.scheme?.lowercased() ?? ""
             guard scheme == "http" || scheme == "https" || scheme == "magnet" || scheme == "ed2k" else { continue }
             if seen.insert(url.absoluteString).inserted {
                 out.append(url)
             }
-            if out.count >= 8 { break }
+
         }
         return out
     }

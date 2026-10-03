@@ -53,6 +53,11 @@ jobs:
           xcrun swiftc SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift Regression115/ContentFixtures.swift -o /tmp/content-fixtures
           /tmp/content-fixtures
 
+      - name: Body hyperlink and native routing fixtures
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Parser/HTML.swift SeHuaTang/Models/SiteRoute.swift SeHuaTang/Config/SiteConfig.swift Regression115/BodyLinkFixtures.swift -o /tmp/body-link-fixtures
+          /tmp/body-link-fixtures
+
       - name: Offline submission fixtures
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/SubmissionFixtures.swift -o /tmp/submission-fixtures

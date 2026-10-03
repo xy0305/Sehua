@@ -63,6 +63,15 @@ private struct LoginWK: UIViewRepresentable {
                 UIApplication.shared.open(url)
                 return
             }
+            guard ["http", "https", "about"].contains(url.scheme?.lowercased() ?? "") else {
+                decisionHandler(.cancel)
+                return
+            }
+            if navigationAction.targetFrame == nil {
+                decisionHandler(.cancel)
+                webView.load(navigationAction.request)
+                return
+            }
             decisionHandler(.allow)
         }
     }

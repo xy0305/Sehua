@@ -5,6 +5,7 @@ struct ThreadDetailView: View {
     let tid: Int
     let title: String
     var sourceFID: Int? = nil
+    var sourceURL: URL? = nil
     @EnvironmentObject var session: WebSession
     @EnvironmentObject var store: AppStore
     @ObservedObject private var library = ReadingLibrary.shared
@@ -20,6 +21,8 @@ struct ThreadDetailView: View {
     @State private var loadingReplies = false
     @State private var replyLoadError: String?
     @State private var profile: MemberRoute?
+    @State private var linkRoute: SiteRoute?
+    @State private var tappedLinkURL: URL?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -54,6 +57,19 @@ struct ThreadDetailView: View {
         .navigationDestination(item: $profile) { route in
             MemberSpaceView(uid: route.uid, name: route.name)
         }
+        .navigationDestination(item: $linkRoute) { route in
+            switch route {
+            case .thread(let id): ThreadDetailView(tid: id, title: "帖子", sourceURL: tappedLinkURL)
+            case .forum(let id): ThreadListView(board: ForumBoard(id: id, name: "版块", today: 0, meta: ""))
+            case .member(let id): MemberSpaceView(uid: id, name: "用户")
+            case .web(let url): LoginWebView(url: url, title: "网页")
+            case .resource: EmptyView()
+            }
+        }
+        .environment(\.openURL, OpenURLAction { url in
+            openBodyLink(url)
+            return .handled
+        })
         .task {
             library.record(readingItem)
             if detail == nil { await load() }
@@ -199,7 +215,7 @@ struct ThreadDetailView: View {
                                         NavigationLink("阅读") { TextAttachmentView(attachment: m) }
                                             .font(.system(size: 13, weight: .semibold))
                                     } else {
-                                        Button("打开") { SiteLinks.open(m.url) }
+                                        Button("打开") { openBodyLink(m.url) }
                                             .font(.system(size: 13, weight: .semibold))
                                 }
                                 }
@@ -215,19 +231,19 @@ struct ThreadDetailView: View {
                     .overlay(alignment: .bottom) { ForumChrome.line.frame(height: 0.5) }
                 }
 
-                if let body = d.posts.first?.htmlBody, !SiteLinks.links(in: body, base: session.baseURL).isEmpty {
-                    let links = SiteLinks.links(in: body, base: session.baseURL)
+                if let body = d.posts.first?.htmlBody, !SiteLinks.links(in: body, base: postURL).isEmpty {
+                    let links = SiteLinks.links(in: body, base: postURL)
                     VStack(alignment: .leading, spacing: 8) {
                         Text("链接").font(.system(size: 15, weight: .semibold))
                         ForEach(links, id: \.absoluteString) { url in
                             Button {
-                                SiteLinks.open(url)
+                                openBodyLink(url)
                             } label: {
                                 HStack {
                                     Image(systemName: SiteLinks.staysInApp(url) ? "doc.text" : "safari")
                                     Text(url.host ?? url.absoluteString).lineLimit(1)
                                     Spacer()
-                                    Text(SiteLinks.staysInApp(url) ? "打开" : "浏览器")
+                                    Text("应用内打开")
                                         .font(.system(size: 12, weight: .semibold))
                                 }
                                 .font(.system(size: 14))
@@ -248,6 +264,13 @@ struct ThreadDetailView: View {
                         }
                         ForEach(Array(bodyBlocks(post.htmlBody).enumerated()), id: \.offset) { _, fragment in
                             switch fragment {
+                            case .richText(let runs):
+                                Text(attributedBody(runs))
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(ForumChrome.text)
+                                    .lineSpacing(6)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .textSelection(.enabled)
                             case .text(let text):
                                 Text(text)
                                     .font(.system(size: 16))
@@ -380,6 +403,7 @@ struct ThreadDetailView: View {
 
     // Coalesce only adjacent image fragments; text always stays at its original position.
     private enum BodyBlock {
+        case richText([HTML.Inline])
         case text(String)
         case images([URL])
     }
@@ -388,6 +412,7 @@ struct ThreadDetailView: View {
         var result: [BodyBlock] = []
         for fragment in HTML.orderedContent(in: html, base: postURL) {
             switch fragment {
+            case .richText(let runs): result.append(.richText(runs))
             case .text(let text): result.append(.text(text))
             case .image(let url):
                 if case .images(let urls)? = result.last {
@@ -396,6 +421,21 @@ struct ThreadDetailView: View {
                     result.append(.images([url]))
                 }
             }
+        }
+        return result
+    }
+
+    private func openBodyLink(_ url: URL) {
+        guard let route = SiteRoute.resolve(url) else { return }
+        if case .resource = route { SiteLinks.open(url) } else if linkRoute == nil { tappedLinkURL = url; linkRoute = route }
+    }
+
+    private func attributedBody(_ runs: [HTML.Inline]) -> AttributedString {
+        var result = AttributedString()
+        for run in runs {
+            var text = AttributedString(run.text)
+            if let url = run.url, SiteRoute.resolve(url) != nil { text.link = url }
+            result.append(text)
         }
         return result
     }
@@ -447,7 +487,7 @@ struct ThreadDetailView: View {
         return t.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var postURL: URL { session.url("forum.php?mod=viewthread&tid=\(tid)&mobile=2") }
+    private var postURL: URL { sourceURL ?? session.url("forum.php?mod=viewthread&tid=\(tid)&mobile=2") }
 
     private func loadMoreReplies() async {
         guard !loadingReplies, state != .loading, let url = nextPageURL else { return }
@@ -522,7 +562,7 @@ struct ThreadDetailView: View {
         guard !loadingReplies, state != .loading, !Task.isCancelled else { return }
         state = .loading
         do {
-            let html = try await session.fetchHTML("forum.php?mod=viewthread&tid=\(tid)&mobile=2")
+            let html = try await session.fetchHTML(postURL.absoluteString)
             try Task.checkCancellation()
             if DiscuzParser.looksLikeChallenge(html) {
                 state = .failed("需要过验证，到「我的」里打开网页")
@@ -534,8 +574,8 @@ struct ThreadDetailView: View {
                 return
             }
             detail = parsed
-            loadedPage = 1
-            nextPageURL = DiscuzParser.nextThreadPage(in: html, tid: tid, base: postURL, page: 1)
+            loadedPage = HTML.queryInt("page", in: postURL.absoluteString) ?? Int(HTML.firstMatch(#"thread-\d+-(\d+)-"#, in: postURL.path) ?? "1") ?? 1
+            nextPageURL = DiscuzParser.nextThreadPage(in: html, tid: tid, base: postURL, page: loadedPage)
             replyLoadError = nil
             library.record(readingItem)
             state = .idle

@@ -142,23 +142,53 @@ enum HTML {
         }.joined(separator: "\n").replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    struct Inline: Hashable {
+        var text: String
+        var href: String?
+        var url: URL?
+    }
+
     enum Content: Hashable {
+        case richText([Inline])
         case text(String)
         case image(URL)
     }
 
     /// Split at actual image tags, retaining text/image/text order and lazy image URLs.
-    static func orderedContent(in html: String, base: URL) -> [Content] {
+    static func orderedContent(in source: String, base: URL) -> [Content] {
+        let html = source.replacingOccurrences(of: #"(?is)<(script|style)\b[^>]*>[\s\S]*?</\1\s*>|<!--[\s\S]*?-->"#, with: "", options: .regularExpression)
         var result: [Content] = []
+        var runs: [Inline] = []
+        var href: String?
         var cursor = html.startIndex
-        for token in tags(html) where token.name == "img" && !token.closing {
-            let text = plainText(String(html[cursor..<token.range.lowerBound]))
-            if !text.isEmpty { result.append(.text(text)) }
-            if let url = imageURLs(in: token.raw, base: base).first { result.append(.image(url)) }
+        func append(_ text: String) {
+            let value = unescape(text)
+            guard !value.isEmpty else { return }
+            runs.append(Inline(text: value, href: href, url: href.flatMap { absURL($0, base: base) }))
+        }
+        func flush() {
+            if runs.contains(where: { $0.href != nil }) {
+                result.append(.richText(runs))
+            } else {
+                let text = plainText(runs.map { $0.text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;") }.joined())
+                if !text.isEmpty { result.append(.text(text)) }
+            }
+            runs = []
+        }
+        for token in tags(html) {
+            append(String(html[cursor..<token.range.lowerBound]))
+            switch token.name {
+            case "a": href = token.closing ? nil : attribute("href", in: token.raw)
+            case "img":
+                flush()
+                if let url = imageURLs(in: token.raw, base: base).first { result.append(.image(url)) }
+            case "br", "p", "div", "li", "blockquote", "tr", "section", "pre": append("\n")
+            default: break
+            }
             cursor = token.range.upperBound
         }
-        let text = plainText(String(html[cursor...]))
-        if !text.isEmpty { result.append(.text(text)) }
+        append(String(html[cursor...]))
+        flush()
         return result
     }
 
