@@ -418,7 +418,7 @@ enum DiscuzParser {
             let reason = cells.count >= 3 ? HTML.plainText(cells.last ?? "") : ""
             let values = cells.count >= 3 ? Array(texts.dropFirst().dropLast()).filter { !$0.isEmpty } : []
             entries.append(RatingEntry(id: entries.count, name: name, uid: uid,
-                avatarURL: HTML.imageURLs(in: first, base: base).first, values: values, reason: reason))
+                avatarURL: HTML.imageURLs(in: first, base: base, excludingDecorations: false).first, values: values, reason: reason))
         }
         return PostRatings(participants: participants, totals: totals, entries: entries)
     }
