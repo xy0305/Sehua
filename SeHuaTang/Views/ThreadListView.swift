@@ -43,12 +43,12 @@ struct ThreadListView: View {
                     }
                     ForEach(store.threads) { item in
                         NavigationLink {
-                            ThreadDetailView(tid: item.id, title: item.title)
+                            ThreadDetailView(tid: item.id, title: item.title, sourceFID: item.fid)
                         } label: {
                             ThreadCard(item: item)
                         }
                         .id(item.id)
-                        .buttonStyle(.plain)
+                        .buttonStyle(ForumPressStyle())
                         .onAppear {
                             if item.id == store.threads.last?.id {
                                 Task { await store.loadMore() }
@@ -116,7 +116,7 @@ struct ThreadListView: View {
                     .background(ForumChrome.blue.opacity(0.08))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ForumPressStyle())
             .accessibilityLabel("发帖，打开网页表单")
         }
         .padding(.horizontal, 16)
@@ -145,7 +145,7 @@ struct ThreadListView: View {
                                 }
                             }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ForumPressStyle())
                 }
             }
             .padding(.horizontal, 6)
@@ -164,7 +164,7 @@ struct ThreadListView: View {
                         .font(.system(size: 13, weight: order == item.0 ? .semibold : .regular))
                         .foregroundStyle(order == item.0 ? ForumChrome.blue : ForumChrome.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ForumPressStyle())
             }
             Spacer()
         }
@@ -273,10 +273,12 @@ struct ThreadCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ForumChrome.bar)
-        .contentShape(Rectangle())
-        .overlay(alignment: .bottom) {
-            ForumChrome.line.frame(height: 0.5).padding(.horizontal, 16)
+        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16).stroke(ForumChrome.line.opacity(0.5), lineWidth: 0.5)
         }
+        .contentShape(RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
     }
 }

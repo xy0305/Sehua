@@ -295,9 +295,16 @@ enum DiscuzParser {
                 && HTML.queryInt("tid", in: href) == tid
         }
         let reply = replyLinks.first { HTML.queryInt("repquote", in: $0) == nil } ?? replyLinks.first
+        // Global board navigation and links inside post bodies are not provenance.
+        // Use a reply action for this exact tid, or the thread's breadcrumb only.
+        let breadcrumb = HTML.elements(in: html).first {
+            HTML.attribute("id", in: $0) == "pt" || HTML.attribute("class", in: $0)?.split(separator: " ").contains("breadcrumb") == true
+        } ?? ""
+        let boardLinks = HTML.elements(in: breadcrumb, tag: "a").compactMap { HTML.attribute("href", in: $0) }
         let fid = reply.flatMap { HTML.queryInt("fid", in: $0) }
-            ?? HTML.firstMatch(#"name\s*=\s*["']fid["'][^>]*value\s*=\s*["'](\d+)"#, in: html).flatMap(Int.init)
-            ?? links.first(where: { $0.contains("mod=forumdisplay") || $0.contains("forum-") }).flatMap { HTML.queryInt("fid", in: $0) }
+            ?? boardLinks.last(where: { $0.contains("mod=forumdisplay") || $0.contains("forum-") }).flatMap {
+                HTML.queryInt("fid", in: $0) ?? HTML.firstMatch(#"forum-(\d+)-"#, in: $0).flatMap(Int.init)
+            }
         let replyCount = HTML.firstMatch(#"网友回复（(\d+)条）"#, in: html) ?? ""
 
         return ThreadDetail(tid: tid, title: title, boardName: boardName, fid: fid, replyCount: replyCount, favoriteURL: favorite.flatMap { HTML.absURL($0, base: base) }, replyURL: reply.flatMap { HTML.absURL($0, base: base) }, posts: posts, magnets: magnets, attachments: attachments, images: images)
@@ -496,6 +503,19 @@ private enum ParserRegressionTests {
         """#
         let detail = DiscuzParser.parseThreadDetail(detailHTML, tid: 42, base: base)
         precondition(detail.fid == 103 && detail.favoriteURL != nil && detail.replyURL != nil)
+        precondition(!SiteConfig.allowsPurchase(fid: detail.fid))
+        let sale = DiscuzParser.parseThreadDetail(detailHTML.replacingOccurrences(of: "fid=103", with: "fid=97"), tid: 42, base: base)
+        precondition(sale.fid == 97 && SiteConfig.allowsPurchase(fid: sale.fid))
+        let forged = #"<title>资源出售区 购买 - 论坛</title><a href='forum.php?mod=forumdisplay&amp;fid=97'>资源出售区</a><div class='message'>普通正文 <a href='forum.php?mod=forumdisplay&amp;fid=97'>购买</a></div>"#
+        precondition(DiscuzParser.parseThreadDetail(forged, tid: 42, base: base).fid == nil)
+        precondition(!SiteConfig.allowsPurchase(fid: nil) && !SiteConfig.allowsPurchase(fid: 95))
+        let breadcrumb = #"<div id='pt'><a href='forum-97-1.html'>版块</a></div>"#
+        precondition(DiscuzParser.parseThreadDetail(breadcrumb, tid: 42, base: base).fid == 97)
+        let otherReply = #"<a href='forum.php?mod=post&amp;action=reply&amp;tid=999&amp;fid=97'>回复其他帖</a>"#
+        precondition(DiscuzParser.parseThreadDetail(otherReply, tid: 42, base: base).fid == nil)
+        let saleList = DiscuzParser.parseThreadList(#"<div class='n5_htmk'><h1><a href='forum.php?mod=viewthread&amp;tid=44'>普通标题</a></h1></div>"#, fid: 97, page: 1)
+        precondition(saleList.threads.first?.fid == 97)
+        print("PASS: sale provenance, normal/unknown/forged purchase gating")
         precondition(detail.posts.count == 2 && detail.posts[0].authorID == 7 && detail.posts[1].authorID == 8)
         precondition(detail.posts[0].author == "作者甲" && detail.posts[0].dateText == "2026-10-01")
         precondition(detail.posts[0].avatarURL?.path == "/uc_server/avatar.php")

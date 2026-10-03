@@ -34,7 +34,7 @@ struct MemberSpaceView: View {
                                 LazyVStack(spacing: 0) {
                                     ForEach(space.threads) { item in
                                         NavigationLink {
-                                            ThreadDetailView(tid: item.id, title: item.title)
+                                            ThreadDetailView(tid: item.id, title: item.title, sourceFID: item.fid)
                                         } label: {
                                             ThreadCard(item: item)
                                         }

@@ -13,6 +13,9 @@ enum SiteConfig {
         "www.sehuatang.org",
         "sehuatang.org"
     ]
+    // BuiltinForums maps fid 97 to 资源出售区; never infer this from thread titles.
+    static let resourceSaleFID = 97
+    static func allowsPurchase(fid: Int?) -> Bool { fid == resourceSaleFID }
     static let adFIDs: Set<Int> = [148, 149]
     static let adKeywords = [
         "赌场", "棋牌", "百家乐", "葡京", "招代理", "鲍鱼盒子", "爆奖",

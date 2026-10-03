@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Native landing page: portal discussions followed by collapsible board groups.
 struct PortalView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject var store: AppStore
     @State private var showsAllDiscussions = false
 
@@ -119,7 +120,7 @@ struct PortalView: View {
                 if discussions.count > 8 {
                     ForumChrome.line.frame(height: 0.5)
                     Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { showsAllDiscussions.toggle() }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { showsAllDiscussions.toggle() }
                     } label: {
                         HStack(spacing: 6) {
                             Text(showsAllDiscussions ? "收起讨论" : "查看全部讨论（\(discussions.count)）")

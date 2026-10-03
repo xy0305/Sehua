@@ -64,6 +64,7 @@ struct ForumDirectory: View {
 
 private struct ForumCategoryCard: View {
     let category: ForumCategory
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded: Bool
 
     init(category: ForumCategory, initiallyExpanded: Bool) {
@@ -76,7 +77,7 @@ private struct ForumCategoryCard: View {
     var body: some View {
         VStack(spacing: 0) {
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "square.stack.3d.up.fill")
@@ -99,7 +100,7 @@ private struct ForumCategoryCard: View {
                 .padding(14)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ForumPressStyle())
             .accessibilityLabel(category.name)
             .accessibilityValue(expanded ? "已展开，\(boards.count)个版块" : "已收起，\(boards.count)个版块")
             .accessibilityHint("轻点展开或收起分组")
@@ -142,7 +143,7 @@ private struct ForumCategoryCard: View {
                         .frame(minHeight: 52)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ForumPressStyle())
                 }
             }
         }

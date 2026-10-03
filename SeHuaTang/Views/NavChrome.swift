@@ -179,3 +179,14 @@ extension LoadState {
         return nil
     }
 }
+
+/// Short, local feedback only; never animate network list replacements or scroll positions.
+struct ForumPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.78 : 1)
+            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.99 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}

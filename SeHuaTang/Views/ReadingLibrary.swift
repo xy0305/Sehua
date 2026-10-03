@@ -11,8 +11,9 @@ final class ReadingLibrary: ObservableObject {
         var dateText: String
         var coverURL: URL?
         var visitedAt: Date
+        var fid: Int? = nil
         var item: ThreadItem {
-            ThreadItem(id: id, title: title, excerpt: "", author: author, authorID: nil, avatarURL: nil, coverURL: coverURL, dateText: dateText, replies: "", likes: "", views: "", isSticky: false, fid: nil)
+            ThreadItem(id: id, title: title, excerpt: "", author: author, authorID: nil, avatarURL: nil, coverURL: coverURL, dateText: dateText, replies: "", likes: "", views: "", isSticky: false, fid: fid)
         }
     }
     @Published private(set) var history: [Entry] = []
@@ -27,7 +28,7 @@ final class ReadingLibrary: ObservableObject {
         return (try? JSONDecoder().decode([Entry].self, from: data)) ?? []
     }
     private func entry(_ item: ThreadItem) -> Entry {
-        Entry(id: item.id, title: item.title, author: item.author, dateText: item.dateText, coverURL: item.coverURL, visitedAt: Date())
+        Entry(id: item.id, title: item.title, author: item.author, dateText: item.dateText, coverURL: item.coverURL, visitedAt: Date(), fid: item.fid)
     }
     func record(_ item: ThreadItem) {
         history.removeAll { $0.id == item.id }
@@ -65,7 +66,7 @@ struct ReadingLibraryView: View {
             }
             ForEach(entries) { entry in
                 NavigationLink {
-                    ThreadDetailView(tid: entry.id, title: entry.title)
+                    ThreadDetailView(tid: entry.id, title: entry.title, sourceFID: entry.fid)
                 } label: {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(entry.title).font(.headline).lineLimit(3)

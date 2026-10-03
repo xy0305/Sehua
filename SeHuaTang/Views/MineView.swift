@@ -15,7 +15,7 @@ struct MineView: View {
                     } label: {
                         webRow("查看站点实际积分 / 明细")
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ForumPressStyle())
                     Text("余额及积分类型以站点登录页为准；未登录时请完成验证后重试。")
                         .font(.footnote)
                         .foregroundStyle(ForumChrome.secondary)
@@ -26,7 +26,7 @@ struct MineView: View {
                     } label: {
                         webRow("打开站内签到页")
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ForumPressStyle())
                     Text("复用站点登录会话；请在网页中手动签到。")
                         .font(.footnote)
                         .foregroundStyle(ForumChrome.secondary)
@@ -64,7 +64,7 @@ struct MineView: View {
                                 .frame(minHeight: 44)
                                 .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(ForumPressStyle())
                             .accessibilityValue(session.host == host ? "已选择" : "未选择")
                         }
                     }
@@ -86,7 +86,7 @@ struct MineView: View {
                             .font(.footnote)
                             .foregroundStyle(ForumChrome.secondary)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ForumPressStyle())
                 }
                 section("网页辅助", symbol: "globe") {
                     VStack(alignment: .leading, spacing: 12) {
@@ -105,7 +105,7 @@ struct MineView: View {
                             webRow("原网页论坛板块")
                         }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ForumPressStyle())
                 }
                 section("本地会话", symbol: "lock.shield") {
                     VStack(alignment: .leading, spacing: 12) {

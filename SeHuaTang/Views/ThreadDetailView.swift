@@ -4,6 +4,7 @@ import UIKit
 struct ThreadDetailView: View {
     let tid: Int
     let title: String
+    var sourceFID: Int? = nil
     @EnvironmentObject var session: WebSession
     @EnvironmentObject var store: AppStore
     @ObservedObject private var library = ReadingLibrary.shared
@@ -55,7 +56,7 @@ struct ThreadDetailView: View {
         }
         .task {
             library.record(readingItem)
-            await load()
+            if detail == nil { await load() }
         }
     }
 
@@ -75,10 +76,20 @@ struct ThreadDetailView: View {
                     .frame(minHeight: 44)
             }
             .buttonStyle(.plain)
+            if SiteConfig.allowsPurchase(fid: detail?.fid ?? sourceFID) {
+                NavigationLink {
+                    LoginWebView(url: postURL, title: "资源出售 · 手动确认购买")
+                } label: {
+                    Label("购买", systemImage: "cart")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(minHeight: 44)
+                }
+                .accessibilityHint("打开站点表单；请核对价格并手动确认，不会自动扣积分")
+            }
             NavigationLink {
-                LoginWebView(url: session.url("forum.php?mod=viewthread&tid=\(tid)&mobile=2"), title: "购买 / 查看原帖")
+                LoginWebView(url: postURL, title: "查看原帖")
             } label: {
-                Label("购买 / 原帖", systemImage: "cart")
+                Label("原帖", systemImage: "globe")
                     .font(.system(size: 13, weight: .medium))
                     .frame(minHeight: 44)
             }
@@ -92,7 +103,7 @@ struct ThreadDetailView: View {
         var item = store.threads.first(where: { $0.id == tid }) ?? ThreadItem(
             id: tid, title: title, excerpt: "", author: "", authorID: nil,
             avatarURL: nil, coverURL: nil, dateText: "", replies: "",
-            likes: "", views: "", isSticky: false, fid: nil
+            likes: "", views: "", isSticky: false, fid: sourceFID
         )
         if let detail {
             if !detail.title.isEmpty { item.title = detail.title }
@@ -251,8 +262,10 @@ struct ThreadDetailView: View {
                     }
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(ForumChrome.bar)
-                    .overlay(alignment: .bottom) { ForumChrome.line.frame(height: 0.5) }
+                    .background(ForumChrome.page, in: RoundedRectangle(cornerRadius: 14))
+                    .overlay { RoundedRectangle(cornerRadius: 14).stroke(ForumChrome.line, lineWidth: 0.5) }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
                 }
 
                 if d.posts.allSatisfy(\.images.isEmpty), !d.images.isEmpty {
