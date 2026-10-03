@@ -105,14 +105,25 @@ enum DiscuzParser {
         var threads: [ThreadItem] = []
         var seenTID = Set<Int>()
 
-        let stickyLis = HTML.allMatches(#"<li>\s*<i>([^<]*)</i>\s*<a href="([^"]*tid=\d+[^"]*)"[^>]*>([\s\S]*?)</a>\s*</li>"#, in: html, group: 2)
-        let stickyTitles = HTML.allMatches(#"<li>\s*<i>([^<]*)</i>\s*<a href="([^"]*tid=\d+[^"]*)"[^>]*>([\s\S]*?)</a>\s*</li>"#, in: html, group: 3)
-        let stickyDates = HTML.allMatches(#"<li>\s*<i>([^<]*)</i>\s*<a href="([^"]*tid=\d+[^"]*)"[^>]*>([\s\S]*?)</a>\s*</li>"#, in: html, group: 1)
-        for (href, titleHTML, date) in zip3(stickyLis, stickyTitles, stickyDates) {
-            guard let tid = HTML.queryInt("tid", in: href), seenTID.insert(tid).inserted else { continue }
-            let title = HTML.stripTags(titleHTML)
-            if title.isEmpty || SiteConfig.isAdText(title) { continue }
-            threads.append(ThreadItem(id: tid, title: title, excerpt: "", author: "", authorID: nil, avatarURL: nil, coverURL: nil, dateText: date, replies: "", likes: "", views: "", isSticky: true, fid: fid))
+        // Discuz metadata, never subject text or typeid (which is a category).
+        let stickyBlocks = HTML.elements(in: html) { tag in
+            let id = HTML.attribute("id", in: tag) ?? ""
+            return id.hasPrefix("stickthread_") || HTML.hasClass("stickthread", in: tag)
+        }
+        let stickyIDs = Set(stickyBlocks.flatMap { block in
+            HTML.allMatches(#"(?:tid=|thread-)(\d+)"#, in: HTML.unescape(block)).compactMap(Int.init)
+        })
+        // Compact mobile notice rows are not sticky merely because they use <li><i>date</i>.
+        for row in HTML.elements(in: html, tag: "li") {
+            guard !isStickyThread(row),
+                  HTML.firstMatch(#"^<li[^>]*>\s*<i>"#, in: row, group: 0) != nil,
+                  let href = HTML.firstMatch(#"<a[^>]*href=["']([^"']*tid=\d+[^"']*)["']"#, in: row),
+                  let tid = HTML.queryInt("tid", in: href), !stickyIDs.contains(tid),
+                  seenTID.insert(tid).inserted else { continue }
+            let title = HTML.stripTags(HTML.elements(in: row, tag: "a", inner: true).first ?? "")
+            guard !title.isEmpty, !SiteConfig.isAdText(title) else { continue }
+            threads.append(ThreadItem(id: tid, title: title, excerpt: "", author: "", authorID: nil,
+                avatarURL: nil, coverURL: nil, dateText: "", replies: "", likes: "", views: "", isSticky: false, fid: fid))
         }
 
         let cards = HTML.elements(in: html, className: "n5_htmk")
@@ -121,6 +132,7 @@ enum DiscuzParser {
             guard let tidS = HTML.firstMatch(#"mod=viewthread&amp;tid=(\d+)"#, in: card)
                     ?? HTML.firstMatch(#"mod=viewthread&tid=(\d+)"#, in: card),
                   let tid = Int(tidS) else { continue }
+            if stickyIDs.contains(tid) || isStickyThread(card) { continue }
             if !seenTID.insert(tid).inserted { continue }
 
             if !HTML.elements(in: card, idPrefix: "links").isEmpty { continue }
@@ -156,10 +168,40 @@ enum DiscuzParser {
             ))
         }
 
+        // Standard PC Discuz rows; normal announcements stay visible unless sticky metadata says otherwise.
+        for row in HTML.elements(in: html, idPrefix: "normalthread_") {
+            guard !isStickyThread(row),
+                  let tid = HTML.firstMatch(#"normalthread_(\d+)"#, in: row).flatMap(Int.init),
+                  !stickyIDs.contains(tid), seenTID.insert(tid).inserted else { continue }
+            let subject = HTML.elements(in: row, className: "s xst", inner: true).first
+                ?? HTML.elements(in: row, tag: "a").first(where: { HTML.hasClass("xst", in: $0) })
+                ?? ""
+            let title = HTML.stripTags(subject)
+            guard !title.isEmpty, !SiteConfig.isAdText(title) else { continue }
+            threads.append(ThreadItem(id: tid, title: title, excerpt: "", author: "", authorID: nil,
+                avatarURL: nil, coverURL: nil, dateText: "", replies: "", likes: "", views: "", isSticky: false, fid: fid))
+        }
+
         let pagination = threadPagination(html, fid: fid, page: page)
         return ThreadListPage(threads: threads, types: types, page: page,
                               hasNext: pagination.hasNext, boardName: boardName,
                               totalPages: pagination.total)
+    }
+
+    private static func isStickyThread(_ block: String) -> Bool {
+        // Inspect attributes/icons only. A normal title containing “置顶” is not metadata.
+        for tag in HTML.allMatches(#"(<[A-Za-z][^>]*>)"#, in: block) {
+            let id = HTML.attribute("id", in: tag) ?? ""
+            if id.hasPrefix("stickthread_") || HTML.hasClass("stickthread", in: tag) { return true }
+            for key in ["displayorder", "data-displayorder", "data-sticky"] {
+                if let value = HTML.attribute(key, in: tag).flatMap(Int.init), value > 0 { return true }
+            }
+            if let src = HTML.attribute("src", in: tag),
+               HTML.firstMatch(#"(?:^|/)pin_[123]\.(?:gif|png)(?:\?|$)"#, in: src, group: 0) != nil { return true }
+            if HTML.firstMatch(#"^<img\b"#, in: tag, group: 0) != nil,
+               ["置顶", "全局置顶", "分区置顶", "版块置顶"].contains(HTML.attribute("alt", in: tag) ?? "") { return true }
+        }
+        return false
     }
 
     // Only pagination containers are authoritative; thread/reply links are not totals.
@@ -471,6 +513,25 @@ private enum ParserRegressionTests {
         let windowPages = #"<div class='pg'><strong>1</strong><a href='forum.php?fid=103&amp;page=2'>2</a><a href='forum.php?fid=103&amp;page=3'>下一页</a></div>"#
         precondition(DiscuzParser.parseThreadList(windowPages, fid: 103, page: 1).totalPages == nil)
         precondition(DiscuzParser.parseThreadList("<div>没有分页</div>", fid: 103, page: 1).totalPages == nil)
+        let stickyFixtures = #"""
+        <div id='stickthread_11'><div class='n5_htmk'><h1><a href='forum.php?mod=viewthread&amp;tid=11'>全局</a></h1></div></div>
+        <div class='n5_htmk' data-displayorder='1'><h1><a href='forum.php?mod=viewthread&amp;tid=12'>本版</a></h1></div>
+        <div class='n5_htmk'><img src='static/image/common/pin_2.gif'><h1><a href='forum.php?mod=viewthread&amp;tid=13'>分区</a></h1></div>
+        <div class='n5_htmk' data-displayorder='0' typeid='3'><h1><a href='forum.php?mod=viewthread&amp;tid=14'>普通标题含置顶</a></h1></div>
+        <tbody id='stickthread_15'><tr><th><a class='s xst' href='forum.php?mod=viewthread&amp;tid=15'>PC全局</a></th></tr></tbody>
+        <tbody id='normalthread_16' displayorder='1'><tr><th><a class='s xst' href='forum.php?mod=viewthread&amp;tid=16'>PC本版</a></th></tr></tbody>
+        <tbody id='normalthread_17'><tr><th><img src='pin_3.gif'><a class='s xst' href='forum.php?mod=viewthread&amp;tid=17'>PC分区</a></th></tr></tbody>
+        <tbody id='normalthread_18' typeid='99'><tr><th><a class='s xst' href='forum.php?mod=viewthread&amp;tid=18'>非置顶公告</a></th></tr></tbody>
+        <li><i>10-01</i><a href='forum.php?mod=viewthread&amp;tid=19'>普通公告</a></li>
+        """#
+        let filtered = DiscuzParser.parseThreadList(stickyFixtures + numericPages, fid: 103, page: 1)
+        precondition(Set(filtered.threads.map(\.id)) == Set([14, 18, 19]))
+        precondition(filtered.totalPages == 3 && filtered.hasNext)
+        let emptySticky = #"<div class='n5_htmk' displayorder='3'><h1><a href='forum.php?mod=viewthread&amp;tid=77'>全置顶</a></h1></div>"#
+        let emptyPage = DiscuzParser.parseThreadList(emptySticky + unknownPages, fid: 103, page: 7)
+        precondition(emptyPage.threads.isEmpty && emptyPage.hasNext && emptyPage.totalPages == nil)
+        let endPage = DiscuzParser.parseThreadList(emptySticky + numericPages, fid: 103, page: 3)
+        precondition(endPage.threads.isEmpty && !endPage.hasNext && endPage.totalPages == 3)
         let compatibility = ThreadListPage(threads: [], types: [], page: 1, hasNext: false, boardName: "")
         precondition(compatibility.totalPages == nil)
         let list = DiscuzParser.parseThreadList(listHTML, fid: 103, page: 1)

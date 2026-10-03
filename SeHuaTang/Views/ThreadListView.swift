@@ -8,6 +8,7 @@ struct ThreadListView: View {
     @State private var order = "dateline"
     @State private var visibleThreadID: Int?
     @State private var pageInput = ""
+    @State private var optionsPresented = false
     @FocusState private var pageInputFocused: Bool
 
     private let orders: [(String, String)] = [
@@ -19,12 +20,7 @@ struct ThreadListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            boardHeader
-            if store.threadTypes.count > 1 {
-                typeBar
-            }
-            orderBar
-            pageBar
+            compactToolbar
             ChallengeBanner()
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -55,6 +51,11 @@ struct ThreadListView: View {
                             }
                         }
                     }
+                    if store.threadHasNext && store.threadState == .idle {
+                        Color.clear.frame(height: 1)
+                            .id("continuation-\(store.threadPage)")
+                            .onAppear { Task { await store.loadMore() } }
+                    }
                     if store.threadState == .loading {
                         ProgressView().padding()
                     } else if let error = store.threadState.errorMessage, !store.threads.isEmpty {
@@ -80,6 +81,36 @@ struct ThreadListView: View {
         .tint(ForumChrome.blue)
         .navigationBarTitleDisplayMode(.inline)
         .forumNavigation(title: board.name, refresh: { Task { await reload() } })
+        .sheet(isPresented: $optionsPresented) {
+            NavigationStack {
+                Form {
+                    Section("分类") { typeBar }
+                    Section("排序") { orderBar }
+                    Section("页码") { pageBar }
+                    Section("版块") {
+                        Text(board.meta.isEmpty ? "版块主题 · 浏览与交流" : board.meta)
+                            .font(.footnote).foregroundStyle(.secondary)
+                        NavigationLink("发帖 · 网页表单") {
+                            LoginWebView(url: session.url("forum.php?mod=post&action=newthread&fid=\(board.id)&mobile=2"), title: "发帖 · 网页表单")
+                        }
+                    }
+                    Button("重置为全部 · 最新 · 第1页") {
+                        typeID = 0
+                        order = "dateline"
+                        pageInputFocused = false
+                        optionsPresented = false
+                        Task { await reload() }
+                    }
+                }
+                .navigationTitle("列表选项")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { pageInputFocused = false; optionsPresented = false }
+                } }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
         .onChange(of: store.threadReplacementRevision) { _, _ in
             visibleThreadID = store.threads.first?.id
             pageInput = ""
@@ -93,36 +124,19 @@ struct ThreadListView: View {
         }
     }
 
-    private var boardHeader: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(board.name)
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(ForumChrome.text)
-                Text(board.meta.isEmpty ? "版块主题 · 浏览与交流" : board.meta)
-                    .font(.caption)
-                    .foregroundStyle(ForumChrome.secondary)
-                    .lineLimit(1)
+    private var compactToolbar: some View {
+        HStack(spacing: 8) {
+            Text("\(store.threadTypes.first(where: { $0.id == typeID })?.name ?? "全部") · \(orders.first(where: { $0.0 == order })?.1 ?? "最新") · 第\(store.threadSelectedPage)页" + (store.threadPage > store.threadSelectedPage ? "–\(store.threadPage)页" : ""))
+                .font(.caption).foregroundStyle(ForumChrome.secondary).lineLimit(1)
+            Spacer(minLength: 0)
+            Button { optionsPresented = true } label: {
+                Label("选项", systemImage: "slider.horizontal.3").font(.subheadline)
             }
-            Spacer(minLength: 8)
-            NavigationLink {
-                LoginWebView(url: session.url("forum.php?mod=post&action=newthread&fid=\(board.id)&mobile=2"), title: "发帖 · 网页表单")
-            } label: {
-                Label("发帖", systemImage: "square.and.pencil")
-                    .font(.system(size: 14, weight: .semibold))
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: 36)
-                    .foregroundStyle(ForumChrome.blue)
-                    .background(ForumChrome.blue.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-            }
-            .buttonStyle(ForumPressStyle())
-            .accessibilityLabel("发帖，打开网页表单")
+            .accessibilityLabel("筛选、排序与页码选项")
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .frame(height: 40)
         .background(ForumChrome.bar)
-        .overlay(alignment: .bottom) { ForumChrome.line.frame(height: 0.5) }
     }
 
     private var typeBar: some View {
@@ -131,6 +145,7 @@ struct ThreadListView: View {
                 ForEach(store.threadTypes) { t in
                     Button {
                         typeID = t.id
+                        optionsPresented = false
                         Task { await reload() }
                     } label: {
                         Text(t.name)
@@ -158,6 +173,7 @@ struct ThreadListView: View {
             ForEach(orders, id: \.0) { item in
                 Button {
                     order = item.0
+                    optionsPresented = false
                     Task { await reload() }
                 } label: {
                     Text(item.1)
@@ -177,11 +193,11 @@ struct ThreadListView: View {
     private var pageBar: some View {
         VStack(spacing: 4) {
             HStack(spacing: 10) {
-                Button("上一页") { Task { await store.selectThreadPage(store.threadSelectedPage - 1) } }
+                Button("上一页") { optionsPresented = false; Task { await store.selectThreadPage(store.threadSelectedPage - 1) } }
                     .disabled(store.threadSelectedPage <= 1 || store.threadState == .loading)
                 Text("第 \(store.threadSelectedPage) 页" + (store.threadTotalPages.map { " / \($0)" } ?? ""))
                     .monospacedDigit()
-                Button("下一页") { Task { await store.selectThreadPage(store.threadSelectedPage + 1) } }
+                Button("下一页") { optionsPresented = false; Task { await store.selectThreadPage(store.threadSelectedPage + 1) } }
                     .disabled(store.threadState == .loading || (store.threadTotalPages.map { store.threadSelectedPage >= $0 } ?? (!store.threadHasNext && store.threadPage == store.threadSelectedPage)))
                 Spacer(minLength: 0)
                 TextField("页码", text: $pageInput)
@@ -196,6 +212,7 @@ struct ThreadListView: View {
                         return
                     }
                     pageInputFocused = false
+                    optionsPresented = false
                     Task { await store.selectThreadPage(page) }
                 }
                 .disabled(store.threadState == .loading)
