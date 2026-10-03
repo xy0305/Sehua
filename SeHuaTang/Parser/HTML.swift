@@ -155,6 +155,33 @@ enum HTML {
         case richText([Inline])
         case text(String)
         case image(URL)
+        case emoticon(Emoticon)
+    }
+
+    /// Semantic Discuz smileys only; query strings and unrelated static assets are not evidence.
+    struct Emoticon: Hashable {
+        let url: URL
+        let width: Double
+        let height: Double
+        let alt: String
+    }
+
+    static func emoticon(in tag: String, url: URL) -> Emoticon? {
+        let classes = (attribute("class", in: tag) ?? "").lowercased().split(whereSeparator: { $0.isWhitespace })
+        let path = url.path.lowercased()
+        let smileyPath = path.hasPrefix("/static/image/smiley/") || path.contains("/static/image/smiley/")
+        let semantic = attribute("smilieid", in: tag) != nil || classes.contains("smilie") || classes.contains("smiley")
+        guard smileyPath || semantic else { return nil }
+        func dimension(_ name: String) -> Double? {
+            guard let raw = attribute(name, in: tag), let value = Double(raw), value.isFinite, value > 0 else { return nil }
+            return value
+        }
+        let w = dimension("width")
+        let h = dimension("height")
+        let width = w ?? h ?? 28
+        let height = h ?? w ?? 28
+        let scale = min(1, 32 / max(width, height))
+        return Emoticon(url: url, width: width * scale, height: height * scale, alt: attribute("alt", in: tag) ?? "表情")
     }
 
     /// Split at actual image tags, retaining text/image/text order and lazy image URLs.
@@ -189,7 +216,10 @@ enum HTML {
             case "a": href = token.closing ? nil : attribute("href", in: token.raw)
             case "img":
                 flush()
-                if let url = imageURLs(in: token.raw, base: base, excludingDecorations: false).first { result.append(.image(url)) }
+                if let url = imageURLs(in: token.raw, base: base, excludingDecorations: false).first {
+                    if let smiley = emoticon(in: token.raw, url: url) { result.append(.emoticon(smiley)) }
+                    else { result.append(.image(url)) }
+                }
             case "br": append("\n")
             case "p", "div", "center", "li", "blockquote", "tr", "section", "pre", "font", "span", "b", "strong":
                 let block = ["p", "div", "center", "li", "blockquote", "tr", "section", "pre"].contains(token.name)
@@ -223,7 +253,7 @@ enum HTML {
                 guard let value = attribute(key, in: tag), let url = absURL(value, base: base),
                       ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { continue }
                 let path = url.path.lowercased()
-                if excludingDecorations && (path.contains("/uc_server/") || path.contains("/avatar") || path.contains("noavatar") || path.contains("/static/image/") || path.contains("/smiley/")) { continue }
+                if excludingDecorations && (emoticon(in: tag, url: url) != nil || path.contains("/uc_server/") || path.contains("/avatar") || path.contains("noavatar") || path.contains("/static/image/") || path.contains("/smiley/")) { continue }
                 // Only one URL per tag; never choose the last matching attribute by greediness.
                 return seen.insert(url.absoluteString).inserted ? url : nil
             }

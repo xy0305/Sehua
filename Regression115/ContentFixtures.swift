@@ -40,6 +40,25 @@ struct ContentFixtures {
         precondition(tricky.posts[0].plainText.hasSuffix("最后\n一行"))
         let pieces = HTML.orderedContent(in: "<p>前文</p><img data-src='/one.jpg' src='/static/image/loading.gif'><p>中间</p><img zoomfile='/two.jpg'><p>尾文</p>", base: base)
         precondition(pieces == [.text("前文"), .image(URL(string: "https://example.test/one.jpg")!), .text("中间"), .image(URL(string: "https://example.test/two.jpg")!), .text("尾文")])
+        let smileyHTML = "前文<img src='static/image/smiley/default/smile.gif?v=2' width='24' height='20'>后文<blockquote>引用<img smilieid='7' src='/custom/animated.gif' width='200' height='100'></blockquote><img src='/preview.jpg' width='16' height='16'><img src='/static/image/decor.gif'><img src='/preview.png?fake=/static/image/smiley/default/smile.gif'><img class='smilie-extra' src='/small.png'><img class='smilie' src='/custom/icon.gif'><img src='/static/image/smiley/default/x.gif' width='NaN' height='-2'>"
+        let smileyPost = parse("<div id='pid1'><div class='message'>\(smileyHTML)</div></div>").posts[0]
+        let smileyBlocks = HTML.orderedContent(in: smileyPost.htmlBody, base: base)
+        let smileys = smileyBlocks.compactMap { block -> HTML.Emoticon? in
+            if case .emoticon(let item) = block { return item }; return nil
+        }
+        let media = smileyBlocks.compactMap { block -> URL? in
+            if case .image(let url) = block { return url }; return nil
+        }
+        precondition(smileys.count == 4 && media.count == 4)
+        precondition(smileyBlocks.prefix(3).count == 3)
+        guard case .text("前文") = smileyBlocks[0], case .emoticon = smileyBlocks[1], case .text("后文") = smileyBlocks[2] else { fatalError("smiley text order") }
+        precondition(smileys[0].width == 24 && smileys[0].height == 20 && smileys[0].url.query == "v=2")
+        precondition(smileys[1].width == 32 && smileys[1].height == 16)
+        precondition(smileys[2].width == 28 && smileys[3].height == 28)
+        precondition(smileys.allSatisfy { max($0.width, $0.height) <= 32 })
+        precondition(!smileyPost.images.contains { $0.path == "/custom/animated.gif" || $0.path == "/custom/icon.gif" })
+        precondition(media.map(\.path) == ["/preview.jpg", "/static/image/decor.gif", "/preview.png", "/small.png"])
+        print("PASS: production semantic smiley classification, relative/query URLs, quoted GIF, bounded render size, dimensions, non-smiley decorations/previews, text order")
         let pager = #"""
         <a href='forum.php?mod=viewthread&amp;tid=42&amp;page=3'>3</a>
         <a href='forum.php?mod=post&amp;action=reply&amp;tid=42&amp;page=2'>回复</a>

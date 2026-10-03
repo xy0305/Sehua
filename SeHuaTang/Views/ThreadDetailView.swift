@@ -254,6 +254,12 @@ struct ThreadDetailView: View {
                                     .lineSpacing(6)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .textSelection(.enabled)
+                            case .emoticon(let smiley):
+                                SiteImage(url: smiley.url, contentMode: .fit, preservesIntrinsicAspectRatio: false) {
+                                    Color.clear
+                                }
+                                .frame(width: smiley.width, height: smiley.height)
+                                .accessibilityLabel(smiley.alt)
                             case .images(let urls):
                                 imageStrip(urls)
                             }
@@ -383,6 +389,7 @@ struct ThreadDetailView: View {
         case richText([HTML.Inline])
         case text(String)
         case images([URL])
+        case emoticon(HTML.Emoticon)
     }
 
     private func bodyBlocks(_ html: String) -> [BodyBlock] {
@@ -391,6 +398,7 @@ struct ThreadDetailView: View {
             switch fragment {
             case .richText(let runs): result.append(.richText(runs))
             case .text(let text): result.append(.text(text))
+            case .emoticon(let smiley): result.append(.emoticon(smiley))
             case .image(let url):
                 result.append(.images([url]))
             }
