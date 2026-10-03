@@ -113,7 +113,7 @@ extension SHT115HTTP {
         for index in 0..<20 {
             let page: SHT115Page
             if index == 0, let firstPage { page = firstPage }
-            else { page = try await page(cid: cid, offset: index * 100, settings: settings) }
+            else { page = try await self.page(cid: cid, offset: index * 100, settings: settings) }
             let ids = page.entries.map { ($0.isDirectory ? "d" : "f") + $0.id }
             guard ids.allSatisfy({ !seen.contains($0) }), Set(ids).count == ids.count else { throw SHT115Error.unsafeListing }
             seen.formUnion(ids); entries += page.entries
