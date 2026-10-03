@@ -68,6 +68,11 @@ jobs:
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/SubmissionFixtures.swift -o /tmp/submission-fixtures
           /tmp/submission-fixtures
 
+      - name: Submission performance controlled latency fixtures
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/PerformanceFixtures.swift -o /tmp/performance-fixtures
+          /tmp/performance-fixtures
+
       - name: Directory and extraction fixtures
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/ExtractionFixtures.swift -o /tmp/extraction-fixtures

@@ -521,7 +521,15 @@ struct ThreadDetailView: View {
                 resource = try await service.submit(urls: result.links, resourceID: created.id, settings: settings)
             }
             guard let resource else { throw SHT115Error.invalidInput }
-            panStatus = "等待文件"
+            // Submission acceptance is distinct from video readiness. Unknown or
+            // rejected results must not be presented as a completed submission.
+            guard resource.tasks.contains(where: { $0.state == .accepted }) else {
+                panStatus = resource.tasks.contains(where: { $0.state == .unknown || $0.state == .submitting })
+                    ? "提交结果未知，请到115核对；不自动重发"
+                    : "未有已接受任务，请检查提交结果"
+                return
+            }
+            panStatus = "已接受，等待文件"
             for _ in 0..<12 {
                 guard panStatus != nil else { return }
                 let listing = try await service.listVideos(resourceID: resource.id, settings: settings)

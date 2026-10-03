@@ -98,13 +98,22 @@ extension SHT115HTTP {
         }
     }
     func verify(cid: String, parent: String?, settings: SHT115Settings) async throws {
+        _ = try await verifiedPage(cid: cid, parent: parent, settings: settings)
+    }
+    /// Reuse the exact response whose ancestry was checked, not a TTL assumption.
+    /// This avoids immediately fetching offset zero again while keeping fresh
+    /// pre-write and cleanup verification unchanged.
+    func verifiedPage(cid: String, parent: String?, settings: SHT115Settings) async throws -> SHT115Page {
         let page = try await page(cid: cid, offset: 0, settings: settings)
         try Self.verifiedPath(page.path, cid: cid, parent: parent)
+        return page
     }
-    func allEntries(cid: String, settings: SHT115Settings) async throws -> [SHT115Entry] {
+    func allEntries(cid: String, settings: SHT115Settings, firstPage: SHT115Page? = nil) async throws -> [SHT115Entry] {
         var entries: [SHT115Entry] = [], seen = Set<String>()
         for index in 0..<20 {
-            let page = try await page(cid: cid, offset: index * 100, settings: settings)
+            let page: SHT115Page
+            if index == 0, let firstPage { page = firstPage }
+            else { page = try await page(cid: cid, offset: index * 100, settings: settings) }
             let ids = page.entries.map { ($0.isDirectory ? "d" : "f") + $0.id }
             guard ids.allSatisfy({ !seen.contains($0) }), Set(ids).count == ids.count else { throw SHT115Error.unsafeListing }
             seen.formUnion(ids); entries += page.entries
