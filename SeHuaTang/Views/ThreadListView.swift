@@ -243,6 +243,18 @@ struct ThreadCard: View {
     let item: ThreadItem
     @State private var previewPage = 0
     @State private var viewingImage = false
+    @State private var appeared = false
+    @State private var intersectsViewport = false
+    @GestureState private var draggingPreview = false
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var rotates: Bool {
+        PresentationTiming.canRotate(count: item.previewURLs.count, visible: appeared && intersectsViewport,
+            foreground: scenePhase == .active, reducedMotion: reduceMotion,
+            interacting: draggingPreview, viewingImage: viewingImage)
+    }
+    private var rotationKey: String { "\(rotates)-\(previewPage)-\(item.previewURLs.count)" }
 
     private var destination: some View {
         ThreadDetailView(tid: item.id, title: item.title, sourceFID: item.fid)
@@ -298,6 +310,26 @@ struct ThreadCard: View {
                         }
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
+                    .simultaneousGesture(DragGesture(minimumDistance: 5)
+                        .updating($draggingPreview) { _, state, _ in state = true })
+                    .onGeometryChange(for: Bool.self) { proxy in
+                        let rect = proxy.frame(in: .global)
+                        let viewport = UIScreen.main.bounds
+                        return rect.intersects(viewport) && rect.width > 0 && rect.height > 0
+                    } action: { intersectsViewport = $0 }
+                    .onAppear { appeared = true }
+                    .onDisappear { appeared = false; intersectsViewport = false }
+                    .task(id: rotationKey) {
+                        guard rotates else { return }
+                        do {
+                            try await Task.sleep(nanoseconds: UInt64(PresentationTiming.carouselInterval * 1_000_000_000))
+                            try Task.checkCancellation()
+                            guard rotates else { return }
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                previewPage = (previewPage + 1) % item.previewURLs.count
+                            }
+                        } catch { /* Leaving the viewport or manual input cancels the tick. */ }
+                    }
                     .frame(height: height)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(alignment: .bottomTrailing) {

@@ -102,6 +102,11 @@ jobs:
           xcrun swiftc -parse-as-library SeHuaTang/Parser/HTML.swift SeHuaTang/Models/Models.swift SeHuaTang/Parser/SiteAccountParser.swift Regression115/SiteAccountFixtures.swift -o /tmp/account-fixtures
           /tmp/account-fixtures
 
+      - name: Production presentation timing fixtures
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Models/PresentationTiming.swift Regression115/PresentationTimingFixtures.swift -o /tmp/presentation-fixtures
+          /tmp/presentation-fixtures
+
       - name: Build unsigned (iphoneos)
         run: |
           set -euo pipefail

@@ -22,6 +22,7 @@ final class WebSession: NSObject, ObservableObject {
     private var activeNavigation: WKNavigation?
     private var ageGateRequestID: UUID?
     private var collectGen = 0
+    private var commitSamplerGen: Int?
 
     var baseURL: URL { URL(string: "https://\(host)")! }
 
@@ -194,12 +195,16 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
         collectGen += 1
         let gen = collectGen
         clickAgeGateIfNeeded(id: id, gen: gen)
+        commitSamplerGen = gen
         collectHTML(attempt: 0, id: id, gen: gen)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard let id = requestID(for: navigation), id == activeID,
               navigation === activeNavigation else { return }
+        // Resource completion used to discard the commit sample and impose a
+        // fresh 0.4 + 0.7s window. Reuse it without weakening body stability.
+        guard PresentationTiming.restartSampler(hasCommitSampler: commitSamplerGen == collectGen) else { return }
         collectGen += 1
         let gen = collectGen
         clickAgeGateIfNeeded(id: id, gen: gen)
