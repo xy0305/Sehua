@@ -291,14 +291,8 @@ enum DiscuzParser {
             }
         }
 
-        var attachments: [ThreadAttachment] = []
-        let attHrefs = HTML.allMatches(#"<a[^>]+href="([^"]*mod=attachment[^"]*)"[^>]*>([\s\S]*?)</a>"#, in: html, group: 1)
-        let attNames = HTML.allMatches(#"<a[^>]+href="([^"]*mod=attachment[^"]*)"[^>]*>([\s\S]*?)</a>"#, in: html, group: 2)
-        for (href, name) in zip(attHrefs, attNames) {
-            guard let url = HTML.absURL(href, base: base) else { continue }
-            let n = HTML.stripTags(name)
-            if n.isEmpty { continue }
-            attachments.append(ThreadAttachment(id: url.absoluteString, name: n, url: url))
+        let attachments = HTML.attachmentMarkup(in: html, base: base).files.map {
+            ThreadAttachment(id: $0.url.absoluteString, name: $0.name, url: $0.url, size: $0.size, downloads: $0.downloads)
         }
 
         var posts: [ThreadPost] = []

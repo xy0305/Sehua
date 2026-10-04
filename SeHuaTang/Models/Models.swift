@@ -35,6 +35,8 @@ struct ThreadAttachment: Identifiable, Hashable {
     let id: String
     let name: String
     let url: URL
+    var size: String? = nil
+    var downloads: String? = nil
     var isMagnet: Bool { url.scheme?.lowercased() == "magnet" }
     var isED2K: Bool { url.scheme?.lowercased() == "ed2k" }
 }

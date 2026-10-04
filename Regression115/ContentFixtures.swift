@@ -11,6 +11,27 @@ struct ContentFixtures {
         func parse(_ html: String) -> ThreadDetail {
             DiscuzParser.parseThreadDetail(html, tid: 42, base: base)
         }
+        let attachmentHTML = #"前文<dl class='tattl'><dt><img src='static/image/filetype/txt.gif'></dt><dd><p class='attnm'><a href='forum.php?mod=attachment&amp;aid=abc'>目录树.txt</a></p><p>(965Bytes, 下载次数: 7)</p></dd></dl>尾文<img src='/resource-long.jpg' width='16'><img src='/static/image/decor.gif'><img src='/static/image/unknown.gif'><img src='/static/image/filetype/zip.gif'>"#
+        let attachmentBlocks = HTML.orderedContent(in: attachmentHTML, base: base)
+        guard case .text("前文") = attachmentBlocks[0], case .attachment(let file) = attachmentBlocks[1], case .text("尾文") = attachmentBlocks[2] else { fatalError("attachment order") }
+        precondition(file.name == "目录树.txt" && file.size == "965Bytes" && file.downloads == "7")
+        precondition(file.url.absoluteString == "https://example.test/forum.php?mod=attachment&aid=abc")
+        guard case .attachmentIcon(let orphan) = attachmentBlocks.last else { fatalError("orphan compact icon") }
+        precondition(orphan.path == "/static/image/filetype/zip.gif")
+        let attachmentMedia = attachmentBlocks.compactMap { block -> URL? in if case .image(let url) = block { return url }; return nil }
+        precondition(attachmentMedia.map(\.path) == ["/resource-long.jpg", "/static/image/decor.gif", "/static/image/unknown.gif"])
+        let duplicate = HTML.attachmentMarkup(in: attachmentHTML + "<a href='forum.php?mod=attachment&amp;aid=abc'>目录树.txt</a>", base: base)
+        precondition(duplicate.files.count == 1)
+        let anchorIcon = "<a class='attachfile' href='/download/archive.zip'><img src='/custom/file.gif'>archive.zip</a>"
+        let anchorBlocks = HTML.orderedContent(in: anchorIcon, base: base)
+        precondition(anchorBlocks.count == 1)
+        guard case .attachment(let archive) = anchorBlocks[0] else { fatalError("anchor icon") }
+        precondition(archive.name == "archive.zip" && archive.size == nil && archive.downloads == nil)
+        let parsedAttachment = parse("<div class='message'>\(attachmentHTML)</div>")
+        precondition(parsedAttachment.attachments.count == 1 && parsedAttachment.attachments[0].size == "965Bytes")
+        precondition(parsedAttachment.images.map(\.path) == ["/resource-long.jpg"])
+        precondition(HTML.attachmentMarkup(in: "<p class='attnm'>无链接<img src='/static/image/filetype/txt.gif'></p>", base: base).files.isEmpty)
+        print("PASS: attachment components/anchor icons excluded from media, native metadata/order, relative URLs, orphan compact icons, duplicate control, resource and unknown static images retained")
         let mixed = #"""
         <title>测试 - 版块 - 论坛</title>
         <div id='pid10'><div class='message'>第一段<div>嵌套尾段</div></div>

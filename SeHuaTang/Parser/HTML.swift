@@ -156,6 +156,8 @@ enum HTML {
         case text(String)
         case image(URL)
         case emoticon(Emoticon)
+        case attachment(Attachment)
+        case attachmentIcon(URL)
     }
 
     /// Semantic Discuz smileys only; query strings and unrelated static assets are not evidence.
@@ -184,9 +186,62 @@ enum HTML {
         return Emoticon(url: url, width: width * scale, height: height * scale, alt: attribute("alt", in: tag) ?? "表情")
     }
 
+    struct Attachment: Hashable {
+        let url: URL
+        let name: String
+        var size: String? = nil
+        var downloads: String? = nil
+    }
+
+    static func isAttachmentIcon(_ url: URL) -> Bool {
+        let path = url.path.lowercased()
+        return path.contains("/static/image/filetype/") || path.contains("/images/attachicons/")
+    }
+
+    private static func attachmentURL(_ tag: String, base: URL) -> URL? {
+        guard let href = attribute("href", in: tag), let url = absURL(href, base: base),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let discuz = query.contains { $0.name == "mod" && $0.value == "attachment" }
+        let marked = hasClass("attachfile", in: tag) || (attribute("id", in: tag) ?? "").hasPrefix("attach_")
+        return discuz || marked ? url : nil
+    }
+
+    /// Balanced attachment components only; no generic static/image or size heuristic.
+    static func attachmentMarkup(in source: String, base: URL) -> (html: String, files: [Attachment]) {
+        var html = source
+        var files: [Attachment] = []
+        var seen = Set<String>()
+        func replace(_ component: String) {
+            let anchors = elements(in: component, tag: "a")
+            let candidates = anchors.compactMap { anchor -> (URL, String)? in
+                guard let url = attachmentURL(anchor, base: base) else { return nil }
+                return (url, stripTags(anchor))
+            }
+            guard let selected = candidates.first(where: { !$0.1.isEmpty }) ?? candidates.first else { return }
+            let text = plainText(component)
+            let item = Attachment(url: selected.0, name: selected.1.isEmpty ? "附件" : selected.1,
+                size: firstMatch(#"(?i)(\d+(?:\.\d+)?\s*(?:Bytes|KB|MB|GB|KiB|MiB|GiB))\b"#, in: text),
+                downloads: firstMatch(#"下载(?:次数)?\s*[:：]?\s*(\d+)"#, in: text))
+            let marker: String
+            if seen.insert(item.url.absoluteString).inserted {
+                marker = "<shtattachment index='\(files.count)'/>"
+                files.append(item)
+            } else { marker = "" }
+            if let range = html.range(of: component) { html.replaceSubrange(range, with: marker) }
+        }
+        for component in elements(in: html, matching: { tag in
+            ["tattl", "attnm", "attachfile"].contains { hasClass($0, in: tag) }
+                || (attribute("id", in: tag) ?? "").hasPrefix("attachdiv_")
+        }) { replace(component) }
+        for anchor in elements(in: html, tag: "a") where attachmentURL(anchor, base: base) != nil { replace(anchor) }
+        return (html, files)
+    }
+
     /// Split at actual image tags, retaining text/image/text order and lazy image URLs.
     static func orderedContent(in source: String, base: URL) -> [Content] {
-        let html = source.replacingOccurrences(of: #"(?is)<(script|style)\b[^>]*>[\s\S]*?</\1\s*>|<!--[\s\S]*?-->"#, with: "", options: .regularExpression)
+        let markup = attachmentMarkup(in: source, base: base)
+        let html = markup.html.replacingOccurrences(of: #"(?is)<(script|style)\b[^>]*>[\s\S]*?</\1\s*>|<!--[\s\S]*?-->"#, with: "", options: .regularExpression)
         var result: [Content] = []
         var runs: [Inline] = []
         var href: String?
@@ -213,11 +268,15 @@ enum HTML {
         for token in tags(html) {
             append(String(html[cursor..<token.range.lowerBound]))
             switch token.name {
+            case "shtattachment":
+                flush()
+                if let index = attribute("index", in: token.raw).flatMap(Int.init), markup.files.indices.contains(index) { result.append(.attachment(markup.files[index])) }
             case "a": href = token.closing ? nil : attribute("href", in: token.raw)
             case "img":
                 flush()
                 if let url = imageURLs(in: token.raw, base: base, excludingDecorations: false).first {
                     if let smiley = emoticon(in: token.raw, url: url) { result.append(.emoticon(smiley)) }
+                    else if isAttachmentIcon(url) { result.append(.attachmentIcon(url)) }
                     else { result.append(.image(url)) }
                 }
             case "br": append("\n")
@@ -248,11 +307,12 @@ enum HTML {
 
     static func imageURLs(in html: String, base: URL, excludingDecorations: Bool = true) -> [URL] {
         var seen = Set<String>()
-        return elements(in: html, tag: "img").compactMap { tag in
+        return elements(in: attachmentMarkup(in: html, base: base).html, tag: "img").compactMap { tag in
             for key in ["zoomfile", "file", "data-original", "data-src", "src"] {
                 guard let value = attribute(key, in: tag), let url = absURL(value, base: base),
                       ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { continue }
                 let path = url.path.lowercased()
+                if excludingDecorations && isAttachmentIcon(url) { continue }
                 if excludingDecorations && (emoticon(in: tag, url: url) != nil || path.contains("/uc_server/") || path.contains("/avatar") || path.contains("noavatar") || path.contains("/static/image/") || path.contains("/smiley/")) { continue }
                 // Only one URL per tag; never choose the last matching attribute by greediness.
                 return seen.insert(url.absoluteString).inserted ? url : nil

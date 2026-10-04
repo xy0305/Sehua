@@ -193,36 +193,11 @@ struct ThreadDetailView: View {
                         .padding(.bottom, 16)
                 }
 
-                if !d.magnets.isEmpty || !d.attachments.isEmpty {
+                if !d.magnets.isEmpty || !remainingAttachments(d).isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("下载附件").font(.caption.weight(.medium)).foregroundStyle(ForumChrome.secondary)
-                        ForEach(d.magnets + d.attachments) { m in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: m.isMagnet ? "link" : "arrow.down.doc")
-                                        .foregroundStyle(ForumChrome.blue)
-                                    Text(m.isMagnet ? "磁力链接" : (m.isED2K ? "eD2k" : m.name))
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                HStack(spacing: 12) {
-                                    Spacer()
-                                    Button(copiedAttachmentID == m.id ? "已复制" : "复制") {
-                                        UIPasteboard.general.string = m.url.absoluteString
-                                        copiedAttachmentID = m.id
-                                }
-                                    .font(.system(size: 13, weight: .semibold))
-                                    if !m.isMagnet && !m.isED2K && (m.name.lowercased().hasSuffix(".txt") || m.url.pathExtension.lowercased() == "txt") {
-                                        NavigationLink("阅读") { TextAttachmentView(attachment: m) }
-                                            .font(.system(size: 13, weight: .semibold))
-                                    } else {
-                                        Button("打开") { openBodyLink(m.url) }
-                                            .font(.system(size: 13, weight: .semibold))
-                                }
-                                }
-                                }
-                            .font(.subheadline)
-                            .buttonStyle(.bordered)
-                            .frame(minHeight: 44)
+                        ForEach(d.magnets + remainingAttachments(d)) { m in
+                            attachmentRow(m)
                         }
                     }
                     .padding(16)
@@ -254,6 +229,12 @@ struct ThreadDetailView: View {
                                     .lineSpacing(6)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .textSelection(.enabled)
+                            case .attachment(let item):
+                                attachmentRow(ThreadAttachment(id: item.url.absoluteString, name: item.name, url: item.url, size: item.size, downloads: item.downloads))
+                            case .attachmentIcon(let url):
+                                SiteImage(url: url, contentMode: .fit) { Image(systemName: "doc") }
+                                    .frame(width: 28, height: 28)
+                                    .accessibilityLabel("附件图标（无可识别下载链接）")
                             case .emoticon(let smiley):
                                 SiteImage(url: smiley.url, contentMode: .fit, preservesIntrinsicAspectRatio: false) {
                                     Color.clear
@@ -390,6 +371,8 @@ struct ThreadDetailView: View {
         case text(String)
         case images([URL])
         case emoticon(HTML.Emoticon)
+        case attachment(HTML.Attachment)
+        case attachmentIcon(URL)
     }
 
     private func bodyBlocks(_ html: String) -> [BodyBlock] {
@@ -398,12 +381,44 @@ struct ThreadDetailView: View {
             switch fragment {
             case .richText(let runs): result.append(.richText(runs))
             case .text(let text): result.append(.text(text))
+            case .attachment(let item): result.append(.attachment(item))
+            case .attachmentIcon(let url): result.append(.attachmentIcon(url))
             case .emoticon(let smiley): result.append(.emoticon(smiley))
             case .image(let url):
                 result.append(.images([url]))
             }
         }
         return result
+    }
+
+    private func remainingAttachments(_ detail: ThreadDetail) -> [ThreadAttachment] {
+        let inlineIDs = Set(detail.posts.flatMap { HTML.attachmentMarkup(in: $0.htmlBody, base: postURL).files.map { $0.url.absoluteString } })
+        return detail.attachments.filter { !inlineIDs.contains($0.id) }
+    }
+
+    private func attachmentRow(_ item: ThreadAttachment) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: item.isMagnet || item.isED2K ? "link" : "doc.text")
+                .font(.system(size: 24)).foregroundStyle(ForumChrome.blue)
+                .frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.name).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                if item.size != nil || item.downloads != nil {
+                    Text([item.size, item.downloads.map { "下载 \($0)" }].compactMap { $0 }.joined(separator: " · "))
+                        .font(.caption).foregroundStyle(ForumChrome.secondary)
+                }
+                HStack(spacing: 12) {
+                    Button(copiedAttachmentID == item.id ? "已复制" : "复制") {
+                        UIPasteboard.general.string = item.url.absoluteString
+                        copiedAttachmentID = item.id
+                    }
+                    if item.name.lowercased().hasSuffix(".txt") || item.url.pathExtension.lowercased() == "txt" {
+                        NavigationLink("阅读") { TextAttachmentView(attachment: item) }
+                    }
+                    Button("打开") { openBodyLink(item.url) }
+                }.font(.system(size: 13, weight: .semibold)).buttonStyle(.bordered)
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
     }
 
     private func openBodyLink(_ url: URL) {
