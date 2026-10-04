@@ -22,6 +22,29 @@ struct ContentFixtures {
         precondition(attachmentMedia.map(\.path) == ["/resource-long.jpg", "/static/image/decor.gif", "/static/image/unknown.gif"])
         let duplicate = HTML.attachmentMarkup(in: attachmentHTML + "<a href='forum.php?mod=attachment&amp;aid=abc'>目录树.txt</a>", base: base)
         precondition(duplicate.files.count == 1)
+        var gate = ThreadRequestGate()
+        let firstRequest = gate.begin(tid: 42, source: base)!
+        precondition(gate.begin(tid: 42, source: base) == nil)
+        precondition(gate.accepts(firstRequest, tid: 42, source: base))
+        precondition(!gate.accepts(firstRequest, tid: 43, source: base))
+        precondition(!gate.accepts(firstRequest, tid: 42, source: URL(string: "https://example.test/thread-42-2-1.html")!))
+        gate.invalidate()
+        precondition(!gate.accepts(firstRequest, tid: 42, source: base))
+        let refreshRequest = gate.begin(tid: 42, source: base)!
+        gate.finish(firstRequest)
+        precondition(gate.accepts(refreshRequest, tid: 42, source: base))
+        var visible = parsedRefreshFixture("隐藏内容请回复")
+        let oldVisible = visible
+        gate.finish(refreshRequest) // failed refresh performs no assignment
+        precondition(visible.posts == oldVisible.posts)
+        let retry = gate.begin(tid: 42, source: base)!
+        if gate.accepts(retry, tid: 42, source: base) {
+            visible = parse("<div class='message'>\(attachmentHTML)</div>")
+        }
+        gate.finish(retry)
+        precondition(visible.attachments.count == 1 && !visible.posts[0].plainText.contains("隐藏内容请回复"))
+        func parsedRefreshFixture(_ text: String) -> ThreadDetail { parse("<div class='message'>\(text)</div>") }
+        print("PASS: refresh generation, duplicate fetch guard, source/tid identity, failure preserves content, retry replaces parsed hidden content and attachments")
         let anchorIcon = "<a class='attachfile' href='/download/archive.zip'><img src='/custom/file.gif'>archive.zip</a>"
         let anchorBlocks = HTML.orderedContent(in: anchorIcon, base: base)
         precondition(anchorBlocks.count == 1)

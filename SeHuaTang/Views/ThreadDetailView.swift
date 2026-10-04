@@ -11,6 +11,7 @@ struct ThreadDetailView: View {
     @ObservedObject private var library = ReadingLibrary.shared
     @State private var detail: ThreadDetail?
     @State private var state: LoadState = .idle
+    @State private var requestGate = ThreadRequestGate()
     @State private var copied = false
     @State private var playVideos: [SHT115Video] = []
     @State private var showPlayer = false
@@ -70,9 +71,13 @@ struct ThreadDetailView: View {
             openBodyLink(url)
             return .handled
         })
-        .task {
+        .task(id: postURL) {
             library.record(readingItem)
-            if detail == nil { await load() }
+            await load()
+        }
+        .onDisappear {
+            requestGate.invalidate()
+            if state == .loading { state = .idle }
         }
     }
 
@@ -83,6 +88,16 @@ struct ThreadDetailView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(ForumChrome.secondary)
             Spacer()
+            Button { Task { await load() } } label: {
+                if state == .loading {
+                    ProgressView().frame(width: 44, height: 44)
+                } else {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                        .font(.system(size: 13, weight: .medium)).frame(minHeight: 44)
+                }
+            }
+            .disabled(state == .loading || loadingReplies)
+            .accessibilityHint("重新读取当前来源页；回复完成后可刷新隐藏资源。已追加回复将重置，不会自动回复或提交115")
             NavigationLink {
                 LoginWebView(url: session.url("home.php?mod=spacecp&ac=favorite&type=thread&id=\(tid)&mobile=2"), title: "站点收藏 · 确认表单")
             } label: {
@@ -629,12 +644,17 @@ struct ThreadDetailView: View {
         }
     }
 
-    private func load() async {
-        guard !loadingReplies, state != .loading, !Task.isCancelled else { return }
+    @MainActor private func load() async {
+        let requestedURL = postURL
+        let requestedTID = tid
+        guard !loadingReplies, state != .loading, !Task.isCancelled,
+              let token = requestGate.begin(tid: requestedTID, source: requestedURL) else { return }
         state = .loading
+        defer { requestGate.finish(token) }
         do {
-            let html = try await session.fetchHTML(postURL.absoluteString)
+            let html = try await session.fetchHTML(requestedURL.absoluteString)
             try Task.checkCancellation()
+            guard requestGate.accepts(token, tid: tid, source: postURL) else { return }
             if DiscuzParser.looksLikeChallenge(html) {
                 state = .failed("需要过验证，到「我的」里打开网页")
                 return
@@ -651,6 +671,7 @@ struct ThreadDetailView: View {
             library.record(readingItem)
             state = .idle
         } catch {
+            guard requestGate.accepts(token, tid: tid, source: postURL) else { return }
             state = error is CancellationError ? .idle : .failed(error.localizedDescription)
         }
     }

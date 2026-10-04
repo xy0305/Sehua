@@ -8,6 +8,29 @@ private struct HTMLTag {
     let range: Range<String.Index>
 }
 
+/// Shared request generation guard: refresh never commits a stale or different-source result.
+struct ThreadRequestGate {
+    private(set) var generation = 0
+    private(set) var source: URL?
+    private(set) var tid: Int?
+    private(set) var busy = false
+    mutating func begin(tid: Int, source: URL) -> Int? {
+        guard !busy else { return nil }
+        generation += 1
+        self.tid = tid
+        self.source = source
+        busy = true
+        return generation
+    }
+    func accepts(_ token: Int, tid: Int, source: URL) -> Bool {
+        busy && generation == token && self.tid == tid && self.source == source
+    }
+    mutating func finish(_ token: Int) {
+        if generation == token { busy = false }
+    }
+    mutating func invalidate() { generation += 1; busy = false }
+}
+
 enum HTML {
     static func unescape(_ s: String) -> String {
         let decoded = s.replacingOccurrences(of: "&amp;", with: "&")
