@@ -24,6 +24,9 @@ struct ThreadDetailView: View {
     @State private var profile: MemberRoute?
     @State private var linkRoute: SiteRoute?
     @State private var tappedLinkURL: URL?
+    @State private var showNativeReply = false
+    @State private var replyDraft = ""
+    @State private var publishedReply: NativeReplyProtocol.Success?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -71,6 +74,13 @@ struct ThreadDetailView: View {
             openBodyLink(url)
             return .handled
         })
+        .sheet(isPresented: $showNativeReply) {
+            NativeReplySheet(tid: tid, fid: detail?.fid ?? sourceFID, title: detail?.title ?? title,
+                             fallbackURL: postURL, draft: $replyDraft) { result in
+                publishedReply = result
+                Task { await load() }
+            }
+        }
         .task(id: postURL) {
             library.record(readingItem)
             if detail == nil || requestGate.source != postURL || requestGate.tid != tid { await load() }
@@ -300,20 +310,29 @@ struct ThreadDetailView: View {
         }
         .refreshable { await load() }
         .safeAreaInset(edge: .bottom) {
-            actionBar(d)
+            VStack(spacing: 6) {
+                if let result = publishedReply {
+                    NavigationLink {
+                        ThreadDetailView(tid: tid, title: title, sourceFID: d.fid, sourceURL: result.url)
+                    } label: {
+                        Label("回复已发布 · 第\(result.page)页 · 查看新回复", systemImage: "checkmark.circle")
+                            .font(.footnote)
+                    }
+                }
+                actionBar(d)
+            }
         }
     }
 
     private func actionBar(_ d: ThreadDetail) -> some View {
         HStack(spacing: 8) {
-            if let url = d.replyURL {
-                NavigationLink {
-                    LoginWebView(url: url, title: "回复 · 网页表单")
-                } label: {
-                    Label("网页回复", systemImage: "square.and.pencil")
-                        .frame(maxWidth: .infinity, minHeight: 40)
-                }
+            Button {
+                showNativeReply = true
+            } label: {
+                Label("回复", systemImage: "square.and.pencil")
+                    .frame(maxWidth: .infinity, minHeight: 40)
             }
+            .disabled(state == .loading || loadingReplies)
             if let url = d.favoriteURL {
                 NavigationLink {
                     LoginWebView(url: url, title: "站点收藏 · 网页表单")
