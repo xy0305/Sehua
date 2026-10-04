@@ -47,7 +47,8 @@ jobs:
         run: |
           python3 Regression115/AttachmentHTTPFixture.py > /tmp/attachment-http.log 2>&1 &
           FIXTURE_PID=$!
-          trap 'kill "$FIXTURE_PID"' EXIT
+          trap 'cat /tmp/attachment-http.log; kill "$FIXTURE_PID"' EXIT
+          curl --noproxy '*' --retry 3 --retry-connrefused --max-time 10 -f http://127.0.0.1:18763/ed2k > /dev/null
           xcrun swiftc -parse-as-library SeHuaTang/Models/Models.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Integration115/ResourceLinkExtractor.swift SeHuaTang/Integration115/SmallArchiveReader.swift Regression115/ResourceLinkExtractorFixtures.swift -o /tmp/resource-link-fixtures
           /tmp/resource-link-fixtures
 
