@@ -34,14 +34,22 @@ enum NativeReplyProtocol {
         if let fid { return q.filter({ $0.name == "fid" }).count == 1 && q.first(where: { $0.name == "fid" })?.value == String(fid) }
         return true
     }
-    static func form(_ html: String, base: URL, tid: Int, fid: Int) throws -> Form {
+    static func form(_ html: String, base: URL, tid: Int, fid: Int, emptyFileInputs: Set<String> = []) throws -> Form {
+        // Strict, bounded Discuz XML envelope; no entities, DTD, or script execution.
+        guard html.utf8.count < 1_048_576, !html.lowercased().contains("<!doctype"), !html.lowercased().contains("<!entity") else { throw ReplyError.unsupported }
+        var source = html
+        if html.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<?xml") || html.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<root>") {
+            guard let payload = HTML.firstMatch(#"(?s)^\s*(?:<\?xml[^>]*>\s*)?<root>\s*<!\[CDATA\[(.*?)\]\]>\s*</root>\s*$"#, in: html) else { throw ReplyError.unsupported }
+            source = payload
+        }
         // Only live markup in the selected reply form is relevant. Script strings and
         // templates elsewhere in Discuz pages do not imply a required challenge.
-        let html = html.replacingOccurrences(of: #"(?is)<script\b[^>]*>.*?</script>|<!--.*?-->|<template\b[^>]*>.*?</template>"#, with: "", options: .regularExpression)
+        let html = source.replacingOccurrences(of: #"(?is)<script\b[^>]*>.*?</script>|<!--.*?-->|<template\b[^>]*>.*?</template>"#, with: "", options: .regularExpression)
         let forms = HTML.allMatches(#"(?is)<form\b[^>]*>.*?</form>"#, in: html, group: 0)
         for markup in forms {
             guard let raw = HTML.attribute("action", in: markup), let action = URL(string: raw, relativeTo: base)?.absoluteURL,
                   safe(action, base: base, tid: tid, fid: fid) else { continue }
+            guard HTML.attribute("method", in: markup)?.lowercased() == "post" else { throw ReplyError.diagnostic("回复表单方法不支持") }
             let q = URLComponents(url: action, resolvingAgainstBaseURL: true)?.queryItems ?? []
             guard q.first(where: { $0.name == "mod" })?.value == "post", q.first(where: { $0.name == "action" })?.value == "reply" else { continue }
             if HTML.firstMatch(#"(?is)<(?:input|textarea|select)\b[^>]*\bname\s*=\s*[\"']?(?:seccode|secqa|captcha)"#, in: markup, group: 0) != nil ||
@@ -61,6 +69,15 @@ enum NativeReplyProtocol {
                 if HTML.firstMatch(#"(?i)\sdisabled(?:\s|=|/?>)"#, in: tag, group: 0) != nil { continue }
                 if ["submit", "button", "reset"].contains(type) { continue }
                 if type == "checkbox" && HTML.firstMatch(#"(?i)\bchecked\b"#, in: tag, group: 0) == nil { continue }
+                if type == "file" {
+                    guard name == "Filedata", emptyFileInputs.contains(name),
+                          (HTML.attribute("value", in: tag) ?? "").isEmpty,
+                          HTML.firstMatch(#"(?i)\srequired(?:\s|=|/?>)"#, in: tag, group: 0) == nil else {
+                        throw fieldError(name, "附件上传不支持或未确认文件为空")
+                    }
+                    // Text-only request: omit only this verified optional empty upload.
+                    continue
+                }
                 guard allowed.contains(name) else { throw fieldError(name, "回复表单含不支持的字段") }
                 guard fields[name] == nil else { throw fieldError(name, "回复表单含重复字段") }
                 guard ["hidden", "text", "checkbox"].contains(type) else { throw fieldError(name, "回复表单控件类型不支持") }

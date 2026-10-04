@@ -210,7 +210,7 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
         let delay: TimeInterval = attempt == 0 ? 0.4 : 0.7
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.activeID == id, gen == self.collectGen else { return }
-            self.webView.evaluateJavaScript("({html: document.documentElement.outerHTML, ready: document.readyState})") { [weak self] result, error in
+            self.webView.evaluateJavaScript("({html: document.contentType.includes('xml') ? new XMLSerializer().serializeToString(document) : document.documentElement.outerHTML, ready: document.readyState})") { [weak self] result, error in
                 let snapshot = result as? [String: Any]
                 let html = (snapshot?["html"] as? String) ?? ""
                 let documentReady = (snapshot?["ready"] as? String) == "complete"
@@ -257,7 +257,7 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
                             return
                         }
                     }
-                    let ready = html.contains("n5_htnrbt") || html.contains("class=\"btdb\"") || html.contains("n5_bbsbk")
+                    let ready = (documentReady && html.contains("id=\"postform\"")) || html.contains("n5_htnrbt") || html.contains("class=\"btdb\"") || html.contains("n5_bbsbk")
                         || html.contains("class=\"message\"") || html.contains("n5_htmk")
                         || html.contains("n5_hdlbmk")
                         || self.isSpacePage(html, target: target)

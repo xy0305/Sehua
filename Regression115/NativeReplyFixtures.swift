@@ -50,6 +50,35 @@ import Foundation
         for bad in ["<html>HTTP200</html>", "<root>bad</root>", xml.replacingOccurrences(of: "forum.php?mod=viewthread", with: "https://evil.invalid/forum.php?mod=viewthread"), xml.replacingOccurrences(of: "'tid':'3807868'", with: "'tid':'2'"), xml.replacingOccurrences(of: "'pid':'71235431'", with: "'pid':'1'")] {
             rejects { _ = try NativeReplyProtocol.success(bad, base: base, tid: tid) }
         }
+        // Read-only live mobile postform sampled 2026-10-04, tid=3804384/fid=141.
+        // Public title normalized; credential and clock replaced. No authenticated page stored.
+        let live = """
+        <form method="post" id="postform" enctype="multipart/form-data" action="forum.php?mod=post&amp;action=reply&amp;fid=141&amp;tid=3804384&amp;extra=&amp;replysubmit=yes&amp;mobile=2">
+        <input type="hidden" name="formhash" id="formhash" value="SYNTHETIC_ONLY">
+        <input type="hidden" name="posttime" id="posttime" value="1234567890">
+        <input type="hidden" name="wysiwyg" id="e_mode" value="1">
+        <input type="hidden" name="noticeauthor" value=""><input type="hidden" name="noticetrimstr" value=""><input type="hidden" name="noticeauthormsg" value="">
+        <div class="n5_fbztnr cl"><ul class="cl"><li><div class="cl"><div class="n5_fbztbt inbox"><div>RE: PUBLIC_TITLE</div></div></div></li>
+        <div id="container" class="n5_fbbqqj cl"><div class="n5_nrbjcr cl"><li><a href="JavaScript:void(0)" id="message_face" class="n5_bqanys"></a></li>
+        <li><a href="javascript:;" id="addimg" class="n5_bqantp"><input type="file" name="Filedata" id="filedata" style="width: 25px;opacity:0;"></a></li></div>
+        <li class="n5_fbztxx area cl"><textarea class="pt mtm nrk" id="needmessage" tabindex="3" autocomplete="off" name="message" cols="80" rows="2" placeholder="内容" fwin="reply"></textarea></li></div></ul>
+        <ul id="imglist" class="post_imglist cl"></ul><span class="n5_fbztdtb"><button id="postsubmit" class="btn_pn btn_pn_grey" disable="true"><span>回复</span></button></span></div></form>
+        """
+        // Live DOM files.length == 0 and required == false, not inferred from HTML value.
+        for sample in [live, "<?xml version='1.0'?><root><![CDATA[" + live + "]]></root>"] {
+            let actual = try NativeReplyProtocol.form(sample, base: base, tid: 3804384, fid: 141, emptyFileInputs: ["Filedata"])
+            precondition(actual.fields["Filedata"] == nil && actual.fields["wysiwyg"] == "1" && actual.fields["posttime"] == "1234567890")
+            precondition(actual.fields["formhash"] == "SYNTHETIC_ONLY" && HTML.queryInt("tid", in: actual.action.absoluteString) == 3804384)
+        }
+        rejects { _ = try NativeReplyProtocol.form(live, base: base, tid: 3804384, fid: 141) }
+        for bad in [live.replacingOccurrences(of: "type=\"file\"", with: "type=\"file\" required"), live.replacingOccurrences(of: "type=\"file\"", with: "type=\"file\" value=\"selected.jpg\""), live.replacingOccurrences(of: "name=\"Filedata\"", with: "name=\"OtherUpload\""), live.replacingOccurrences(of: "</form>", with: "<input type='hidden' name='attachment' value='1'></form>"), live.replacingOccurrences(of: "</form>", with: "<input name='seccodeverify'></form>"), live.replacingOccurrences(of: "name=\"noticeauthor\" value=\"\"", with: "name=\"noticeauthor\" value=\"123\"")] {
+            rejects { _ = try NativeReplyProtocol.form(bad, base: base, tid: 3804384, fid: 141, emptyFileInputs: ["Filedata"]) }
+        }
+        rejects { _ = try NativeReplyProtocol.form("<!DOCTYPE root>" + live, base: base, tid: 3804384, fid: 141) }
+        // page belongs to URL, not callback object; omitting object.page is valid.
+        let page45 = xml.replacingOccurrences(of: "page=5", with: "page=45")
+        let page45Result = try NativeReplyProtocol.success(page45, base: base, tid: tid)
+        precondition(page45Result.page == 45)
         let failed = "<root><![CDATA[<script>errorhandle_reply('回复时间间隔限制',{});</script>]]></root>"
         do { _ = try NativeReplyProtocol.success(failed, base: base, tid: tid); fatalError() }
         catch NativeReplyProtocol.ReplyError.rejected {} 

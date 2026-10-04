@@ -22,10 +22,11 @@ private final class ReplyRedirectGuard: NSObject, URLSessionTaskDelegate, @unche
         sending.insert(identity)
         defer { sending.remove(identity) }
         // GET only. Re-fetch dynamic credentials at the actual user-confirmed send.
-        let url = session.url("forum.php?mod=post&action=reply&fid=\(fid)&tid=\(tid)&infloat=yes")
+        let url = session.url("forum.php?mod=post&action=reply&fid=\(fid)&tid=\(tid)&mobile=2")
         let html = try await session.fetchHTML(url.absoluteString)
         guard session.baseURL == base, session.webView.url.map({ NativeReplyProtocol.safe($0, base: base, tid: tid, fid: fid) }) == true else { throw NativeReplyProtocol.ReplyError.unsupported }
-        var form = try NativeReplyProtocol.form(html, base: base, tid: tid, fid: fid)
+        let emptyFiles = (try? await session.webView.evaluateJavaScript("Array.from(document.querySelectorAll('#postform input[type=file]')).filter(e => e.name === 'Filedata' && !e.required && !e.disabled && e.files && e.files.length === 0).map(e => e.name)") as? [String]) ?? []
+        var form = try NativeReplyProtocol.form(html, base: base, tid: tid, fid: fid, emptyFileInputs: Set(emptyFiles))
         form.fields["message"] = message
         let cookies = await session.webView.configuration.websiteDataStore.httpCookieStore.allCookies()
         let configuration = URLSessionConfiguration.ephemeral

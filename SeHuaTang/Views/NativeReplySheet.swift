@@ -22,7 +22,7 @@ struct NativeReplySheet: View {
                 Text("\(draft.count) 字").font(.caption).foregroundStyle(.secondary)
                 if let message { Text(message).font(.footnote).foregroundStyle(.orange) }
                 if service.locked(host: session.host, tid: tid) {
-                    Text("此前发送结果未知，原生重发已锁定。请先查看原帖确认，勿直接再次发送。").font(.footnote).foregroundStyle(.orange)
+                    Text("此前请求已发出但结果未知（也可能已成功、旧版未识别成功回包），本主题原生重发保持锁定。升级不会解锁。请只查看原帖确认，勿再次发布。").font(.footnote).foregroundStyle(.orange)
                 }
                 NavigationLink("在应用内网页查看原帖 / 处理验证") {
                     LoginWebView(url: fallbackURL, title: "原帖 / 回复验证")
