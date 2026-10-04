@@ -73,10 +73,11 @@ struct ThreadDetailView: View {
         })
         .task(id: postURL) {
             library.record(readingItem)
-            await load()
+            if detail == nil || requestGate.source != postURL || requestGate.tid != tid { await load() }
         }
         .onDisappear {
             requestGate.invalidate()
+            loadingReplies = false
             if state == .loading { state = .idle }
         }
     }
@@ -565,14 +566,21 @@ struct ThreadDetailView: View {
 
     private var postURL: URL { sourceURL ?? session.url("forum.php?mod=viewthread&tid=\(tid)&mobile=2") }
 
-    private func loadMoreReplies() async {
-        guard !loadingReplies, state != .loading, let url = nextPageURL else { return }
+    @MainActor private func loadMoreReplies() async {
+        let origin = postURL
+        let requestedTID = tid
+        guard !loadingReplies, state != .loading, let url = nextPageURL,
+              let token = requestGate.begin(tid: requestedTID, source: origin) else { return }
         loadingReplies = true
         replyLoadError = nil
-        defer { loadingReplies = false }
+        defer {
+            if requestGate.generation == token { loadingReplies = false }
+            requestGate.finish(token)
+        }
         do {
             let html = try await session.fetchHTML(url.absoluteString)
             try Task.checkCancellation()
+            guard requestGate.accepts(token, tid: tid, source: postURL) else { return }
             guard !DiscuzParser.looksLikeChallenge(html) else {
                 replyLoadError = "需要网页验证；已加载正文仍保留，可完成验证后重试"
                 return
@@ -592,6 +600,7 @@ struct ThreadDetailView: View {
             loadedPage = page
             nextPageURL = DiscuzParser.nextThreadPage(in: html, tid: tid, base: url, page: page)
         } catch {
+            guard requestGate.accepts(token, tid: tid, source: postURL) else { return }
             if !(error is CancellationError) { replyLoadError = error.localizedDescription }
         }
     }
