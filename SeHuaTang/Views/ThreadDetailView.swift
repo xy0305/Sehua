@@ -575,9 +575,11 @@ struct ThreadDetailView: View {
             let existing = await service.resources().first { $0.tid == String(d.tid) && $0.parentCID == settings.parentCID && $0.directoryCID != nil }
             var resource = existing
             if existing?.tasks.contains(where: { $0.state == .accepted }) != true {
-                panStatus = "提交中"
+                panStatus = "提取中"
                 let result = try await ResourceLinkExtractor.extractResult(detail: d, base: postURL)
+                panStatus = "115目录阶段"
                 let created = try await service.createOrReuseResource(tid: String(d.tid), title: d.title.isEmpty ? title : d.title, settings: settings)
+                panStatus = "115提交阶段"
                 resource = try await service.submit(urls: result.links, resourceID: created.id, settings: settings)
             }
             guard let resource else { throw SHT115Error.invalidInput }
@@ -608,7 +610,7 @@ struct ThreadDetailView: View {
             }
             panStatus = "已提交，文件未就绪"
         } catch {
-            panStatus = SHT115Settings.safeMessage(error)
+            panStatus = error is ResourceLinkExtractor.ExtractionError ? ResourceLinkExtractor.safeMessage(error) : (error is URLError ? "\(panStatus ?? "115读取阶段")：URLError \((error as! URLError).code.rawValue)；请核对任务，不自动重发。" : SHT115Settings.safeMessage(error))
         }
     }
 

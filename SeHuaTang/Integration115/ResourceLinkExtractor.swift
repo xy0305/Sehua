@@ -36,7 +36,7 @@ enum ResourceLinkExtractor {
         var errorDescription: String? {
             switch self {
             case .noValidLinks(let warnings):
-                return "资源提取阶段：未提取到有效磁力或 ed2k 链接。" + warnings.map { "\($0.attachmentName)：\($0.message)" }.joined(separator: "；")
+                return "资源提取阶段：未提取到有效磁力或 ed2k 链接。" + warnings.enumerated().map { "附件\($0.offset + 1)：\($0.element.message)" }.joined(separator: "；")
             case .attachment(let message): return message
             }
         }
@@ -158,7 +158,7 @@ enum ResourceLinkExtractor {
         var text = entities(text)
         for scalar in ["\u{200B}", "\u{200C}", "\u{200D}", "\u{FEFF}"] { text = text.replacingOccurrences(of: scalar, with: "") }
         // Match Foundation-encoded ed2k pipes, but never decode magnet parameters.
-        let pattern = #"magnet:\?[^\s<>\"'，。；、]+|ed2k://(?:\||%7c)file(?:\||%7c)[^\r\n<>\"']*?(?:\||%7c)/(?=$|\s|[<>\"'，。；、\])】）)])"#
+        let pattern = #"magnet:\?[^\s<>\"'，。；、]+|ed2k://(?:\||%7c)file(?:\||%7c)[^|\r\n<>]+(?:\||%7c)[0-9]+(?:\||%7c)[a-f0-9]{32}(?:(?:\||%7c)h=[a-z2-7]{3,64})?(?:\||%7c)/(?=$|\s|[<>\"'，。；、\])】）)])"#
         var seen = Set<String>()
         return HTML.allMatches(pattern, in: text, group: 0).compactMap { raw in
             var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -166,7 +166,8 @@ enum ResourceLinkExtractor {
             if value.lowercased().hasPrefix("ed2k://") {
                 value = value.replacingOccurrences(of: "%7c", with: "|", options: .caseInsensitive)
                 value = value.replacingOccurrences(of: #"\s+"#, with: "%20", options: .regularExpression)
-                guard matches(#"^ed2k://\|file\|[^|]+\|\d+\|[a-f0-9]{32}(?:\|[^|]+)*\|/$"#, value) else { return nil }
+                guard matches(#"^ed2k://\|file\|[^|<>\r\n]+\|[0-9]+\|[a-f0-9]{32}(?:\|h=[a-z2-7]{3,64})?\|/$"#, value),
+                      let size = UInt64(value.components(separatedBy: "|")[3]), size > 0 else { return nil }
             } else {
                 guard matches(#"[?&]xt=urn:(?:btih:(?:[a-f0-9]{40}|[a-z2-7]{32})|btmh:1220[a-f0-9]{64})(?=&|$)"#, value) else { return nil }
             }
@@ -176,7 +177,7 @@ enum ResourceLinkExtractor {
 
     private static func entities(_ value: String) -> String {
         var text = HTML.unescape(value)
-        for (name, replacement) in [("&colon;", ":"), ("&sol;", "/"), ("&vert;", "|"), ("&VerticalLine;", "|"), ("&quest;", "?"), ("&equals;", "="), ("&Tab;", "\t"), ("&NewLine;", "\n")] {
+        for (name, replacement) in [("&apos;", "'"), ("&colon;", ":"), ("&sol;", "/"), ("&vert;", "|"), ("&VerticalLine;", "|"), ("&quest;", "?"), ("&equals;", "="), ("&Tab;", "\t"), ("&NewLine;", "\n")] {
             text = text.replacingOccurrences(of: name, with: replacement)
         }
         return text
@@ -279,37 +280,39 @@ enum ResourceLinkExtractor {
         return String(data: data, encoding: .utf8) ?? String(data: data, encoding: gb18030)
     }
 
-    static func readSmallAttachment(_ url: URL, referer: URL) async throws -> Data {
-        try Task.checkCancellation()
-        guard ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { throw ExtractionError.attachment("不支持的附件协议。") }
-        #if canImport(WebKit)
-        let cookies = await defaultCookies()
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 25
-        configuration.timeoutIntervalForResource = 30
-        configuration.urlCache = nil
-        for cookie in cookies { configuration.httpCookieStorage?.setCookie(cookie) }
-        let client = URLSession(configuration: configuration)
-        defer { client.invalidateAndCancel() }
-        var request = URLRequest(url: url)
-        request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer")
-        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
-        let (bytes, response) = try await client.bytes(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { throw ExtractionError.attachment("附件 HTTP 请求失败，请检查登录及下载权限。") }
-        guard response.expectedContentLength <= Int64(maximumArchiveBytes) else { throw ExtractionError.attachment("压缩包超过 1 MB，不在 App 内解压。") }
-        var data = Data()
-        for try await byte in bytes {
-            guard data.count < maximumArchiveBytes else { throw ExtractionError.attachment("压缩包超过 1 MB，不在 App 内解压。") }
-            data.append(byte)
-        }
-        return data
-        #else
-        throw ExtractionError.attachment("当前平台没有 WebKit，请注入离线压缩包数据。")
-        #endif
+    static func safeMessage(_ error: Error) -> String {
+        if let error = error as? ExtractionError { return error.localizedDescription }
+        if let error = error as? URLError { return "附件下载阶段：URLError \(error.code.rawValue)，未提交115。" }
+        if error is CancellationError { return "资源提取已取消，未提交115。" }
+        return "资源提取阶段：读取失败，未提交115；可在资源页查看诊断。"
     }
 
-    /// Same in-memory transport as TextAttachmentView; no UI dependency.
+    static func validateAttachmentResponse(_ response: URLResponse, maximumBytes: Int) throws {
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw ExtractionError.attachment("附件下载阶段：HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)，未提交115。")
+        }
+        guard response.expectedContentLength <= Int64(maximumBytes) else {
+            throw ExtractionError.attachment("附件下载阶段：超过 \(maximumBytes / 1024 / 1024) MB 内存读取上限。")
+        }
+        guard response.mimeType?.lowercased().contains("html") != true else {
+            throw ExtractionError.attachment("附件下载阶段：返回登录、验证或下载中转 HTML，未提交115。")
+        }
+    }
+
+    static func readSmallAttachment(_ url: URL, referer: URL) async throws -> Data {
+        try await readAttachment(url, referer: referer, maximumBytes: maximumArchiveBytes).0
+    }
+
     static func readTextAttachment(_ url: URL, referer: URL) async throws -> String {
+        let (data, response) = try await readAttachment(url, referer: referer, maximumBytes: maximumTextBytes)
+        return try attachmentText(data, mimeType: response.mimeType)
+    }
+
+    /// One transport for archive extraction, TXT extraction and native TXT preview.
+    /// URLSession follows redirects and scopes WK cookies by original domain/path/secure;
+    /// never manually forward a Cookie header or rebind cookies to a mirror/CDN host.
+    static func readAttachment(_ url: URL, referer: URL, maximumBytes: Int) async throws -> (Data, URLResponse) {
+        try Task.checkCancellation()
         guard ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { throw ExtractionError.attachment("不支持的附件协议。") }
         #if canImport(WebKit)
         let cookies = await defaultCookies()
@@ -317,6 +320,7 @@ enum ResourceLinkExtractor {
         configuration.timeoutIntervalForRequest = 25
         configuration.timeoutIntervalForResource = 30
         configuration.urlCache = nil
+        configuration.httpCookieAcceptPolicy = .always
         for cookie in cookies { configuration.httpCookieStorage?.setCookie(cookie) }
         let client = URLSession(configuration: configuration)
         defer { client.invalidateAndCancel() }
@@ -324,18 +328,16 @@ enum ResourceLinkExtractor {
         request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer")
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
         let (bytes, response) = try await client.bytes(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { throw ExtractionError.attachment("附件 HTTP 请求失败，请检查登录及下载权限。") }
-        guard response.expectedContentLength <= Int64(maximumTextBytes) else { throw ExtractionError.attachment("TXT 超过 4 MB 内存读取上限。") }
-        guard response.mimeType?.lowercased().contains("html") != true else { throw ExtractionError.attachment("返回登录、验证或权限 HTML，而非 TXT。") }
+        try validateAttachmentResponse(response, maximumBytes: maximumBytes)
         var data = Data()
         for try await byte in bytes {
-            guard data.count < maximumTextBytes else { throw ExtractionError.attachment("TXT 超过 4 MB 内存读取上限。") }
+            guard data.count < maximumBytes else { throw ExtractionError.attachment("附件下载阶段：超出内存读取上限，未提交115。") }
             data.append(byte)
         }
         try Task.checkCancellation()
-        return try attachmentText(data, mimeType: response.mimeType)
+        return (data, response)
         #else
-        throw ExtractionError.attachment("当前平台没有 WebKit，请注入离线 TXT loader。")
+        throw ExtractionError.attachment("当前平台没有 WebKit，请使用支持的设备。")
         #endif
     }
     #if canImport(WebKit)

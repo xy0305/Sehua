@@ -109,6 +109,44 @@ import Foundation
             _ = try ResourceLinkExtractor.attachmentText(Data(ed.utf8), mimeType: "text/html")
             preconditionFailure("HTML MIME must be rejected")
         } catch ResourceLinkExtractor.ExtractionError.attachment {}
-        print("ResourceLinkExtractor offline fixtures passed")
+        let actual = "ed2k://|file|www.98T.la@[AlinaxMei] My best friend's Asian girlfriend got a creampie.mp4|1776335157|F9521F774DC30A5FE980E23DCDEF19C7|/"
+        let normalized = actual.replacingOccurrences(of: " ", with: "%20")
+        let oldPattern = #"ed2k://(?:\||%7c)file(?:\||%7c)[^\r\n<>\"']*?(?:\||%7c)/"#
+        require(HTML.allMatches(oldPattern, in: actual, group: 0).isEmpty, "1.10.11 reproduces apostrophe truncation on supplied real body")
+        for variant in [actual, actual.replacingOccurrences(of: "'", with: "&#39;"), actual.replacingOccurrences(of: "'", with: "&apos;"), normalized, normalized.replacingOccurrences(of: "'", with: "%27")] {
+            let expected = variant.contains("%27") ? normalized.replacingOccurrences(of: "'", with: "%27") : normalized
+            let text = try ResourceLinkExtractor.attachmentText(Data(variant.utf8), mimeType: "application/octet-stream")
+            require(ResourceLinkExtractor.links(in: text) == [expected], "real text decoding and field extraction")
+            let bodyResult = try await ResourceLinkExtractor.extractResult(detail: detail("<div class='blockcode'><code>" + variant + "</code></div>"), base: base)
+            require(bodyResult.links == [expected], "real code block without injected loader")
+        }
+        let failedAttachment = try await ResourceLinkExtractor.extractResult(detail: detail("<code>" + actual + "</code>", [extensionless]), base: base) { _, _ in
+            throw URLError(.notConnectedToInternet)
+        }
+        require(failedAttachment.links == [normalized] && failedAttachment.warnings.count == 1, "valid real body survives attachment failure")
+        for invalid in [actual.replacingOccurrences(of: "|1776335157|", with: "|0|"), actual.replacingOccurrences(of: "|1776335157|", with: "|999999999999999999999999|"), actual.replacingOccurrences(of: "friend's", with: "friend<br>s"), actual.replacingOccurrences(of: "|/", with: "|evil|/"), String(actual.dropLast()), actual.replacingOccurrences(of: "friend's", with: "friend\ns")] {
+            require(ResourceLinkExtractor.links(in: invalid).isEmpty, "reject broken or malicious field structure")
+        }
+        let forbidden = HTTPURLResponse(url: URL(string: "https://forum.invalid/forum.php?aid=SECRET")!, statusCode: 403, httpVersion: nil, headerFields: [:])!
+        do {
+            try ResourceLinkExtractor.validateAttachmentResponse(forbidden, maximumBytes: ResourceLinkExtractor.maximumTextBytes)
+            preconditionFailure("403 accepted")
+        } catch {
+            let message = ResourceLinkExtractor.safeMessage(error)
+            require(message.contains("403") && !message.contains("SECRET") && !message.contains("forum.invalid"), "HTTP status without signed URL")
+        }
+        require(ResourceLinkExtractor.safeMessage(URLError(.timedOut)).contains("-1001"), "URLError numeric diagnostic")
+        let local = URL(string: "http://127.0.0.1:18763/thread")!
+        for path in ["ed2k", "redirect", "headers"] {
+            let text = try await ResourceLinkExtractor.readTextAttachment(URL(string: "http://127.0.0.1:18763/" + path)!, referer: local)
+            require(ResourceLinkExtractor.links(in: text) == [normalized], "production URLSession streaming, redirect and headers")
+        }
+        for path in ["forbidden", "html", "binary"] {
+            do {
+                _ = try await ResourceLinkExtractor.readTextAttachment(URL(string: "http://127.0.0.1:18763/" + path)!, referer: local)
+                preconditionFailure("production transport accepted permission/binary response")
+            } catch ResourceLinkExtractor.ExtractionError.attachment {}
+        }
+        print("ResourceLinkExtractor offline and production HTTP fixtures passed")
     }
 }

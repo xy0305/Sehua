@@ -45,6 +45,9 @@ jobs:
 
       - name: Resource link extraction fixtures
         run: |
+          python3 Regression115/AttachmentHTTPFixture.py > /tmp/attachment-http.log 2>&1 &
+          FIXTURE_PID=$!
+          trap 'kill "$FIXTURE_PID"' EXIT
           xcrun swiftc -parse-as-library SeHuaTang/Models/Models.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Integration115/ResourceLinkExtractor.swift SeHuaTang/Integration115/SmallArchiveReader.swift Regression115/ResourceLinkExtractorFixtures.swift -o /tmp/resource-link-fixtures
           /tmp/resource-link-fixtures
 

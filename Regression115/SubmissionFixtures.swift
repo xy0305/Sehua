@@ -17,7 +17,7 @@ final class Mock115Protocol: URLProtocol, @unchecked Sendable {
 
 /// Compile with Integration115/*.swift (not the other @main fixtures). No real network.
 @main struct SubmissionFixtures {
-    static let ed = "ed2k://|file|中文 movie%20&+.mkv|42|" + String(repeating: "a", count: 32) + "|h=ABC|/"
+    static let ed = "ed2k://|file|www.98T.la@[AlinaxMei]%20My%20best%20friend's%20Asian%20girlfriend%20got%20a%20creampie.mp4|1776335157|F9521F774DC30A5FE980E23DCDEF19C7|/"
     static func body(_ request: URLRequest) -> [String: String] {
         var data = request.httpBody ?? Data()
         if data.isEmpty, let stream = request.httpBodyStream {

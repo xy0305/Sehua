@@ -157,7 +157,7 @@ struct Pan115ResourceView: View {
         switch source {
         case .body(let postID): return "帖子正文（post \(postID)）"
         case .detailLink: return "帖子详情中的资源链接"
-        case .attachment(let name, let url): return "TXT 附件 \(name) · \(url.absoluteString)"
+        case .attachment(let name, let url): return "TXT 附件 \(name)"
         }
     }
 
