@@ -16,6 +16,26 @@ import Foundation
         """
         let parsed = try NativeReplyProtocol.form(form, base: base, tid: tid, fid: fid)
         precondition(parsed.fields["formhash"] == "SYNTHETIC_ONLY" && parsed.fields["usesig"] == "1")
+        // PC/mobile safe optional controls: empty security hash is not a challenge.
+        let optional = "<input type='hidden' name='sechash' value=''><input type='hidden' name='from' value=''><input type='hidden' name='posttime' value='123'><input type='hidden' name='wysiwyg' value='0'><input type='hidden' name='fid' value='141'><input type='hidden' name='tid' value='3807868'><input name='ignored_disabled' disabled><input type='checkbox' name='unused' value='1'>"
+        let pc = form.replacingOccurrences(of: "</form>", with: optional + "<script>var template = \"<input name='seccodeverify'><div id='captcha'></div>\";</script></form>")
+        let mobile = form.replacingOccurrences(of: "<input type=\"hidden\" name=\"noticeauthormsg\" value=\"\">", with: "<textarea name='noticeauthormsg'></textarea>")
+        for good in [pc, mobile, "<div id='captcha_elsewhere'></div>" + form, form.replacingOccurrences(of: "</form>", with: "<!-- <input name='seccodeverify'> --><template><input name='captcha'></template></form>")] {
+            let accepted = try NativeReplyProtocol.form(good, base: base, tid: tid, fid: fid)
+            precondition(accepted.fields["noticeauthor"] == "" && accepted.fields["noticeauthormsg"] == "")
+        }
+        func diagnostic(_ markup: String, contains category: String) {
+            do { _ = try NativeReplyProtocol.form(markup, base: base, tid: tid, fid: fid); fatalError("Expected diagnostic") }
+            catch NativeReplyProtocol.ReplyError.diagnostic(let reason) { precondition(reason.contains(category) && !reason.contains("SECRET_VALUE")) }
+            catch { fatalError("Wrong diagnostic: \(error)") }
+        }
+        diagnostic(form.replacingOccurrences(of: "SYNTHETIC_ONLY", with: ""), contains: "formhash")
+        diagnostic(form.replacingOccurrences(of: "</form>", with: "<input name='from' value='SECRET_VALUE'></form>"), contains: "来源语义")
+        diagnostic(form.replacingOccurrences(of: "</form>", with: "<input name='seccodeverify'></form>"), contains: "验证码")
+        diagnostic(form.replacingOccurrences(of: "</form>", with: "<input name='sechash' value='SECRET_VALUE'></form>"), contains: "安全验证")
+        diagnostic(form.replacingOccurrences(of: "</form>", with: "<input name='required_custom' required value='SECRET_VALUE'></form>"), contains: "required_custom")
+        diagnostic(form.replacingOccurrences(of: "name=\"noticeauthor\" value=\"\"", with: "name=\"noticeauthor\" value=\"SECRET_VALUE\""), contains: "引用回复")
+        diagnostic(form.replacingOccurrences(of: "</form>", with: "<textarea name='noticeauthormsg'>SECRET_VALUE</textarea></form>"), contains: "重复字段")
         let xml = """
         <?xml version="1.0" encoding="utf-8"?><root><![CDATA[<script type="text/javascript" reload="1">succeedhandle_reply('forum.php?mod=viewthread&tid=3807868&pid=71235431&page=5&extra=#pid71235431','非常感谢，回复发布成功，现在将转入主题页',{'fid':'141','tid':'3807868','pid':'71235431','from':'','sechash':''});</script>]]></root>
         """
