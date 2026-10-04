@@ -11,9 +11,9 @@ struct MineView: View {
                 accountCard
                 section("我的积分", symbol: "creditcard") {
                     NavigationLink {
-                        LoginWebView(url: session.url("home.php?mod=spacecp&ac=credit&showcredit=1&mobile=2"), title: "我的积分 · 余额与明细")
+                        SiteAccountView(signing: false)
                     } label: {
-                        webRow("查看站点实际积分 / 明细")
+                        webRow("查看真实积分余额 / 明细")
                     }
                     .buttonStyle(ForumPressStyle())
                     Text("余额及积分类型以站点登录页为准；未登录时请完成验证后重试。")
@@ -22,9 +22,9 @@ struct MineView: View {
                 }
                 section("每日签到", symbol: "calendar.badge.checkmark") {
                     NavigationLink {
-                        LoginWebView(url: URL(string: "https://sehuatang.org/plugin.php?id=dd_sign&mobile=2")!, title: "每日签到")
+                        SiteAccountView(signing: true)
                     } label: {
-                        webRow("打开站内签到页")
+                        webRow("查看今日签到 / 累计奖励")
                     }
                     .buttonStyle(ForumPressStyle())
                     Text("复用站点登录会话；请在网页中手动签到。")

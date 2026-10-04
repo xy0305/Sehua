@@ -68,6 +68,15 @@ struct SiteFollowingView: View {
                 return
             }
             let links = HTML.elements(in: html, tag: "a")
+            if selected == 1 && HTML.stripTags(html).contains("广播功能尚未开启") {
+                entries = []
+                nextURL = nil
+                loadedSection = selected
+                cachedEntries[selected] = []
+                cachedNext[selected] = nil
+                status = "站点明确返回：广播功能尚未开启，当前不提供关注用户列表。"
+                return
+            }
             // Restrict native records to list rows, never global headers/account navigation.
             let containers = HTML.elements(in: html, tag: "li") + HTML.elements(in: html, tag: "tr")
             let rows = containers.flatMap { HTML.elements(in: $0, tag: "a") }
@@ -80,6 +89,8 @@ struct SiteFollowingView: View {
                 let id = selected == 0 ? HTML.queryInt("tid", in: href) : HTML.queryInt("uid", in: href)
                 guard let id, id > 0, seen.insert(id).inserted else { continue }
                 if selected == 1 && !href.contains("mod=space") { continue }
+                if selected == 0 && !href.contains("mod=viewthread") && !href.contains("thread-") { continue }
+                guard let candidate = HTML.absURL(href, base: url), candidate.host == url.host else { continue }
                 parsed.append(SiteEntry(id: id, title: title))
             }
             if reset && parsed.isEmpty {
