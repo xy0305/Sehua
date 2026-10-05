@@ -129,7 +129,7 @@ extension SHT115HTTP {
 
 /// Reserve start slots across all service instances, like tang115 MIN_115_GAP_MS.
 /// No automatic retry, especially no retry of an ambiguous POST.
-private actor SHT115RequestPacer {
+actor SHT115RequestPacer {
     static let shared = SHT115RequestPacer()
     private var lastStart: UInt64 = 0
     func wait() async throws {

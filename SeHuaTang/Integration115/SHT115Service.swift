@@ -277,34 +277,9 @@ public actor SHT115Service {
         try await begin(); defer { end() }
         let listing = try await scan(resourceID: video.resourceID, settings: settings, maxDepth: 5)
         guard listing.videos.contains(where: { $0.id == video.id && $0.pickCode == video.pickCode && $0.directoryCID == video.directoryCID }), video.pickCode.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) }) else { throw SHT115Error.invalidInput }
-        let headers = SHT115HTTP.headers(settings)
-        let endpoint = "https://115.com/api/video/m3u8/" + video.pickCode + ".m3u8"
-        if let (data, base) = try? await http.data(endpoint, settings: settings), let text = String(data: data, encoding: .utf8), text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXTM3U") {
-            let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            var result: [SHT115PlaybackSource] = [], attributes: String?
-            for line in lines {
-                if line.hasPrefix("#EXT-X-STREAM-INF:") { attributes = line; continue }
-                if let info = attributes, !line.isEmpty, !line.hasPrefix("#") {
-                    if let url = URL(string: line, relativeTo: base)?.absoluteURL, ["http", "https"].contains(url.scheme ?? "") {
-                        let bandwidth = Self.attribute("BANDWIDTH", in: info).flatMap(Int.init) ?? 0
-                        let resolution = Self.attribute("RESOLUTION", in: info) ?? "转码"
-                        result.append(SHT115PlaybackSource(label: resolution, url: url, bandwidth: bandwidth, headers: headers))
-                    }
-                    attributes = nil
-                }
-            }
-            if !result.isEmpty { return result.sorted { $0.bandwidth > $1.bandwidth } }
-            if !text.contains("#EXT-X-STREAM-INF"), text.contains("#EXTINF") { return [SHT115PlaybackSource(label: "HLS", url: base, bandwidth: 0, headers: headers)] }
-        }
-        for host in ["115vod.com", "webapi.115.com"] {
-            let path = host == "115vod.com" ? "/webapi/files/video" : "/files/video"
-            if let obj = try? await http.json("https://" + host + path + "?pickcode=" + video.pickCode + "&local=1", settings: settings) {
-                let data = obj["data"] as? [String: Any] ?? [:]
-                let raw = SHT115HTTP.string(obj["download_url"] ?? obj["video_url"] ?? obj["url"] ?? data["download_url"] ?? data["video_url"] ?? data["url"])
-                if let url = URL(string: raw), ["https", "http"].contains(url.scheme ?? "") { return [SHT115PlaybackSource(label: "原文件（原生播放器可能不支持容器）", url: url, bandwidth: 0, headers: headers)] }
-            }
-        }
-        throw SHT115Error.playbackUnavailable
+        // Source-only by default: HLS must never silently replace the source file.
+        let source = try await http.originalSource(video: video, settings: settings)
+        return [source]
     }
     private static func attribute(_ key: String, in line: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: "(?:[:,])" + key + "=([^,]+)"), let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)), let range = Range(match.range(at: 1), in: line) else { return nil }

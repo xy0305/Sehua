@@ -38,6 +38,11 @@ jobs:
           sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
 
+      - name: Original file playback production regression
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/PlaybackFixtures.swift -o /tmp/playback-fixtures
+          /tmp/playback-fixtures
+
       - name: Production parser regression tests
         run: |
           xcrun swiftc -D PARSER_REGRESSION_TESTS SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift -o /tmp/sehua-parser-tests

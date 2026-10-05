@@ -14,6 +14,7 @@ struct Pan115InlinePlayer: View {
     @State private var source: SHT115PlaybackSource?
     @State private var message = "正在获取播放地址…"
     @State private var failed = false
+    @State private var loadGeneration = UUID()
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -24,7 +25,7 @@ struct Pan115InlinePlayer: View {
                     title: videos.indices.contains(index) ? videos[index].name : title,
                     subtitle: source.label,
                     headers: source.headers
-                )
+                ).id(source.url)
             } else {
                 VStack(spacing: 14) {
                     if !failed { ProgressView().tint(.white) }
@@ -74,6 +75,8 @@ struct Pan115InlinePlayer: View {
 
     @MainActor private func load(_ i: Int) async {
         guard videos.indices.contains(i) else { return }
+        let generation = UUID()
+        loadGeneration = generation
         index = i
         failed = false
         source = nil
@@ -82,10 +85,12 @@ struct Pan115InlinePlayer: View {
             let service = try Pan115UIService.get()
             let sources = try await service.resolvePlayback(video: videos[i], settings: SHT115Settings.load())
             guard let first = sources.first else { throw SHT115Error.playbackUnavailable }
+            guard loadGeneration == generation else { return }
             source = first
         } catch {
+            guard loadGeneration == generation else { return }
             failed = true
-            message = "无法播放。播放地址未就绪，或 KSPlayer 无法打开该流。"
+            message = "原文件直链获取失败或无法解码，请重新获取。不会自动回退转码。"
         }
     }
 }
@@ -101,6 +106,7 @@ struct KSChromePlayer: View {
     @StateObject private var coordinator = KSVideoPlayer.Coordinator()
     @State private var isPlaying = false
     @State private var isBuffering = true
+    @State private var playbackFailed = false
     @State private var hasStarted = false
     @State private var showChrome = true
     @State private var hideTask: Task<Void, Never>?
@@ -189,7 +195,13 @@ struct KSChromePlayer: View {
                 .padding(.top, 72)
                 .padding(.bottom, 92)
                 .zIndex(1)
-            if !hasStarted {
+            if playbackFailed {
+                VStack(spacing: 12) {
+                    Text("原文件播放失败：链接可能过期，或源容器 / 编码不受支持。未自动回退转码。")
+                        .foregroundStyle(.white).multilineTextAlignment(.center)
+                    Button("返回并重新获取原文件") { dismiss() }.foregroundStyle(.white)
+                }.padding(24).background(Color.black.opacity(0.9)).zIndex(30)
+            } else if !hasStarted {
                 ProgressView().tint(.white).scaleEffect(1.15)
                     .allowsHitTesting(false)
             }
@@ -394,6 +406,10 @@ struct KSChromePlayer: View {
 
     private func wireCoordinator() {
         coordinator.isMaskShow = false
+        coordinator.onFinish = { _, error in
+            guard error != nil else { return }
+            Task { @MainActor in playbackFailed = true }
+        }
         coordinator.onStateChanged = { _, state in
             Task { @MainActor in
                 isPlaying = state.isPlaying
