@@ -96,7 +96,7 @@ public actor SHT115Service {
             records[i].directoryWritePending = false; try save(); return records[i]
         }
         let parentPage = try await http.verifiedPage(cid: settings.parentCID, parent: nil, settings: settings)
-        let children = try await http.allEntries(cid: settings.parentCID, settings: settings, firstPage: parentPage)
+        let children = try await http.matchingDirectories(name: records[i].directoryName, parentCID: settings.parentCID, parentPage: parentPage, settings: settings)
         let matches = children.filter { $0.isDirectory && $0.name == records[i].directoryName }
         guard matches.count <= 1 else { throw SHT115Error.ambiguousDirectory }
         if let existing = matches.first {

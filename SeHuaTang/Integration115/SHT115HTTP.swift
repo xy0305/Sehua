@@ -102,7 +102,11 @@ extension SHT115HTTP {
         guard Self.success(obj) else { throw SHT115Diagnostic(stage: "directory-list", outcome: "读取被API拒绝", code: SHT115Diagnostic.apiCode(obj)) }
         let nested = obj["data"] as? [String: Any] ?? [:]
         guard let raw = (obj["data"] as? [[String: Any]]) ?? (nested["list"] as? [[String: Any]]) ?? (obj["files"] as? [[String: Any]]) else { throw SHT115Error.unsafeListing }
-        let entries = try raw.map { item -> SHT115Entry in
+        let entries = try Self.entries(raw)
+        return SHT115Page(entries: entries, total: Int(Self.string(obj["count"] ?? nested["count"])), path: (obj["path"] as? [[String: Any]]) ?? (nested["path"] as? [[String: Any]]) ?? [])
+    }
+    static func entries(_ raw: [[String: Any]]) throws -> [SHT115Entry] {
+        try raw.map { item -> SHT115Entry in
             let fid = Self.string(item["fid"] ?? item["file_id"])
             let directory = fid.isEmpty || fid == "0"
             let id = directory ? Self.string(item["cid"] ?? item["category_id"] ?? item["folder_id"]) : fid
@@ -110,7 +114,6 @@ extension SHT115HTTP {
             return SHT115Entry(id: id, name: Self.string(item["n"] ?? item["name"] ?? item["file_name"] ?? item["category_name"]), isDirectory: directory,
                 pickCode: Self.string(item["pc"] ?? item["pick_code"] ?? item["pickcode"]), size: Int64(Self.string(item["s"] ?? item["file_size"] ?? item["size"])) ?? 0)
         }
-        return SHT115Page(entries: entries, total: Int(Self.string(obj["count"] ?? nested["count"])), path: (obj["path"] as? [[String: Any]]) ?? (nested["path"] as? [[String: Any]]) ?? [])
     }
     static func verifiedPath(_ path: [[String: Any]], cid: String, parent: String?) throws {
         let ids = path.map { string($0["cid"] ?? $0["category_id"] ?? $0["folder_id"]) }
@@ -130,9 +133,12 @@ extension SHT115HTTP {
         try Self.verifiedPath(page.path, cid: cid, parent: parent)
         return page
     }
+    /// A 20-page cap silently fails on real parent folders larger than 2,000
+    /// entries. Keep the identity/count proof, but allow the proven page count.
     func allEntries(cid: String, settings: SHT115Settings, firstPage: SHT115Page? = nil) async throws -> [SHT115Entry] {
         var entries: [SHT115Entry] = [], seen = Set<String>()
-        for index in 0..<20 {
+        let pageLimit = min(500, max(20, ((firstPage?.total ?? 0) + 99) / 100))
+        for index in 0..<pageLimit {
             let page: SHT115Page
             if index == 0, let firstPage { page = firstPage }
             else { page = try await self.page(cid: cid, offset: index * 100, settings: settings) }
@@ -146,6 +152,42 @@ extension SHT115HTTP {
             } else if page.entries.count < 100 { return entries }
         }
         throw SHT115Error.unsafeListing
+    }
+    /// Locate one exact child without requiring a complete scan of a very large parent.
+    /// Search results are not trusted until the candidate's own fresh path verifies it.
+    func matchingDirectories(name: String, parentCID: String, parentPage: SHT115Page, settings: SHT115Settings) async throws -> [SHT115Entry] {
+        var matches = parentPage.entries.filter { $0.isDirectory && $0.name == name }
+        if matches.isEmpty {
+            let query = Self.form([("aid", "1"), ("cid", parentCID), ("search_value", name), ("offset", "0"), ("limit", "20"), ("show_dir", "1"), ("format", "json")])
+            for endpoint in ["https://webapi.115.com/files", "https://aps.115.com/natsort/files.php"] {
+                let obj = try await json(endpoint + "?" + query, settings: settings)
+                guard Self.success(obj) else { continue }
+                let nested = obj["data"] as? [String: Any] ?? [:]
+                let raw = (obj["data"] as? [[String: Any]]) ?? (nested["list"] as? [[String: Any]]) ?? []
+                matches += try Self.entries(raw).filter { $0.isDirectory && $0.name == name }
+                if !matches.isEmpty { break }
+            }
+        }
+        if matches.isEmpty {
+            var narrowed = parentPage
+            let pages = min(500, max(1, ((parentPage.total ?? 0) + 99) / 100))
+            for index in 1..<pages {
+                let page = try await self.page(cid: parentCID, offset: index * 100, settings: settings)
+                guard page.total == parentPage.total else { throw SHT115Error.unsafeListing }
+                narrowed = SHT115Page(entries: narrowed.entries + page.entries, total: page.total, path: narrowed.path)
+                matches = narrowed.entries.filter { $0.isDirectory && $0.name == name }
+                if !matches.isEmpty || narrowed.entries.count == parentPage.total { break }
+            }
+            guard !matches.isEmpty || narrowed.entries.count == parentPage.total else { throw SHT115Error.unsafeListing }
+        }
+        var verified: [SHT115Entry] = [], seen = Set<String>()
+        for match in matches where seen.insert(match.id).inserted {
+            let page = try await verifiedPage(cid: match.id, parent: parentCID, settings: settings)
+            if page.path.compactMap({ Self.string($0["name"] ?? $0["n"]) }).last == name {
+                verified.append(match)
+            }
+        }
+        return verified
     }
 }
 
