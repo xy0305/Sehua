@@ -1,6 +1,12 @@
 import Foundation
 import WebKit
 
+private final class PurchaseRedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
 @MainActor final class NativePurchaseService: ObservableObject {
     static let shared = NativePurchaseService()
     @Published private(set) var sending = Set<String>()
@@ -24,7 +30,7 @@ import WebKit
         configuration.httpShouldSetCookies = false
         configuration.httpCookieStorage = nil
         configuration.timeoutIntervalForRequest = 30
-        let transport = URLSession(configuration: configuration, delegate: ReplyRedirectGuard(), delegateQueue: nil)
+        let transport = URLSession(configuration: configuration, delegate: PurchaseRedirectGuard(), delegateQueue: nil)
         defer { transport.invalidateAndCancel() }
         var request = URLRequest(url: form.action)
         request.httpMethod = "POST"
