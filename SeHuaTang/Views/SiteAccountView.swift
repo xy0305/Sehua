@@ -8,6 +8,7 @@ struct SiteAccountView: View {
     @State private var status = ""
     @State private var busy = false
     @State private var nextURL: URL?
+    @State private var signResult: String?
     private var path: String { signing ? "plugin.php?id=dd_sign&mobile=2" : "home.php?mod=spacecp&ac=credit&showcredit=1&mobile=2" }
     var body: some View {
         List {
@@ -26,14 +27,25 @@ struct SiteAccountView: View {
                 Button("加载下一页明细") { Task { await load(nextURL) } }.disabled(busy)
             }
             Section("必要验证 / 原页兜底") {
-                NavigationLink {
-                    LoginWebView(url: session.url(path), title: signing ? "签到验证码 · 手动完成" : "积分原页 / 登录验证")
-                } label: { Label(signing ? "打开站点完成验证码签到" : "打开积分原页", systemImage: "checkmark.shield") }
-                Text(signing ? "站点当前签到必须先完成交互验证码。应用不会绕过验证码、自动签到或因网络错误重复提交；完成后返回并刷新，以站点今日状态为准。" : "仅只读实际余额及变更记录，不执行兑换、充值或购买。解析失败不表示余额为零。")
+                if signing {
+                    NavigationLink {
+                        SignVerificationView(result: $signResult)
+                    } label: { Label("打开验证码并原生签到", systemImage: "checkmark.shield") }
+                } else {
+                    NavigationLink {
+                        LoginWebView(url: session.url(path), title: "积分原页 / 登录验证")
+                    } label: { Label("打开积分原页", systemImage: "checkmark.shield") }
+                }
+                Text(signing ? "请在验证码页手动完成验证。页面检测到验证通过后，只调用一次原生签到接口；超时或结果未知不会自动重试。" : "仅只读实际余额及变更记录，不执行兑换、充值或购买。解析失败不表示余额为零。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
         .navigationTitle(signing ? "每日签到" : "我的积分")
+        .onChange(of: signResult) { _, value in
+            guard let value else { return }
+            status = value
+            Task { await load() }
+        }
         .task { await load() }
         .refreshable { await load() }
     }

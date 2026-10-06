@@ -27,7 +27,10 @@ struct ThreadDetailView: View {
     @State private var showNativeReply = false
     @State private var replyDraft = ""
     @State private var publishedReply: NativeReplyProtocol.Success?
-    @State private var showPurchaseConfirm = false
+    @State private var showFavoriteConfirm = false
+    @State private var favoriting = false
+    @State private var favoriteMessage: String?
+    @ObservedObject private var favoriteService = NativeFavoriteService.shared
     @State private var purchasing = false
     @State private var purchaseMessage: String?
     @ObservedObject private var purchaseService = NativePurchaseService.shared
@@ -78,6 +81,16 @@ struct ThreadDetailView: View {
             openBodyLink(url)
             return .handled
         })
+        .confirmationDialog("收藏当前主题", isPresented: $showFavoriteConfirm, titleVisibility: .visible) {
+            Button(favoriting ? "收藏中" : "确认收藏") { Task { await favorite() } }
+                .disabled(favoriting || favoriteService.locked(host: session.host, tid: tid))
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将读取当前主题的收藏确认表单并原生提交一次。已收藏或结果未知不会自动重发。")
+        }
+        .alert("收藏结果", isPresented: Binding(get: { favoriteMessage != nil }, set: { if !$0 { favoriteMessage = nil } })) {
+            Button("知道了", role: .cancel) {}
+        } message: { Text(favoriteMessage ?? "") }
         .confirmationDialog(purchaseTitle, isPresented: $showPurchaseConfirm, titleVisibility: .visible) {
             Button(purchasing ? "购买中" : "确认购买", role: .destructive) { Task { await purchase() } }
                 .disabled(purchasing || purchaseService.locked(host: session.host, tid: tid))
@@ -123,15 +136,15 @@ struct ThreadDetailView: View {
             }
             .disabled(state == .loading || loadingReplies)
             .accessibilityHint("重新读取当前来源页；回复完成后可刷新隐藏资源。已追加回复将重置，不会自动回复或提交115")
-            NavigationLink {
-                LoginWebView(url: session.url("home.php?mod=spacecp&ac=favorite&type=thread&id=\(tid)&mobile=2"), title: "站点收藏 · 确认表单")
-            } label: {
+            Button { showFavoriteConfirm = true } label: {
                 Label("站点收藏", systemImage: "star")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ForumChrome.blue)
                     .frame(minHeight: 44)
             }
             .buttonStyle(.plain)
+            .disabled(favoriting || favoriteService.locked(host: session.host, tid: tid))
+            .accessibilityHint("读取当前主题收藏表单后原生提交一次；已收藏或结果未知不会重发")
             if state != .loading, case .required(let price, _) = detail?.purchaseState {
                 Button { showPurchaseConfirm = true } label: {
                     Label(price.map { "购买 · \($0)" } ?? "购买", systemImage: "cart")
@@ -353,14 +366,11 @@ struct ThreadDetailView: View {
                     .frame(maxWidth: .infinity, minHeight: 40)
             }
             .disabled(state == .loading || loadingReplies)
-            if let url = d.favoriteURL {
-                NavigationLink {
-                    LoginWebView(url: url, title: "站点收藏 · 网页表单")
-                } label: {
-                    Label("站点收藏", systemImage: "safari")
-                        .frame(maxWidth: .infinity, minHeight: 40)
-                }
+            Button { showFavoriteConfirm = true } label: {
+                Label("站点收藏", systemImage: "star")
+                    .frame(maxWidth: .infinity, minHeight: 40)
             }
+            .disabled(favoriting || favoriteService.locked(host: session.host, tid: tid))
             Button {
                 UIPasteboard.general.string = session.url("forum.php?mod=viewthread&tid=\(d.tid)&mobile=2").absoluteString
                 copied = true
@@ -695,6 +705,18 @@ struct ThreadDetailView: View {
     private var purchaseTitle: String {
         if case .required(let price, _) = detail?.purchaseState { return price.map { "购买主题 · \($0)" } ?? "购买主题" }
         return "购买主题"
+    }
+
+    @MainActor private func favorite() async {
+        guard !favoriting, !favoriteService.locked(host: session.host, tid: tid) else { return }
+        favoriting = true
+        defer { favoriting = false }
+        do {
+            try await favoriteService.favorite(session: session, tid: tid)
+            favoriteMessage = "收藏请求已确认。"
+        } catch {
+            favoriteMessage = (error as? LocalizedError)?.errorDescription ?? NativeFavoriteError.unknown.errorDescription
+        }
     }
 
     @MainActor private func purchase() async {

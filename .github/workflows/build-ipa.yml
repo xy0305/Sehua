@@ -128,6 +128,11 @@ jobs:
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/CleanupFixtures.swift -o /tmp/cleanup-fixtures
           /tmp/cleanup-fixtures
 
+      - name: Native sign and favorite protocol fixtures
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Parser/HTML.swift SeHuaTang/Network/NativeActionProtocol.swift Regression115/NativeActionFixtures.swift -o /tmp/native-action-fixtures
+          /tmp/native-action-fixtures
+
       - name: Native purchase protocol fixtures
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Parser/HTML.swift SeHuaTang/Network/NativePurchaseProtocol.swift Regression115/NativePurchaseFixtures.swift -o /tmp/native-purchase-fixtures
