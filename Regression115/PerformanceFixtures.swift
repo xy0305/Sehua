@@ -74,8 +74,8 @@ final class Performance115Protocol: URLProtocol, @unchecked Sendable {
         precondition(large.count == 2100, "large verified directory must not stop at 2000")
         let found = try await http.matchingDirectories(name: "wanted", parentCID: "10", parentPage: first, settings: settings)
         precondition(found.count == 1 && found[0].id == "900")
-        do { _ = try await http.matchingDirectories(name: "missing", parentCID: "10", parentPage: first, settings: settings); preconditionFailure("wrong search result accepted") }
-        catch SHT115Error.unsafeListing {}
+        let missing = try await http.matchingDirectories(name: "missing", parentCID: "10", parentPage: first, settings: settings)
+        precondition(missing.isEmpty, "complete scan must prove a directory is absent")
         do { _ = try await http.verifiedPage(cid: "10", parent: "99", settings: settings); preconditionFailure("unsafe ancestry accepted") }
         catch SHT115Error.unsafeListing {}
         print(String(format: "PASS performance: parent 101 entries; baseline 3 requests %.3fs; reuse 2 requests %.3fs; identical entries; unsafe ancestry refused", baseline, optimized))
