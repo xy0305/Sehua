@@ -27,6 +27,10 @@ struct ThreadDetailView: View {
     @State private var showNativeReply = false
     @State private var replyDraft = ""
     @State private var publishedReply: NativeReplyProtocol.Success?
+    @State private var showPurchaseConfirm = false
+    @State private var purchasing = false
+    @State private var purchaseMessage: String?
+    @ObservedObject private var purchaseService = NativePurchaseService.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -74,6 +78,16 @@ struct ThreadDetailView: View {
             openBodyLink(url)
             return .handled
         })
+        .confirmationDialog(purchaseTitle, isPresented: $showPurchaseConfirm, titleVisibility: .visible) {
+            Button(purchasing ? "购买中" : "确认购买", role: .destructive) { Task { await purchase() } }
+                .disabled(purchasing || purchaseService.locked(host: session.host, tid: tid))
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将使用当前登录会话提交一次原生购买。已购买不会重复付款；超时或结果未知不会自动重发。")
+        }
+        .alert("购买结果", isPresented: Binding(get: { purchaseMessage != nil }, set: { if !$0 { purchaseMessage = nil } })) {
+            Button("知道了", role: .cancel) {}
+        } message: { Text(purchaseMessage ?? "") }
         .sheet(isPresented: $showNativeReply) {
             NativeReplySheet(tid: tid, fid: detail?.fid ?? sourceFID, title: detail?.title ?? title,
                              fallbackURL: postURL, draft: $replyDraft) { result in
@@ -119,14 +133,13 @@ struct ThreadDetailView: View {
             }
             .buttonStyle(.plain)
             if state != .loading, case .required(let price, _) = detail?.purchaseState {
-                NavigationLink {
-                    // Enter the original thread, not a potentially side-effecting GET pay URL.
-                    LoginWebView(url: postURL, title: "购买主题 · 站点手动确认")
-                } label: {
+                Button { showPurchaseConfirm = true } label: {
                     Label(price.map { "购买 · \($0)" } ?? "购买", systemImage: "cart")
                         .font(.system(size: 13, weight: .medium)).frame(minHeight: 44)
                 }
-                .accessibilityHint("仅依据当前主题服务端提示。请在原帖核对价格并手动确认，不会自动付款")
+                .buttonStyle(.plain)
+                .disabled(purchasing || purchaseService.locked(host: session.host, tid: tid))
+                .accessibilityHint("使用当前登录会话的原生购买接口。确认后只提交一次，结果未知不会自动重发")
             }
             NavigationLink {
                 LoginWebView(url: postURL, title: "查看原帖")
@@ -676,6 +689,24 @@ struct ThreadDetailView: View {
             panStatus = "已提交，文件未就绪"
         } catch {
             panStatus = error is ResourceLinkExtractor.ExtractionError ? ResourceLinkExtractor.safeMessage(error) : (error is URLError ? "\(panStatus ?? "115读取阶段")：URLError \((error as! URLError).code.rawValue)；请核对任务，不自动重发。" : SHT115Settings.safeMessage(error))
+        }
+    }
+
+    private var purchaseTitle: String {
+        if case .required(let price, _) = detail?.purchaseState { return price.map { "购买主题 · \($0)" } ?? "购买主题" }
+        return "购买主题"
+    }
+
+    @MainActor private func purchase() async {
+        guard !purchasing, !purchaseService.locked(host: session.host, tid: tid) else { return }
+        purchasing = true
+        defer { purchasing = false }
+        do {
+            try await purchaseService.purchase(session: session, tid: tid, source: postURL)
+            purchaseMessage = "购买请求已确认。正在刷新当前主题。"
+            await load()
+        } catch {
+            purchaseMessage = (error as? LocalizedError)?.errorDescription ?? NativePurchaseError.unknown.errorDescription
         }
     }
 

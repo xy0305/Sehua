@@ -310,7 +310,7 @@ enum DiscuzParser {
             }
         }
         // Account-specific receipt must be outside user-authored body and replies.
-        if HTML.firstMatch(#"(?:您已经购买过此主题|您已购买本主题|你已经购买过本主题)"#, in: HTML.plainText(scope), group: 0) != nil { return .purchased }
+        if HTML.firstMatch(#"(?:您已经购买过此主题|您已购买过此主题|您已购买本主题|你已经购买过本主题|付费主题[\s\S]{0,40}已购买)"#, in: HTML.plainText(scope), group: 0) != nil { return .purchased }
         if !boxes.isEmpty { return .unknown } // reply/permission hidden is not payment
         let bodies = messageBodies(in: first)
         guard bodies.contains(where: { !HTML.plainText($0).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
