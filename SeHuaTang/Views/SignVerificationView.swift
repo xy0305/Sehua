@@ -83,7 +83,7 @@ private struct SignVerificationWeb: UIViewRepresentable {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpShouldSetCookies = false
         configuration.timeoutIntervalForRequest = 20
-        let transport = URLSession(configuration: configuration, delegate: PurchaseRedirectGuard(), delegateQueue: nil)
+        let transport = URLSession(configuration: configuration, delegate: SiteWriteRedirectGuard(), delegateQueue: nil)
         defer { transport.invalidateAndCancel() }
         var request = URLRequest(url: url)
         request.setValue(session.webView.customUserAgent, forHTTPHeaderField: "User-Agent")

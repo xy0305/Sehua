@@ -33,7 +33,7 @@ import Foundation
         configuration.httpShouldSetCookies = false
         configuration.httpCookieStorage = nil
         configuration.timeoutIntervalForRequest = 30
-        let transport = URLSession(configuration: configuration, delegate: PurchaseRedirectGuard(), delegateQueue: nil)
+        let transport = URLSession(configuration: configuration, delegate: SiteWriteRedirectGuard(), delegateQueue: nil)
         defer { transport.invalidateAndCancel() }
         var request = URLRequest(url: form.action)
         request.httpMethod = "POST"

@@ -31,6 +31,7 @@ struct ThreadDetailView: View {
     @State private var favoriting = false
     @State private var favoriteMessage: String?
     @ObservedObject private var favoriteService = NativeFavoriteService.shared
+    @State private var showPurchaseConfirm = false
     @State private var purchasing = false
     @State private var purchaseMessage: String?
     @ObservedObject private var purchaseService = NativePurchaseService.shared
