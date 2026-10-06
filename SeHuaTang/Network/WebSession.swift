@@ -17,7 +17,7 @@ final class WebSession: NSObject, ObservableObject {
     let webView: WKWebView
     private var waiters: [UUID: CheckedContinuation<String, Error>] = [:]
     private var timeoutWork: [UUID: DispatchWorkItem] = [:]
-    private var queue: [(url: URL, id: UUID, timeout: TimeInterval)] = []
+    private var queue: [(url: URL, id: UUID, timeout: TimeInterval, interactive: Bool)] = []
     private var activeID: UUID?
     private var activeNavigation: WKNavigation?
     private var ageGateRequestID: UUID?
@@ -46,7 +46,7 @@ final class WebSession: NSObject, ObservableObject {
         wv.uiDelegate = self
     }
 
-    func fetchHTML(_ path: String, timeout: TimeInterval = 25) async throws -> String {
+    func fetchHTML(_ path: String, timeout: TimeInterval = 25, interactive: Bool = false) async throws -> String {
         try Task.checkCancellation()
         let target = url(path)
         let id = UUID()
@@ -57,7 +57,12 @@ final class WebSession: NSObject, ObservableObject {
                     return
                 }
                 waiters[id] = cont
-                queue.append((target, id, timeout))
+                // The active request remains at the front; only waiting reads
+                // are reordered. No navigation, login, or write is preempted.
+                let start = activeID == nil ? 0 : 1
+                let waiting = queue.dropFirst(start).map { $0.interactive }
+                let index = start + PresentationTiming.insertionIndex(interactive: interactive, queuedInteractive: waiting)
+                queue.insert((target, id, timeout, interactive), at: index)
                 // Deadline includes time spent waiting behind another page.
                 let work = DispatchWorkItem { [weak self] in
                     Task { @MainActor in

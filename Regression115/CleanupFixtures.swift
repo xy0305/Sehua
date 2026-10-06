@@ -56,7 +56,7 @@ final class CleanupMock: URLProtocol, @unchecked Sendable {
                 if mode == "unknownDelete" { return "{}" }
                 return "{\"state\":true}"
             }
-            precondition(url.path == "/files" && request.httpMethod != "POST")
+            precondition(["/files", "/natsort/files.php", "/android/2.0/ufile/files"].contains(url.path) && request.httpMethod != "POST")
             let source = mode == "changedSource" ? "otherPC" : "archivePC"
             let output = mode == "missing" ? "" : ",{\"fid\":22,\"n\":\"movie.mp4\",\"pc\":\"moviePC\",\"s\":" + (mode == "sizeMismatch" ? "41" : "42") + "}"
             let count = mode == "missing" ? 1 : 2

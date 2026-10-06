@@ -41,7 +41,7 @@ final class ExtractionMockProtocol: URLProtocol, @unchecked Sendable {
         try JSONEncoder().encode([resource]).write(to: store)
         var writes = [String](), reads = [String]()
         ExtractionMockProtocol.handler = { request in
-            let url = request.url!, path = url.path
+            let url = request.url!, path = request.url!.path == "/natsort/files.php" ? "/files" : request.url!.path
             if request.httpMethod == "POST" { writes.append(path) } else { reads.append(path) }
             if path == "/files" {
                 return "{\"state\":true,\"count\":2,\"path\":[{\"cid\":0},{\"cid\":10},{\"cid\":20}],\"data\":[{\"fid\":21,\"n\":\"fixture.zip\",\"pc\":\"archivePC\"},{\"fid\":22,\"n\":\"existing.mp4\",\"pc\":\"videoPC\"}]}"

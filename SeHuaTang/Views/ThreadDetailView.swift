@@ -597,7 +597,7 @@ struct ThreadDetailView: View {
             requestGate.finish(token)
         }
         do {
-            let html = try await session.fetchHTML(url.absoluteString)
+            let html = try await session.fetchHTML(url.absoluteString, interactive: true)
             try Task.checkCancellation()
             guard requestGate.accepts(token, tid: tid, source: postURL) else { return }
             guard !DiscuzParser.looksLikeChallenge(html) else {
@@ -680,7 +680,7 @@ struct ThreadDetailView: View {
         state = .loading
         defer { requestGate.finish(token) }
         do {
-            let html = try await session.fetchHTML(requestedURL.absoluteString)
+            let html = try await session.fetchHTML(requestedURL.absoluteString, interactive: true)
             try Task.checkCancellation()
             guard requestGate.accepts(token, tid: tid, source: postURL) else { return }
             if DiscuzParser.looksLikeChallenge(html) {

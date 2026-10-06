@@ -9,7 +9,7 @@ struct SHT115HTTP {
         config.httpCookieAcceptPolicy = .never
         config.timeoutIntervalForRequest = 25
         config.timeoutIntervalForResource = 40
-        self.session = session ?? URLSession(configuration: config)
+        self.session = session ?? URLSession(configuration: config, delegate: SHT115APIRedirectGuard(), delegateQueue: nil)
     }
     static func headers(_ settings: SHT115Settings) -> [String: String] {
         ["User-Agent": safariUA, "Cookie": settings.cookie, "Referer": "https://115.com/", "Origin": "https://115.com", "Accept": "*/*"]
@@ -32,7 +32,11 @@ struct SHT115HTTP {
         }
         try await SHT115RequestPacer.shared.wait()
         try Task.checkCancellation()
-        let (data, response) = try await session.data(for: request)
+        let (data, response): (Data, URLResponse)
+        do { (data, response) = try await session.data(for: request) }
+        catch let error as URLError {
+            throw Self.transportDiagnostic(error, url: url, writing: fields != nil)
+        }
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode
             throw SHT115Diagnostic(stage: fields == nil ? "http-read" : "http-write", outcome: fields == nil ? "读取失败" : "写入结果未知", code: status.map(String.init) ?? "")
@@ -53,6 +57,15 @@ struct SHT115HTTP {
             throw SHT115Diagnostic(stage: fields == nil ? "json-read" : "json-write", outcome: fields == nil ? "响应不是可验证JSON" : "结果未知：响应不是可验证JSON，不自动重发", code: "")
         }
         return obj
+    }
+    static func transportDiagnostic(_ error: URLError, url: URL, writing: Bool) -> SHT115Diagnostic {
+        let tls = [-1200, -1201, -1202, -1203, -1204, -1205, -1206].contains(error.code.rawValue)
+        // Only fixed API routes: never copy failing URLs, query, body or userInfo.
+        let routes = ["/files", "/natsort/files.php", "/android/2.0/ufile/files", "/files/add", "/"]
+        let hosts = ["webapi.115.com", "aps.115.com", "proapi.115.com", "115.com"]
+        let endpoint = (hosts.contains(url.host ?? "") ? url.host! : "115-api") + (routes.contains(url.path) ? url.path : "/api")
+        let reason = tls ? "TLS安全连接失败（非Cookie过期证据）；请检查网络、代理、设备时间及证书" : "网络传输失败"
+        return SHT115Diagnostic(stage: writing ? "http-write" : "http-read", outcome: reason + "；" + (writing ? "写入结果未知，不自动重发" : "本次只读请求未写入，可安全重试读取") + "；endpoint=" + endpoint, code: String(error.code.rawValue))
     }
     static func string(_ value: Any?) -> String {
         if let s = value as? String { return s }
@@ -76,7 +89,16 @@ struct SHT115Page {
 extension SHT115HTTP {
     func page(cid: String, offset: Int, settings: SHT115Settings) async throws -> SHT115Page {
         let query = Self.form([("aid", "1"), ("cid", cid), ("offset", String(offset)), ("limit", "100"), ("show_dir", "1"), ("format", "json")])
-        let obj = try await json("https://webapi.115.com/files?" + query, settings: settings)
+        // Read-only compatibility routes used by XXXClub/avdb115. Only a transport
+        // failure can switch endpoints; API rejection/unsafe data must stop closed.
+        var obj: [String: Any] = [:]
+        let endpoints = ["https://aps.115.com/natsort/files.php", "https://proapi.115.com/android/2.0/ufile/files", "https://webapi.115.com/files"]
+        for (index, endpoint) in endpoints.enumerated() {
+            do { obj = try await json(endpoint + "?" + query, settings: settings); break }
+            catch let error as SHT115Diagnostic {
+                guard error.stage == "http-read", Int(error.code).map({ $0 <= -1000 && $0 != -999 }) == true, index < endpoints.count - 1 else { throw error }
+            }
+        }
         guard Self.success(obj) else { throw SHT115Diagnostic(stage: "directory-list", outcome: "读取被API拒绝", code: SHT115Diagnostic.apiCode(obj)) }
         let nested = obj["data"] as? [String: Any] ?? [:]
         guard let raw = (obj["data"] as? [[String: Any]]) ?? (nested["list"] as? [[String: Any]]) ?? (obj["files"] as? [[String: Any]]) else { throw SHT115Error.unsafeListing }
@@ -144,5 +166,14 @@ actor SHT115RequestPacer {
             }
             try await Task.sleep(nanoseconds: earliest - now)
         }
+    }
+}
+
+/// API redirects are not required by these fixed endpoints. Reject all redirects,
+/// especially POST replay, cross-host Cookie forwarding and HTTPS downgrade.
+/// Default platform server trust remains untouched.
+final class SHT115APIRedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

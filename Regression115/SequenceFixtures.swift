@@ -46,7 +46,7 @@ final class SequenceProtocol: URLProtocol, @unchecked Sendable {
             }
             if q.contains(where: { $0.name == "ac" && $0.value == "space" }) { return "{\"sign\":\"mock\",\"time\":1}" }
             if q.contains(where: { $0.name == "ac" && $0.value == "add_task_url" }) { submits += 1; return "{\"state\":true}" }
-            if url.path == "/files" {
+            if ["/files", "/natsort/files.php", "/android/2.0/ufile/files"].contains(url.path) {
                 let cid = q.first { $0.name == "cid" }!.value!
                 let path = cid == "10" ? "[{\"cid\":0},{\"cid\":10}]" : "[{\"cid\":0},{\"cid\":10},{\"cid\":\(cid)}]"
                 let data = cid == "20" ? "[{\"fid\":50,\"cid\":20,\"n\":\"a.zip\",\"pc\":\"pickA\"}]" : "[]"

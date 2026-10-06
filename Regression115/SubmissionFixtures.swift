@@ -58,7 +58,7 @@ final class Mock115Protocol: URLProtocol, @unchecked Sendable {
                 precondition(request.httpMethod == "POST" && fields["pid"] == "10" && fields["cname"]!.contains("tid-3803873"))
                 return "{\"state\":true,\"cid\":20}"
             }
-            if url.path == "/files" {
+            if ["/files", "/natsort/files.php", "/android/2.0/ufile/files"].contains(url.path) {
                 let cid = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!.first { $0.name == "cid" }!.value!
                 if cid == "20" {
                     verified += 1; calls.append("verify")

@@ -23,6 +23,25 @@ import Foundation
         let retained = commit + 0.4 + 0.7
         let restarted = finish + 0.4 + 0.7
         precondition(retained < restarted)
+        // Exercise the same insertion policy used by WebSession, including
+        // active-navigation exclusion, FIFO, and removal of cancelled waiters.
+        var waiting: [(String, Bool, Double)] = [("browse1", false, 2), ("browse2", false, 3)]
+        let activeRemaining = 1.0
+        let fifoWait = activeRemaining + waiting.reduce(0) { $0 + $1.2 }
+        let index = PresentationTiming.insertionIndex(interactive: true, queuedInteractive: waiting.map { $0.1 })
+        waiting.insert(("detail1", true, 1), at: index)
+        precondition(waiting.map { $0.0 } == ["detail1", "browse1", "browse2"])
+        let priorityWait = activeRemaining + waiting.prefix(index).reduce(0) { $0 + $1.2 }
+        precondition(fifoWait == 6 && priorityWait == 1)
+        let second = PresentationTiming.insertionIndex(interactive: true, queuedInteractive: waiting.map { $0.1 })
+        waiting.insert(("detail2", true, 1), at: second)
+        precondition(waiting.map { $0.0 } == ["detail1", "detail2", "browse1", "browse2"])
+        precondition(PresentationTiming.insertionIndex(interactive: false, queuedInteractive: waiting.map { $0.1 }) == 4)
+        waiting.removeAll { $0.0 == "detail1" }
+        precondition(waiting.first?.0 == "detail2")
+        precondition(PresentationTiming.insertionIndex(interactive: true, queuedInteractive: []) == 0)
+        precondition(PresentationTiming.insertionIndex(interactive: true, queuedInteractive: [true, true]) == 2)
+        print("Detail queue controlled production policy: FIFO wait=6s priority wait=1s saved=5s; no network/device measurement")
         print("Production presentation policy fixtures passed (controlled schedule only)")
     }
 }
