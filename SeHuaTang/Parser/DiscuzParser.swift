@@ -263,6 +263,61 @@ enum DiscuzParser {
         return (nil, next)
     }
 
+    // Only Discuz server components in the opening post are payment evidence.
+    // Ordinary body text, replies, nav/ad links and user quotations are not account state.
+    static func purchaseState(_ html: String, tid: Int, base: URL) -> ThreadPurchaseState {
+        if HTML.firstMatch(#"(?i)(cf-chl-|challenge-platform|just a moment|name=["']password|请先登录)"#, in: html, group: 0) != nil { return .unknown }
+        if let page = HTML.queryInt("page", in: base.absoluteString), page > 1 { return .unknown }
+        let blocks = HTML.elements(in: html) {
+            HTML.firstMatch(#"^(?:post_|pid)\d+$"#, in: HTML.attribute("id", in: $0) ?? "", group: 0) != nil
+        }
+        guard let first = blocks.first else { return .unknown }
+        var scope = first
+        // Remove user-controlled message content before inspecting server controls.
+        for body in HTML.elements(in: first, matching: {
+            HTML.hasClass("t_f", in: $0) || HTML.hasClass("message", in: $0)
+                || (HTML.attribute("id", in: $0) ?? "").hasPrefix("postmessage_")
+        }) { scope = scope.replacingOccurrences(of: body, with: "") }
+        // Discuz nests the server-generated locked box inside the message.
+        var unquoted = first
+        for quote in HTML.elements(in: first, matching: { HTML.hasClass("quote", in: $0) || $0.lowercased().hasPrefix("<blockquote") }) {
+            unquoted = unquoted.replacingOccurrences(of: quote, with: "")
+        }
+        let boxes = HTML.elements(in: unquoted, className: "locked")
+        func entry(in component: String) -> URL? {
+            for anchor in HTML.elements(in: component, tag: "a") {
+                guard let href = HTML.attribute("href", in: anchor), let url = HTML.absURL(href, base: base),
+                      url.host?.lowercased() == base.host?.lowercased(),
+                      ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
+                      url.path.hasSuffix("/forum.php"), let c = URLComponents(url: url, resolvingAgainstBaseURL: false) else { continue }
+                let q = c.queryItems ?? []
+                guard q.filter({ $0.name == "tid" }).count == 1,
+                      HTML.queryInt("tid", in: url.absoluteString) == tid,
+                      q.contains(where: { $0.name == "mod" && $0.value == "misc" }),
+                      q.contains(where: { $0.name == "action" && $0.value == "pay" }) else { continue }
+                return url
+            }
+            return nil
+        }
+        for box in boxes {
+            let text = HTML.plainText(box)
+            if let url = entry(in: box) {
+                let price = HTML.firstMatch(#"(?:售价|价格|付费|支付|购买本主题需支付)[：:\s]*([0-9]+(?:\.[0-9]+)?\s*(?:金币|金钱|积分|色币))"#, in: text)
+                return .required(price: price, entry: url)
+            }
+            if HTML.firstMatch(#"(?:本主题需向作者支付|购买本主题需支付|本主题售价)"#, in: text, group: 0) != nil {
+                return .required(price: nil, entry: nil)
+            }
+        }
+        // Account-specific receipt must be outside user-authored body and replies.
+        if HTML.firstMatch(#"(?:您已经购买过此主题|您已购买本主题|你已经购买过本主题)"#, in: HTML.plainText(scope), group: 0) != nil { return .purchased }
+        if !boxes.isEmpty { return .unknown } // reply/permission hidden is not payment
+        let bodies = messageBodies(in: first)
+        guard bodies.contains(where: { !HTML.plainText($0).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              HTML.firstMatch(#"(?:阅读权限|无权访问|内容被隐藏|购买主题|付费主题)"#, in: HTML.plainText(scope), group: 0) == nil else { return .unknown }
+        return .free // visible opening body, no server gate; not proof of historical purchase
+    }
+
     static func parseThreadDetail(_ html: String, tid: Int, base: URL, fallbackTitle: String = "") -> ThreadDetail {
         let pageTitle = HTML.stripTags(HTML.firstMatch(#"<title>([\s\S]*?)</title>"#, in: html) ?? "")
         let parts = pageTitle.components(separatedBy: " - ").map { $0.trimmingCharacters(in: .whitespaces) }
@@ -356,7 +411,7 @@ enum DiscuzParser {
             }
         let replyCount = HTML.firstMatch(#"网友回复（(\d+)条）"#, in: html) ?? ""
 
-        return ThreadDetail(tid: tid, title: title, boardName: boardName, fid: fid, replyCount: replyCount, favoriteURL: favorite.flatMap { HTML.absURL($0, base: base) }, replyURL: reply.flatMap { HTML.absURL($0, base: base) }, posts: posts, magnets: magnets, attachments: attachments, images: images)
+        return ThreadDetail(purchaseState: purchaseState(html, tid: tid, base: base), tid: tid, title: title, boardName: boardName, fid: fid, replyCount: replyCount, favoriteURL: favorite.flatMap { HTML.absURL($0, base: base) }, replyURL: reply.flatMap { HTML.absURL($0, base: base) }, posts: posts, magnets: magnets, attachments: attachments, images: images)
     }
 
     // Select component identity, not generic tables/images or the word 评分 in body text.
@@ -651,12 +706,11 @@ private enum ParserRegressionTests {
         """#
         let detail = DiscuzParser.parseThreadDetail(detailHTML, tid: 42, base: base)
         precondition(detail.fid == 103 && detail.favoriteURL != nil && detail.replyURL != nil)
-        precondition(!SiteConfig.allowsPurchase(fid: detail.fid))
+        precondition(detail.purchaseState == .free)
         let sale = DiscuzParser.parseThreadDetail(detailHTML.replacingOccurrences(of: "fid=103", with: "fid=97"), tid: 42, base: base)
-        precondition(sale.fid == 97 && SiteConfig.allowsPurchase(fid: sale.fid))
+        precondition(sale.fid == 97 && sale.purchaseState == .free)
         let forged = #"<title>资源出售区 购买 - 论坛</title><a href='forum.php?mod=forumdisplay&amp;fid=97'>资源出售区</a><div class='message'>普通正文 <a href='forum.php?mod=forumdisplay&amp;fid=97'>购买</a></div>"#
         precondition(DiscuzParser.parseThreadDetail(forged, tid: 42, base: base).fid == nil)
-        precondition(!SiteConfig.allowsPurchase(fid: nil) && !SiteConfig.allowsPurchase(fid: 95))
         let breadcrumb = #"<div id='pt'><a href='forum-97-1.html'>版块</a></div>"#
         precondition(DiscuzParser.parseThreadDetail(breadcrumb, tid: 42, base: base).fid == 97)
         let otherReply = #"<a href='forum.php?mod=post&amp;action=reply&amp;tid=999&amp;fid=97'>回复其他帖</a>"#

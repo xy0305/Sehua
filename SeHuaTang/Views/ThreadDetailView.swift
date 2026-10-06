@@ -118,15 +118,15 @@ struct ThreadDetailView: View {
                     .frame(minHeight: 44)
             }
             .buttonStyle(.plain)
-            if SiteConfig.allowsPurchase(fid: detail?.fid ?? sourceFID) {
+            if state != .loading, case .required(let price, _) = detail?.purchaseState {
                 NavigationLink {
-                    LoginWebView(url: postURL, title: "资源出售 · 手动确认购买")
+                    // Enter the original thread, not a potentially side-effecting GET pay URL.
+                    LoginWebView(url: postURL, title: "购买主题 · 站点手动确认")
                 } label: {
-                    Label("购买", systemImage: "cart")
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(minHeight: 44)
+                    Label(price.map { "购买 · \($0)" } ?? "购买", systemImage: "cart")
+                        .font(.system(size: 13, weight: .medium)).frame(minHeight: 44)
                 }
-                .accessibilityHint("打开站点表单；请核对价格并手动确认，不会自动扣积分")
+                .accessibilityHint("仅依据当前主题服务端提示。请在原帖核对价格并手动确认，不会自动付款")
             }
             NavigationLink {
                 LoginWebView(url: postURL, title: "查看原帖")
@@ -166,6 +166,13 @@ struct ThreadDetailView: View {
     private func content(_ d: ThreadDetail) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                if d.purchaseState == .unknown {
+                    Text("购买状态未确认：可能需要登录、验证或回复/阅读权限。请在原帖确认；不代表免费，不会自动付款。")
+                        .font(.footnote).foregroundStyle(ForumChrome.secondary).padding(12)
+                } else if d.purchaseState == .purchased {
+                    Text("站点已确认当前账号购买；解锁内容按本次响应展示。")
+                        .font(.footnote).foregroundStyle(ForumChrome.secondary).padding(12)
+                }
                 if let error = state.errorMessage {
                     HStack {
                         Text(error).font(.footnote).foregroundStyle(ForumChrome.secondary)
@@ -678,6 +685,7 @@ struct ThreadDetailView: View {
         guard !loadingReplies, state != .loading, !Task.isCancelled,
               let token = requestGate.begin(tid: requestedTID, source: requestedURL) else { return }
         state = .loading
+        detail?.purchaseState = .unknown // stale receipt/price must not survive a failed refresh
         defer { requestGate.finish(token) }
         do {
             let html = try await session.fetchHTML(requestedURL.absoluteString, interactive: true)

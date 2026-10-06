@@ -54,6 +54,7 @@ struct ThreadPost: Identifiable, Hashable {
 }
 
 struct ThreadDetail {
+    var purchaseState: ThreadPurchaseState = .unknown
     var tid: Int
     var title: String
     var boardName: String = ""
@@ -138,4 +139,13 @@ struct PostRatings: Hashable {
     var participants: String?
     var totals: [String]
     var entries: [RatingEntry]
+}
+
+
+// Response evidence, never board/title heuristics. Unknown is deliberately not free.
+enum ThreadPurchaseState: Equatable {
+    case unknown
+    case free
+    case required(price: String?, entry: URL?)
+    case purchased
 }
