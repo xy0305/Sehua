@@ -38,7 +38,7 @@ final class TLS115Protocol: URLProtocol, @unchecked Sendable {
         do { _ = try await service.createOrReuseResource(tid: "12", title: "fixture", settings: settings); preconditionFailure() }
         catch let error as SHT115Diagnostic { precondition(error.stage == "http-write" && error.localizedDescription.contains("不自动重发")) }
         let after = await service.resources(); precondition(after[0].directoryWritePending)
-        precondition(TLS115Protocol.requests == count + 3)
+        precondition(TLS115Protocol.requests == count + 5)
         let saved = TLS115Protocol.requests
         do { _ = try await service.createOrReuseResource(tid: "12", title: "fixture", settings: settings); preconditionFailure() }
         catch SHT115Error.uncertainWrite {}
