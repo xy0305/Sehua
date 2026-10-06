@@ -10,6 +10,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Select Xcode
         run: |
@@ -81,6 +83,20 @@ jobs:
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/SubmissionFixtures.swift -o /tmp/submission-fixtures
           /tmp/submission-fixtures
+
+      - name: Listing safety and 52-54 production comparison
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/ListingFixtures.swift -o /tmp/listing-fixtures
+          /tmp/listing-fixtures
+          for VERSION in 52 54; do
+            mkdir -p /tmp/baseline-$VERSION
+            if [ "$VERSION" = 52 ]; then REF=ca753eebdd4d9af3c1d4126f4d00de9c8500ef7a; else REF=36465b88c1d0b25ff3d8d1e3dc6edb02158d1ca5; fi
+            for FILE in SeHuaTang/Integration115/SHT115*.swift; do
+              git show "$REF:$FILE" > "/tmp/baseline-$VERSION/$(basename "$FILE")"
+            done
+            xcrun swiftc -parse-as-library -D BASELINE_LISTING -D VERSION$VERSION /tmp/baseline-$VERSION/*.swift Regression115/ListingFixtures.swift -o /tmp/listing-$VERSION
+            /tmp/listing-$VERSION
+          done
 
       - name: Submission performance controlled latency fixtures
         run: |

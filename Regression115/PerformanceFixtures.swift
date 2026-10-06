@@ -22,7 +22,7 @@ final class Performance115Protocol: URLProtocol, @unchecked Sendable {
             total = wanted ? 1 : 0
             path = "[{\"cid\":\"0\"},{\"cid\":\"10\"}]"
         } else if cid == "10" {
-            rows = offset == "0" ? (1...100).map { "{\"cid\":\"\($0 + 100)\",\"n\":\"folder\"}" }.joined(separator: ",") : "{\"cid\":\"201\",\"n\":\"last\"}"
+            rows = offset == "0" ? (1...100).map { "{\"cid\":\"\($0 + 100)\",\"n\":\"folder\"}" }.joined(separator: ",") : "{\"cid\":\"900\",\"n\":\"wanted\"}"
             total = 101
             path = "[{\"cid\":\"0\"},{\"cid\":\"10\"}]"
         } else if cid == "20" {
@@ -77,7 +77,7 @@ final class Performance115Protocol: URLProtocol, @unchecked Sendable {
         let missing = try await http.matchingDirectories(name: "missing", parentCID: "10", parentPage: first, settings: settings)
         precondition(missing.isEmpty, "complete scan must prove a directory is absent")
         do { _ = try await http.verifiedPage(cid: "10", parent: "99", settings: settings); preconditionFailure("unsafe ancestry accepted") }
-        catch SHT115Error.unsafeListing {}
+        catch let error as SHT115Diagnostic { precondition(error.stage == "directory-path") }
         print(String(format: "PASS performance: parent 101 entries; baseline 3 requests %.3fs; reuse 2 requests %.3fs; identical entries; unsafe ancestry refused", baseline, optimized))
     }
 }

@@ -46,12 +46,12 @@ struct SHT115HTTP {
     func json(_ endpoint: String, settings: SHT115Settings, fields: [(String, String)]? = nil) async throws -> [String: Any] {
         let (data, _) = try await data(endpoint, settings: settings, fields: fields)
         // Preserve identifier tokens before Foundation JSON parsing (never Double).
-        guard var text = String(data: data, encoding: .utf8) else { throw SHT115Error.unsafeListing }
+        guard var text = String(data: data, encoding: .utf8) else { throw SHT115Diagnostic(stage: "directory-path", outcome: "路径或直属父目录无法验证，已停止写入", code: "") }
         let regex = try NSRegularExpression(pattern: "(\"(?:cid|pid|parent_id|category_id|folder_id|file_id|fid|id|wp_path_id)\"\\s*:\\s*)([0-9]+)(?=\\s*[,}])")
         text = regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1\"$2\"")
         let obj: [String: Any]
         do {
-            guard let decoded = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { throw SHT115Error.unsafeListing }
+            guard let decoded = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { throw SHT115Diagnostic(stage: "directory-path", outcome: "路径或直属父目录无法验证，已停止写入", code: "") }
             obj = decoded
         } catch {
             throw SHT115Diagnostic(stage: fields == nil ? "json-read" : "json-write", outcome: fields == nil ? "响应不是可验证JSON" : "结果未知：响应不是可验证JSON，不自动重发", code: "")
@@ -101,25 +101,30 @@ extension SHT115HTTP {
         }
         guard Self.success(obj) else { throw SHT115Diagnostic(stage: "directory-list", outcome: "读取被API拒绝", code: SHT115Diagnostic.apiCode(obj)) }
         let nested = obj["data"] as? [String: Any] ?? [:]
-        guard let raw = (obj["data"] as? [[String: Any]]) ?? (nested["list"] as? [[String: Any]]) ?? (obj["files"] as? [[String: Any]]) else { throw SHT115Error.unsafeListing }
+        guard let raw = (obj["data"] as? [[String: Any]]) ?? (nested["list"] as? [[String: Any]]) ?? (obj["files"] as? [[String: Any]]) else { throw SHT115Diagnostic(stage: "directory-path", outcome: "路径或直属父目录无法验证，已停止写入", code: "") }
         let entries = try Self.entries(raw)
-        return SHT115Page(entries: entries, total: Int(Self.string(obj["count"] ?? nested["count"])), path: (obj["path"] as? [[String: Any]]) ?? (nested["path"] as? [[String: Any]]) ?? [])
+        let countValue = obj["count"] ?? nested["count"]
+        let total = Int(Self.string(countValue))
+        if countValue != nil, total == nil || (total ?? -1) < 0 { throw Self.listingFailure("count", "总数字段无效") }
+        return SHT115Page(entries: entries, total: total, path: (obj["path"] as? [[String: Any]]) ?? (nested["path"] as? [[String: Any]]) ?? [])
     }
     static func entries(_ raw: [[String: Any]]) throws -> [SHT115Entry] {
         try raw.map { item -> SHT115Entry in
             let fid = Self.string(item["fid"] ?? item["file_id"])
             let directory = fid.isEmpty || fid == "0"
             let id = directory ? Self.string(item["cid"] ?? item["category_id"] ?? item["folder_id"]) : fid
-            guard SHT115Settings.isCID(id), id != "0" else { throw SHT115Error.unsafeListing }
-            return SHT115Entry(id: id, name: Self.string(item["n"] ?? item["name"] ?? item["file_name"] ?? item["category_name"]), isDirectory: directory,
+            guard SHT115Settings.isCID(id), id != "0" else { throw Self.listingFailure("list", "条目标识无效") }
+            let name = Self.string(item["n"] ?? item["name"] ?? item["file_name"] ?? item["category_name"])
+            guard !name.isEmpty else { throw Self.listingFailure("list", "条目名称缺失，不能证明不存在") }
+            return SHT115Entry(id: id, name: name, isDirectory: directory,
                 pickCode: Self.string(item["pc"] ?? item["pick_code"] ?? item["pickcode"]), size: Int64(Self.string(item["s"] ?? item["file_size"] ?? item["size"])) ?? 0)
         }
     }
     static func verifiedPath(_ path: [[String: Any]], cid: String, parent: String?) throws {
         let ids = path.map { string($0["cid"] ?? $0["category_id"] ?? $0["folder_id"]) }
-        guard ids.first == "0", ids.last == cid, ids.allSatisfy(SHT115Settings.isCID), Set(ids).count == ids.count else { throw SHT115Error.unsafeListing }
+        guard ids.first == "0", ids.last == cid, ids.allSatisfy(SHT115Settings.isCID), Set(ids).count == ids.count else { throw SHT115Diagnostic(stage: "directory-path", outcome: "路径或直属父目录无法验证，已停止写入", code: "") }
         if let parent {
-            guard ids.count >= 2, ids[ids.count - 2] == parent, cid != parent else { throw SHT115Error.unsafeListing }
+            guard ids.count >= 2, ids[ids.count - 2] == parent, cid != parent else { throw SHT115Diagnostic(stage: "directory-path", outcome: "路径或直属父目录无法验证，已停止写入", code: "") }
         }
     }
     func verify(cid: String, parent: String?, settings: SHT115Settings) async throws {
@@ -133,65 +138,51 @@ extension SHT115HTTP {
         try Self.verifiedPath(page.path, cid: cid, parent: parent)
         return page
     }
-    /// A 20-page cap silently fails on real parent folders larger than 2,000
-    /// entries. Keep the identity/count proof, but allow the proven page count.
+    /// Full bounded enumeration is the only absence proof; /files search_value
+    /// is not a search contract and may silently return an ordinary first page.
     func allEntries(cid: String, settings: SHT115Settings, firstPage: SHT115Page? = nil) async throws -> [SHT115Entry] {
         var entries: [SHT115Entry] = [], seen = Set<String>()
-        let pageLimit = min(500, max(20, ((firstPage?.total ?? 0) + 99) / 100))
-        for index in 0..<pageLimit {
-            let page: SHT115Page
-            if index == 0, let firstPage { page = firstPage }
-            else { page = try await self.page(cid: cid, offset: index * 100, settings: settings) }
-            let ids = page.entries.map { ($0.isDirectory ? "d" : "f") + $0.id }
-            guard ids.allSatisfy({ !seen.contains($0) }), Set(ids).count == ids.count else { throw SHT115Error.unsafeListing }
-            seen.formUnion(ids); entries += page.entries
-            if let total = page.total {
-                guard total >= entries.count else { throw SHT115Error.unsafeListing }
+        var initial: SHT115Page?
+        for index in 0..<500 {
+            let current: SHT115Page
+            if index == 0, let firstPage { current = firstPage }
+            else { current = try await page(cid: cid, offset: entries.count, settings: settings) }
+            try Self.verifiedPath(current.path, cid: cid, parent: nil)
+            if let initial {
+                guard current.total == initial.total else { throw Self.listingFailure("count", "分页总数变化") }
+                let ids = current.path.map { Self.string($0["cid"] ?? $0["category_id"] ?? $0["folder_id"]) }
+                let old = initial.path.map { Self.string($0["cid"] ?? $0["category_id"] ?? $0["folder_id"]) }
+                guard ids == old else { throw Self.listingFailure("path", "分页路径变化") }
+            } else { initial = current }
+            if let total = current.total, total > 50_000 { throw Self.listingFailure("cap", "总数超过500页只读上限") }
+            guard current.entries.count <= 100 else { throw Self.listingFailure("list", "返回超过请求页长") }
+            let ids = current.entries.map { ($0.isDirectory ? "d" : "f") + $0.id }
+            guard Set(ids).count == ids.count, ids.allSatisfy({ !seen.contains($0) }) else { throw Self.listingFailure("duplicate", "分页条目重复") }
+            seen.formUnion(ids); entries += current.entries
+            if let total = current.total {
+                guard total >= 0, entries.count <= total else { throw Self.listingFailure("count", "累计条目与总数冲突") }
                 if entries.count == total { return entries }
-                if page.entries.isEmpty { throw SHT115Error.unsafeListing }
-            } else if page.entries.count < 100 { return entries }
+                guard !current.entries.isEmpty else { throw Self.listingFailure("count", "未达到总数却返回空页") }
+            } else if current.entries.count < 100 { return entries }
         }
-        throw SHT115Error.unsafeListing
+        throw Self.listingFailure("cap", "达到500页只读上限，尚不能证明完整")
     }
-    /// Locate one exact child without requiring a complete scan of a very large parent.
-    /// Search is an optimization only: transport failure falls through to paging.
-    /// Search results are not trusted until the candidate's own fresh path verifies it.
+    static func listingFailure(_ stage: String, _ reason: String) -> SHT115Diagnostic {
+        SHT115Diagnostic(stage: "directory-" + stage, outcome: reason + "，已停止写入", code: "")
+    }
     func matchingDirectories(name: String, parentCID: String, parentPage: SHT115Page, settings: SHT115Settings) async throws -> [SHT115Entry] {
-        var matches = parentPage.entries.filter { $0.isDirectory && $0.name == name }
-        if matches.isEmpty {
-            let query = Self.form([("aid", "1"), ("cid", parentCID), ("search_value", name), ("offset", "0"), ("limit", "20"), ("show_dir", "1"), ("format", "json")])
-            for endpoint in ["https://webapi.115.com/files", "https://aps.115.com/natsort/files.php"] {
-                let obj: [String: Any]
-                do { obj = try await json(endpoint + "?" + query, settings: settings) }
-                catch { continue }
-                guard Self.success(obj) else { continue }
-                let nested = obj["data"] as? [String: Any] ?? [:]
-                let raw = (obj["data"] as? [[String: Any]]) ?? (nested["list"] as? [[String: Any]]) ?? []
-                matches += try Self.entries(raw).filter { $0.isDirectory && $0.name == name }
-                if !matches.isEmpty { break }
+        let entries = try await allEntries(cid: parentCID, settings: settings, firstPage: parentPage)
+        let matches = entries.filter { $0.isDirectory && $0.name == name }
+        for match in matches {
+            let candidate = try await verifiedPage(cid: match.id, parent: parentCID, settings: settings)
+            let leafName = Self.string(candidate.path.last?["name"] ?? candidate.path.last?["n"])
+            guard !leafName.isEmpty, leafName == name else {
+                throw Self.listingFailure("path", "候选目录名称缺失或已变化；不能视为不存在")
             }
         }
-        if matches.isEmpty {
-            var narrowed = parentPage
-            let pages = min(500, max(1, ((parentPage.total ?? 0) + 99) / 100))
-            for index in 1..<pages {
-                let page = try await self.page(cid: parentCID, offset: index * 100, settings: settings)
-                guard page.total == parentPage.total else { throw SHT115Error.unsafeListing }
-                narrowed = SHT115Page(entries: narrowed.entries + page.entries, total: page.total, path: narrowed.path)
-                matches = narrowed.entries.filter { $0.isDirectory && $0.name == name }
-                if !matches.isEmpty || narrowed.entries.count == parentPage.total { break }
-            }
-            guard !matches.isEmpty || narrowed.entries.count == parentPage.total else { throw SHT115Error.unsafeListing }
-        }
-        var verified: [SHT115Entry] = [], seen = Set<String>()
-        for match in matches where seen.insert(match.id).inserted {
-            let page = try await verifiedPage(cid: match.id, parent: parentCID, settings: settings)
-            if page.path.compactMap({ Self.string($0["name"] ?? $0["n"]) }).last == name {
-                verified.append(match)
-            }
-        }
-        return verified
+        return matches
     }
+
 }
 
 /// Reserve start slots across all service instances, like tang115 MIN_115_GAP_MS.
