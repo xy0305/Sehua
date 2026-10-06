@@ -114,7 +114,7 @@ jobs:
 
       - name: Forum directory expansion policy fixtures
         run: |
-          xcrun swiftc -parse-as-library SeHuaTang/Config/SiteConfig.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/ForumDirectoryState.swift Regression115/ForumDirectoryFixtures.swift -o /tmp/forum-directory-fixtures
+          xcrun swiftc -parse-as-library SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/Models.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/ForumDirectoryState.swift Regression115/ForumDirectoryFixtures.swift -o /tmp/forum-directory-fixtures
           /tmp/forum-directory-fixtures
 
       - name: Production presentation timing fixtures
