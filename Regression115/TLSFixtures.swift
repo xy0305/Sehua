@@ -30,7 +30,7 @@ final class TLS115Protocol: URLProtocol, @unchecked Sendable {
         do { _ = try await service.createOrReuseResource(tid: "12", title: "fixture", settings: settings); preconditionFailure() }
         catch let error as SHT115Diagnostic {
             let text = error.localizedDescription
-            precondition(text.contains("TLS") && text.contains("可安全重试") && !text.contains("结果未知") && !text.contains("fake") && !text.contains("cid="))
+            precondition(error.stage == "http-read" && text.contains("TLS") && text.contains("可安全重试") && text.contains("读取失败不代表写入结果未知") && !text.contains("fake") && !text.contains("cid="))
         }
         let before = await service.resources(); precondition(before.count == 1 && !before[0].directoryWritePending)
         TLS115Protocol.failAll = false
