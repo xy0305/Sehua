@@ -26,7 +26,7 @@ struct PortalView: View {
                 // These are a handful of composite cards, not individual rows.
                 // Eager layout keeps their real heights instead of LazyVStack's
                 // estimates changing when the tall directory enters the viewport.
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 14) {
                     ForumLoadStatus(state: store.portalState, title: "讨论") {
                         Task { await store.loadPortal() }
                     }
@@ -40,8 +40,8 @@ struct PortalView: View {
                     ForumDirectory(categories: store.categories)
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 24)
+                .padding(.top, 12)
+                .padding(.bottom, 28)
             }
             .refreshable { await reload() }
         }
@@ -68,10 +68,16 @@ struct PortalView: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "megaphone.fill")
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(ForumChrome.accent)
-                VStack(alignment: .leading, spacing: 4) {
+                    .frame(width: 30, height: 30)
+                    .background(ForumChrome.side, in: RoundedRectangle(cornerRadius: 8))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("公告")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(ForumChrome.accent)
                     Text(notice.title)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(ForumChrome.text)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -84,10 +90,14 @@ struct PortalView: View {
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(ForumChrome.secondary)
+                    .foregroundStyle(ForumChrome.secondary.opacity(0.7))
             }
-            .padding(14)
-            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 14))
+            .padding(12)
+            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(ForumChrome.accent.opacity(0.16), lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
     }
@@ -96,27 +106,35 @@ struct PortalView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(ForumChrome.accent)
+                    .frame(width: 28, height: 28)
+                    .background(ForumChrome.side, in: RoundedRectangle(cornerRadius: 8))
                 Text("最新讨论")
-                    .font(.headline)
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(ForumChrome.text)
-                Spacer()
-                Text("社区动态")
-                    .font(.caption)
-                    .foregroundStyle(ForumChrome.secondary)
+                Spacer(minLength: 8)
+                Text(discussions.isEmpty ? "社区动态" : "\(discussions.count) 条")
+                    .font(.caption.weight(.medium).monospacedDigit())
+                    .foregroundStyle(ForumChrome.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(ForumChrome.side, in: Capsule())
             }
-            .padding(16)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
 
             if discussions.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(store.portalState == .loading ? "正在获取社区讨论…" : "暂无讨论内容")
-                        .font(.subheadline)
-                    Text("下拉刷新，或先浏览下方版块。")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(store.portalState == .loading ? "正在获取社区讨论" : "暂无讨论内容")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(ForumChrome.text)
+                    Text("下拉刷新，或先展开下方版块。")
                         .font(.caption)
+                        .foregroundStyle(ForumChrome.secondary)
                 }
-                .foregroundStyle(ForumChrome.secondary)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 20)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 16)
             } else {
                 ForEach(visibleDiscussions) { item in
                     ForumChrome.line.frame(height: 0.5).padding(.horizontal, 16)
@@ -159,15 +177,15 @@ private struct PortalRow: View {
                 ZStack {
                     ForumChrome.side
                     Image(systemName: "person.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(ForumChrome.accent.opacity(0.65))
+                        .font(.system(size: 14))
+                        .foregroundStyle(ForumChrome.accent.opacity(0.7))
                 }
             }
-            .frame(width: 34, height: 34)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .frame(width: 32, height: 32)
+            .clipShape(RoundedRectangle(cornerRadius: 9))
             .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text(item.title)
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(ForumChrome.text)
@@ -191,8 +209,8 @@ private struct PortalRow: View {
                 .lineLimit(1)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
         .contentShape(Rectangle())
     }
 }

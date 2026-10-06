@@ -16,7 +16,9 @@ struct ForumHomeView: View {
                     }
                     ForumDirectory(categories: store.categories)
                 }
-                .padding(16)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 28)
             }
             .refreshable { await store.loadForums() }
         }
@@ -33,23 +35,35 @@ struct ForumHomeView: View {
 
 struct ForumDirectory: View {
     let categories: [ForumCategory]
+    @AppStorage(ForumDirectoryState.storageKey) private var storedExpanded = ""
 
     private var visibleCategories: [ForumCategory] {
         categories.filter { $0.boards.contains { !$0.isAd } }
     }
 
+    private var expandedIDs: Set<String> {
+        ForumDirectoryState.reconciledExpandedIDs(
+            ForumDirectoryState.restoredExpandedIDs(stored: storedExpanded),
+            categories: visibleCategories
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("版块分区", systemImage: "square.grid.2x2")
-                    .font(.headline)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Label("版块分区", systemImage: "square.grid.2x2.fill")
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(ForumChrome.text)
-                Spacer()
-                Text("点击分组展开 / 收起")
+                    .labelStyle(.titleAndIcon)
+                Spacer(minLength: 8)
+                Text(directorySummary)
                     .font(.caption)
                     .foregroundStyle(ForumChrome.secondary)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 2)
+            .padding(.horizontal, 4)
+            .padding(.top, 2)
+            .accessibilityElement(children: .combine)
 
             if visibleCategories.isEmpty {
                 Text("暂无可显示的版块，请下拉刷新。")
@@ -60,51 +74,74 @@ struct ForumDirectory: View {
                     .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
             }
             ForEach(visibleCategories) { category in
-                ForumCategoryCard(
-                    category: category,
-                    initiallyExpanded: category.id == visibleCategories.first?.id
-                )
+                ForumCategoryCard(category: category, expanded: expandedIDs.contains(category.id)) {
+                    let next = ForumDirectoryState.toggled(expandedIDs, categoryID: category.id)
+                    storedExpanded = ForumDirectoryState.persistedValue(for: next)
+                }
             }
         }
+    }
+
+    private var directorySummary: String {
+        let open = expandedIDs.count
+        if open == 0 { return "\(visibleCategories.count) 个分区 · 轻点展开" }
+        return "已展开 \(open)/\(visibleCategories.count)"
     }
 }
 
 private struct ForumCategoryCard: View {
     let category: ForumCategory
+    let expanded: Bool
+    let toggle: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var expanded: Bool
-
-    init(category: ForumCategory, initiallyExpanded: Bool) {
-        self.category = category
-        _expanded = State(initialValue: initiallyExpanded)
-    }
 
     private var boards: [ForumBoard] { category.boards.filter { !$0.isAd } }
+
+    private var categoryIcon: String {
+        let name = category.name
+        if name.contains("电影") || name.contains("BT") { return "film" }
+        if name.contains("在线") || name.contains("视频") { return "play.rectangle" }
+        if name.contains("收藏") || name.contains("原档") { return "archivebox" }
+        if name.contains("图") { return "photo" }
+        if name.contains("文学") || name.contains("小说") { return "book" }
+        if name.contains("讨论") { return "text.bubble" }
+        return "square.stack.3d.up"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             Button {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded.toggle() }
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { toggle() }
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "square.stack.3d.up.fill")
-                        .font(.system(size: 15))
+                    Image(systemName: categoryIcon)
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(ForumChrome.accent)
                         .frame(width: 32, height: 32)
                         .background(ForumChrome.side, in: RoundedRectangle(cornerRadius: 9))
-                    Text(category.name)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(ForumChrome.text)
-                        .multilineTextAlignment(.leading)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(category.name)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(ForumChrome.text)
+                            .multilineTextAlignment(.leading)
+                        Text(expanded ? "\(boards.count) 个版块" : "已收起")
+                            .font(.caption2)
+                            .foregroundStyle(ForumChrome.secondary)
+                    }
                     Spacer(minLength: 4)
                     Text("\(boards.count)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(ForumChrome.secondary)
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(ForumChrome.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(ForumChrome.side, in: Capsule())
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(ForumChrome.accent)
+                        .foregroundStyle(ForumChrome.secondary)
+                        .frame(width: 18)
                 }
-                .padding(14)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
                 .contentShape(Rectangle())
             }
             .buttonStyle(ForumPressStyle())
@@ -117,17 +154,19 @@ private struct ForumCategoryCard: View {
                     ForumChrome.line.frame(height: 0.5).padding(.leading, 16)
                     NavigationLink { ThreadListView(board: board) } label: {
                         HStack(spacing: 12) {
-                            Image(systemName: "bubble.left.and.bubble.right")
-                                .font(.system(size: 17))
-                                .foregroundStyle(ForumChrome.accent.opacity(0.8))
-                                .frame(width: 30)
-                            VStack(alignment: .leading, spacing: 4) {
+                            Image(systemName: "number")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(ForumChrome.accent.opacity(0.85))
+                                .frame(width: 22, height: 22)
+                                .background(ForumChrome.side, in: RoundedRectangle(cornerRadius: 6))
+                            VStack(alignment: .leading, spacing: 3) {
                                 Text(board.name)
                                     .font(.system(size: 15, weight: .medium))
                                     .foregroundStyle(ForumChrome.text)
+                                    .lineLimit(1)
                                 if !board.meta.isEmpty {
                                     Text(board.meta)
-                                        .font(.caption)
+                                        .font(.caption2)
                                         .foregroundStyle(ForumChrome.secondary)
                                         .lineLimit(1)
                                 }
@@ -137,17 +176,17 @@ private struct ForumCategoryCard: View {
                                 Text("今日 \(board.today)")
                                     .font(.system(size: 11, weight: .medium))
                                     .foregroundStyle(ForumChrome.accent)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
                                     .background(ForumChrome.side, in: Capsule())
                             }
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(ForumChrome.secondary.opacity(0.6))
+                                .foregroundStyle(ForumChrome.secondary.opacity(0.55))
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 13)
-                        .frame(minHeight: 52)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        .frame(minHeight: 48)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(ForumPressStyle())

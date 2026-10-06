@@ -88,14 +88,18 @@ struct ForumLoadStatus: View {
     var body: some View {
         if state == .loading {
             HStack(spacing: 10) {
-                ProgressView().tint(ForumChrome.accent)
-                Text("正在加载\(title)…")
-                    .font(.subheadline)
-                    .foregroundStyle(ForumChrome.secondary)
+                ProgressView().controlSize(.small).tint(ForumChrome.accent)
+                Text("正在加载\(title)")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(ForumChrome.text)
                 Spacer()
+                Text("请稍候")
+                    .font(.caption)
+                    .foregroundStyle(ForumChrome.secondary)
             }
-            .padding(14)
-            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
         } else if let error = state.errorMessage {
             VStack(alignment: .leading, spacing: 10) {
                 Label("\(title)加载失败", systemImage: "wifi.exclamationmark")
@@ -123,7 +127,7 @@ struct ForumLoadStatus: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 14))
+            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
         }
     }
 }
