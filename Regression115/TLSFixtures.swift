@@ -8,13 +8,24 @@ final class TLS115Protocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         Self.requests += 1
         if request.httpMethod == "POST" { Self.posts += 1 }
-        if Self.failAll || request.httpMethod == "POST" || request.url!.host == "aps.115.com" {
+        if Self.failAll || request.httpMethod == "POST" || request.url!.host == "webapi.115.com" {
             client?.urlProtocol(self, didFailWithError: URLError(.secureConnectionFailed)); return
         }
         let searching = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.contains { $0.name == "search_value" } == true
         let body = searching ? "{\"state\":true,\"count\":0,\"data\":[]}" : "{\"state\":true,\"count\":0,\"data\":[],\"path\":[{\"cid\":\"0\"},{\"cid\":\"10\"}]}"
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(body.utf8)); client?.urlProtocolDidFinishLoading(self)
+        client?.urlProtocol(self, didLoad: pagingFixtureData(body)); client?.urlProtocolDidFinishLoading(self)
+    }
+
+    private func pagingFixtureData(_ text: String) -> Data {
+        let data = Data(text.utf8)
+        guard let url = request.url, let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let offset = q.first(where: { $0.name == "offset" })?.value,
+              var obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              obj["path"] != nil else { return data }
+        obj["offset"] = Int(offset)!; obj["limit"] = 100
+        obj["order"] = "file_name"; obj["is_asc"] = 1; obj["fc_mix"] = 1
+        return try! JSONSerialization.data(withJSONObject: obj)
     }
     override func stopLoading() {}
 }

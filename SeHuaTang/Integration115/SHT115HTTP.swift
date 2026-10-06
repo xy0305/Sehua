@@ -85,16 +85,20 @@ struct SHT115Page {
     let entries: [SHT115Entry]
     let total: Int?
     let path: [[String: Any]]
+    var endpoint: String? = nil
+    var offset: Int = 0
+    var pageLimit: Int = 100
 }
 extension SHT115HTTP {
-    func page(cid: String, offset: Int, settings: SHT115Settings) async throws -> SHT115Page {
-        let query = Self.form([("aid", "1"), ("cid", cid), ("offset", String(offset)), ("limit", "100"), ("show_dir", "1"), ("format", "json")])
+    func page(cid: String, offset: Int, settings: SHT115Settings, endpoint pinnedEndpoint: String? = nil) async throws -> SHT115Page {
+        let query = Self.form([("aid", "1"), ("cid", cid), ("offset", String(offset)), ("limit", "100"), ("show_dir", "1"), ("format", "json"), ("o", "file_name"), ("asc", "1"), ("custom_order", "1"), ("fc_mix", "1")])
         // Read-only compatibility routes used by XXXClub/avdb115. Only a transport
         // failure can switch endpoints; API rejection/unsafe data must stop closed.
         var obj: [String: Any] = [:]
-        let endpoints = ["https://aps.115.com/natsort/files.php", "https://proapi.115.com/android/2.0/ufile/files", "https://webapi.115.com/files"]
+        let endpoints = pinnedEndpoint.map { [$0] } ?? ["https://webapi.115.com/files", "https://proapi.115.com/android/2.0/ufile/files"]
+        var selectedEndpoint = endpoints[0]
         for (index, endpoint) in endpoints.enumerated() {
-            do { obj = try await json(endpoint + "?" + query, settings: settings); break }
+            do { obj = try await json(endpoint + "?" + query, settings: settings); selectedEndpoint = endpoint; break }
             catch let error as SHT115Diagnostic {
                 guard error.stage == "http-read", Int(error.code).map({ $0 <= -1000 && $0 != -999 }) == true, index < endpoints.count - 1 else { throw error }
             }
@@ -106,7 +110,24 @@ extension SHT115HTTP {
         let countValue = obj["count"] ?? nested["count"]
         let total = Int(Self.string(countValue))
         if countValue != nil, total == nil || (total ?? -1) < 0 { throw Self.listingFailure("count", "总数字段无效") }
-        return SHT115Page(entries: entries, total: total, path: (obj["path"] as? [[String: Any]]) ?? (nested["path"] as? [[String: Any]]) ?? [])
+        // Some compatibility fixtures/legacy responses omit metadata. Never accept
+        // a partially supplied or conflicting paging contract.
+        func value(_ key: String) -> Any? { obj[key] ?? nested[key] }
+        let hasMetadata = ["offset", "limit", "order", "is_asc"].contains { value($0) != nil }
+        var effectiveLimit = 100
+        guard hasMetadata else { throw Self.listingFailure("pagination", "缺少分页与排序回显，不能证明完整") }
+        if hasMetadata {
+            guard Int(Self.string(value("offset"))) == offset,
+                  let limit = Int(Self.string(value("limit"))), (1...100).contains(limit),
+                  Self.string(value("order")) == "file_name",
+                  Self.string(value("is_asc")) == "1",
+                  value("fc_mix") == nil || Self.string(value("fc_mix")) == "1" else {
+                throw Self.listingFailure("pagination", "分页位置、页长或排序回显不符")
+            }
+            effectiveLimit = limit
+        }
+        guard entries.count <= effectiveLimit else { throw Self.listingFailure("pagination", "返回超过有效页长") }
+        return SHT115Page(entries: entries, total: total, path: (obj["path"] as? [[String: Any]]) ?? (nested["path"] as? [[String: Any]]) ?? [], endpoint: selectedEndpoint, offset: offset, pageLimit: effectiveLimit)
     }
     static func entries(_ raw: [[String: Any]]) throws -> [SHT115Entry] {
         try raw.map { item -> SHT115Entry in
@@ -146,9 +167,11 @@ extension SHT115HTTP {
         for index in 0..<500 {
             let current: SHT115Page
             if index == 0, let firstPage { current = firstPage }
-            else { current = try await page(cid: cid, offset: entries.count, settings: settings) }
+            else { current = try await page(cid: cid, offset: entries.count, settings: settings, endpoint: initial?.endpoint) }
+            guard current.offset == entries.count else { throw Self.listingFailure("pagination", "分页位置不符") }
             try Self.verifiedPath(current.path, cid: cid, parent: nil)
             if let initial {
+                guard current.endpoint == initial.endpoint, current.pageLimit == initial.pageLimit else { throw Self.listingFailure("pagination", "分页端点或有效页长变化") }
                 guard current.total == initial.total else { throw Self.listingFailure("count", "分页总数变化") }
                 let ids = current.path.map { Self.string($0["cid"] ?? $0["category_id"] ?? $0["folder_id"]) }
                 let old = initial.path.map { Self.string($0["cid"] ?? $0["category_id"] ?? $0["folder_id"]) }
@@ -163,7 +186,7 @@ extension SHT115HTTP {
                 guard total >= 0, entries.count <= total else { throw Self.listingFailure("count", "累计条目与总数冲突") }
                 if entries.count == total { return entries }
                 guard !current.entries.isEmpty else { throw Self.listingFailure("count", "未达到总数却返回空页") }
-            } else if current.entries.count < 100 { return entries }
+            } else if current.entries.isEmpty { return entries }
         }
         throw Self.listingFailure("cap", "达到500页只读上限，尚不能证明完整")
     }

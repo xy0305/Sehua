@@ -84,6 +84,11 @@ jobs:
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/SubmissionFixtures.swift -o /tmp/submission-fixtures
           /tmp/submission-fixtures
 
+      - name: Stable pagination contract production fixtures
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/PagingFixtures.swift -o /tmp/paging-fixtures
+          /tmp/paging-fixtures
+
       - name: Listing safety and 52-54 production comparison
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/ListingFixtures.swift -o /tmp/listing-fixtures

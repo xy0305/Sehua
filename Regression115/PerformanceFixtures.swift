@@ -41,8 +41,19 @@ final class Performance115Protocol: URLProtocol, @unchecked Sendable {
         }
         let text = "{\"state\":true,\"count\":\(total),\"data\":[\(rows)],\"path\":\(path)}"
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(text.utf8))
+        client?.urlProtocol(self, didLoad: pagingFixtureData(text))
         client?.urlProtocolDidFinishLoading(self)
+    }
+
+    private func pagingFixtureData(_ text: String) -> Data {
+        let data = Data(text.utf8)
+        guard let url = request.url, let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let offset = q.first(where: { $0.name == "offset" })?.value,
+              var obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              obj["path"] != nil else { return data }
+        obj["offset"] = Int(offset)!; obj["limit"] = 100
+        obj["order"] = "file_name"; obj["is_asc"] = 1; obj["fc_mix"] = 1
+        return try! JSONSerialization.data(withJSONObject: obj)
     }
     override func stopLoading() {}
 }
