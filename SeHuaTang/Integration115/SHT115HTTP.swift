@@ -154,13 +154,16 @@ extension SHT115HTTP {
         throw SHT115Error.unsafeListing
     }
     /// Locate one exact child without requiring a complete scan of a very large parent.
+    /// Search is an optimization only: transport failure falls through to paging.
     /// Search results are not trusted until the candidate's own fresh path verifies it.
     func matchingDirectories(name: String, parentCID: String, parentPage: SHT115Page, settings: SHT115Settings) async throws -> [SHT115Entry] {
         var matches = parentPage.entries.filter { $0.isDirectory && $0.name == name }
         if matches.isEmpty {
             let query = Self.form([("aid", "1"), ("cid", parentCID), ("search_value", name), ("offset", "0"), ("limit", "20"), ("show_dir", "1"), ("format", "json")])
             for endpoint in ["https://webapi.115.com/files", "https://aps.115.com/natsort/files.php"] {
-                let obj = try await json(endpoint + "?" + query, settings: settings)
+                let obj: [String: Any]
+                do { obj = try await json(endpoint + "?" + query, settings: settings) }
+                catch { continue }
                 guard Self.success(obj) else { continue }
                 let nested = obj["data"] as? [String: Any] ?? [:]
                 let raw = (obj["data"] as? [[String: Any]]) ?? (nested["list"] as? [[String: Any]]) ?? []
