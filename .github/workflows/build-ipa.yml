@@ -130,8 +130,8 @@ jobs:
 
       - name: Native purchase protocol fixtures
         run: |
-          xcrun swiftc -parse-as-library SeHuaTang/Parser/HTML.swift SeHuaTang/Network/NativePurchaseService.swift Regression115/PurchaseFixtures.swift -o /tmp/purchase-fixtures
-          /tmp/purchase-fixtures
+          xcrun swiftc -parse-as-library SeHuaTang/Parser/HTML.swift SeHuaTang/Network/NativePurchaseService.swift Regression115/NativePurchaseFixtures.swift -o /tmp/native-purchase-fixtures
+          /tmp/native-purchase-fixtures
 
       - name: Native reply production protocol fixtures
         run: |
