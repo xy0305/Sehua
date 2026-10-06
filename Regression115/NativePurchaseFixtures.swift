@@ -13,6 +13,9 @@ import Foundation
         precondition((try? NativePurchaseProtocol.form(html.replacingOccurrences(of: "3743663", with: "1"), base: base, tid: 3743663)) == nil)
         let encoded = String(data: NativePurchaseProtocol.encode(["paysubmit": "true", "tid": "3743663"]), encoding: .utf8)
         precondition(encoded == "paysubmit=true&tid=3743663")
+        let button = html.replacingOccurrences(of: #"<input type="submit" name="paysubmit" value="true">"#, with: #"<button type="submit" name="paysubmit" value="true">购买主题</button>"#)
+        let buttonForm = try NativePurchaseProtocol.form(button, base: base, tid: 3743663)
+        precondition(buttonForm.fields["paysubmit"] == "true")
         print("PASS native purchase protocol")
     }
 }

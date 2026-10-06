@@ -31,7 +31,7 @@ enum NativePurchaseProtocol {
         }) else { throw NativePurchaseError.unavailable }
         guard let action = HTML.absURL(HTML.attribute("action", in: raw) ?? "", base: base) else { throw NativePurchaseError.unavailable }
         var fields: [String: String] = [:]
-        for input in HTML.elements(in: raw, tag: "input") {
+        for input in HTML.elements(in: raw, tag: "input") + HTML.elements(in: raw, tag: "button") {
             guard let name = HTML.attribute("name", in: input),
                   name.range(of: #"^[A-Za-z][A-Za-z0-9_]{0,39}$"#, options: .regularExpression) != nil,
                   fields[name] == nil else { throw NativePurchaseError.unavailable }
