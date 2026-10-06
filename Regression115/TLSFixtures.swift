@@ -1,11 +1,13 @@
 import Foundation
 final class TLS115Protocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var requests = 0
+    nonisolated(unsafe) static var posts = 0
     nonisolated(unsafe) static var failAll = false
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         Self.requests += 1
+        if request.httpMethod == "POST" { Self.posts += 1 }
         if Self.failAll || request.httpMethod == "POST" || request.url!.host == "aps.115.com" {
             client?.urlProtocol(self, didFailWithError: URLError(.secureConnectionFailed)); return
         }
@@ -35,15 +37,15 @@ final class TLS115Protocol: URLProtocol, @unchecked Sendable {
         }
         let before = await service.resources(); precondition(before.count == 1 && !before[0].directoryWritePending)
         TLS115Protocol.failAll = false
-        let count = TLS115Protocol.requests
+        let posts = TLS115Protocol.posts
         do { _ = try await service.createOrReuseResource(tid: "12", title: "fixture", settings: settings); preconditionFailure() }
         catch let error as SHT115Diagnostic { precondition(error.stage == "http-write" && error.localizedDescription.contains("不自动重发")) }
         let after = await service.resources(); precondition(after[0].directoryWritePending)
-        precondition(TLS115Protocol.requests == count + 4)
-        let saved = TLS115Protocol.requests
+        precondition(TLS115Protocol.posts == posts + 1, "directory creation must be sent exactly once")
+        let savedPosts = TLS115Protocol.posts
         do { _ = try await service.createOrReuseResource(tid: "12", title: "fixture", settings: settings); preconditionFailure() }
         catch SHT115Error.uncertainWrite {}
-        precondition(TLS115Protocol.requests == saved + 2, "must read only, never replay POST")
+        precondition(TLS115Protocol.posts == savedPosts, "must read only, never replay POST")
         print("PASS TLS fixtures: read fallback, safe retry, sanitized TLS UI, persisted unknown write/no replay")
     }
 }
