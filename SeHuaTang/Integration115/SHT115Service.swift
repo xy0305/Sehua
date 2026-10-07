@@ -148,6 +148,9 @@ public actor SHT115Service {
             }
             if let persistence = error as? SHT115Error, case .persistence = persistence { throw persistence }
             if records[i].directoryJournal?[attempt].state == .rejected { throw error }
+            // Keep the transport's sanitized write-phase/TLS diagnostic while the
+            // durable journal above still locks an unconfirmed creation.
+            if let diagnostic = error as? SHT115Diagnostic, diagnostic.stage == "http-write" { throw diagnostic }
             throw SHT115Diagnostic(stage: "directory-create", outcome: "结果未确认：保留目录锁，不自动重发；仅可只读核验", code: "")
         }
     }
