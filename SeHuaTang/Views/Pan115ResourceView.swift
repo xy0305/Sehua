@@ -19,6 +19,7 @@ struct Pan115ResourceView: View {
     @State private var message: String?
     @State private var resource: SHT115Resource?
     @State private var uncertainWrite = false
+    @State private var diagnostic = "尚未读取本机诊断"
 
     var body: some View {
         List {
@@ -34,6 +35,16 @@ struct Pan115ResourceView: View {
                         Label("已记录任务 / 视频选择", systemImage: "play.rectangle")
                     }
                 }
+            }
+            Section("只读恢复 / 脱敏诊断") {
+                Text(diagnostic).font(.caption).textSelection(.enabled)
+                Button("刷新本机诊断（不联网）") { Task { await loadExisting() } }
+                    .disabled(busy)
+                Button("只读核验目录（不提交任务）") { Task { await reconcile() } }
+                    .disabled(busy || resource == nil)
+                ShareLink("导出脱敏诊断", item: diagnostic)
+                Text("只读核验仅在CID或同tid目录身份确证后复用；找不到保留锁。不会清空任务、解除离线unknown或自动重发。")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             Section("提取结果（推送前核对）") {
                 Button("重新提取链接（只读）") { Task { await extract() } }
@@ -119,7 +130,9 @@ struct Pan115ResourceView: View {
             let service = try Pan115UIService.get()
             let settings = SHT115Settings.load()
             let records = await service.resources()
-            resource = records.first { $0.tid == String(detail.tid) && $0.parentCID == settings.parentCID }
+            resource = records.first { $0.account == settings.account && $0.tid == String(detail.tid) && $0.parentCID == settings.parentCID }
+            diagnostic = await service.safeDiagnostic(tid: String(detail.tid), settings: settings)
+            uncertainWrite = false
             if let resource {
                 uncertainWrite = resource.directoryWritePending || resource.tasks.contains {
                     $0.state == .unknown || $0.state == .submitting
@@ -179,6 +192,20 @@ struct Pan115ResourceView: View {
         if resource?.tasks.contains(where: { $0.state == .accepted }) == true { showTasks = true }
     }
 
+    @MainActor private func reconcile() async {
+        guard let resource, !busy else { return }
+        busy = true
+        defer { busy = false }
+        stage = "目录只读核验"
+        do {
+            let settings = SHT115Settings.load()
+            let service = try Pan115UIService.get()
+            self.resource = try await service.reconcileDirectory(resourceID: resource.id, settings: settings)
+            message = "目录身份已只读核验；未提交或重发离线任务，原任务状态保留。"
+        } catch { message = SHT115Settings.safeMessage(error) }
+        await loadExisting()
+    }
+
     @MainActor private func submit() async {
         let urls = submissionURLs
         guard !busy, !urls.isEmpty, !uncertainWrite else { return }
@@ -188,17 +215,17 @@ struct Pan115ResourceView: View {
             let settings = SHT115Settings.load()
             try settings.validate()
             let service = try Pan115UIService.get()
+            stage = "目录创建 / 核验"
             let created = try await service.createOrReuseResource(tid: String(detail.tid), title: detail.title, settings: settings)
             resource = created
+            stage = "离线任务提交"
             resource = try await service.submit(urls: urls, resourceID: created.id, settings: settings)
             message = "已记录提交结果；任务详情将自动读取视频并检查云解压。任务接受不等于离线完成。"
-        } catch let error as SHT115Error where error != .uncertainWrite {
-            message = SHT115Settings.safeMessage(error)
         } catch {
-            // A write may have reached the server even if its response was lost.
-            uncertainWrite = true
+            // Derive locks from the durable journal, not from a broad catch:
+            // a failed read/signature is not evidence that a write was sent.
             await loadExisting()
-            message = SHT115Settings.safeMessage(error)
+            message = "\(stage)：" + SHT115Settings.safeMessage(error)
         }
     }
 }

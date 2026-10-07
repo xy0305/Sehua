@@ -95,6 +95,9 @@ public actor SHT115Service {
             try await http.verify(cid: cid, parent: records[i].parentCID, settings: settings)
             records[i].directoryWritePending = false; try save(); return records[i]
         }
+        if records[i].directoryWritePending && !records[i].directoryName.hasSuffix("_tid-" + records[i].tid) {
+            throw SHT115Diagnostic(stage: "directory-reconcile", outcome: "目录创建待核验：旧名称缺少tid身份证据；保留锁，禁止新建", code: "")
+        }
         let parentPage = try await http.verifiedPage(cid: settings.parentCID, parent: nil, settings: settings)
         let children = try await http.matchingDirectories(name: records[i].directoryName, parentCID: settings.parentCID, parentPage: parentPage, settings: settings)
         let matches = children.filter { $0.isDirectory && $0.name == records[i].directoryName }
@@ -103,7 +106,9 @@ public actor SHT115Service {
             try await http.verify(cid: existing.id, parent: settings.parentCID, settings: settings)
             records[i].directoryCID = existing.id; records[i].directoryWritePending = false; try save(); return records[i]
         }
-        guard !records[i].directoryWritePending else { throw SHT115Error.uncertainWrite }
+        guard !records[i].directoryWritePending else {
+            throw SHT115Diagnostic(stage: "directory-reconcile", outcome: "目录创建待核验：只读未找到可确证的同tid目录；保留锁，禁止新建；本次未发送离线任务", code: "")
+        }
         records[i].directoryWritePending = true; try save()
         do {
             let obj = try await http.json("https://webapi.115.com/files/add", settings: settings, fields: [("pid", settings.parentCID), ("cname", records[i].directoryName)])
@@ -123,6 +128,39 @@ public actor SHT115Service {
               throw SHT115Diagnostic(stage: "directory-create", outcome: "结果未知：传输失败，不自动重发", code: String(error.code.rawValue))
           }
           catch { throw SHT115Diagnostic(stage: "directory-create", outcome: "结果未知：响应或路径无法确认，不自动重发", code: "") }
+    }
+    /// Explicit read-only recovery. This method never creates a directory or submits tasks.
+    public func reconcileDirectory(resourceID: String, settings: SHT115Settings) async throws -> SHT115Resource {
+        try await begin(); defer { end() }
+        let i = try index(resourceID, settings)
+        if let cid = records[i].directoryCID {
+            try await http.verify(cid: cid, parent: records[i].parentCID, settings: settings)
+        } else {
+            // An old title alone is not identity evidence. Require the persisted
+            // tid suffix and freshly verified ancestry plus exact leaf name.
+            guard records[i].directoryName.hasSuffix("_tid-" + records[i].tid) else {
+                throw SHT115Diagnostic(stage: "directory-reconcile", outcome: "目录身份缺少tid证据；保留锁，禁止新建", code: "")
+            }
+            let page = try await http.verifiedPage(cid: records[i].parentCID, parent: nil, settings: settings)
+            let matches = try await http.matchingDirectories(name: records[i].directoryName, parentCID: records[i].parentCID, parentPage: page, settings: settings)
+            guard matches.count == 1, let match = matches.first else {
+                throw SHT115Diagnostic(stage: "directory-reconcile", outcome: "目录创建待核验：未找到唯一同tid目录；保留锁，禁止新建；未重发离线任务", code: "")
+            }
+            records[i].directoryCID = match.id
+        }
+        records[i].directoryWritePending = false
+        try save()
+        return records[i] // Task unknown states are deliberately unchanged.
+    }
+    /// Local, allowlisted diagnostic: no account, cookie, signatures, URLs or post body.
+    public func safeDiagnostic(tid: String, settings: SHT115Settings) -> String {
+        let matching = records.filter { $0.account == settings.account && $0.parentCID == settings.parentCID && $0.tid == tid }
+        let header = "115诊断 v1 · tid=\(tid) · 当前父CID=\(settings.parentCID) · 本机记录=\(matching.count)"
+        return ([header] + matching.map { record in
+            let states = record.tasks.map { String(describing: $0.state) }.joined(separator: ",")
+            let phase = record.directoryWritePending ? "目录创建待核验" : (record.tasks.contains { $0.state == .unknown || $0.state == .submitting } ? "离线任务待核验" : (record.tasks.isEmpty ? "本机未记录离线提交" : "离线任务已有记录"))
+            return "父CID=\(record.parentCID) · 目录CID=\(record.directoryCID ?? "未知") · directoryPending=\(record.directoryWritePending) · 阶段=\(phase) · 任务数=\(record.tasks.count) · 状态=\(states)"
+        } + ["本机无记录不证明服务器未写入；目录核验不解除离线任务unknown。未导出账户、Cookie、签名、URL或正文。"]).joined(separator: "\n")
     }
     /// 115 web API uses url for a single link, url[n] (not urls[n]) for a batch.
     static func submissionFields(links: [String], cid: String, uid: String, signature: [(String, String)]) -> [(String, String)] {
@@ -160,7 +198,7 @@ public actor SHT115Service {
         }), let cid = records[i].directoryCID, !records[i].directoryWritePending else { throw SHT115Error.invalidInput }
         let prior = records[i].tasks.flatMap { $0.state == .rejected ? [] : $0.urls }
         guard links.allSatisfy({ !prior.contains($0) }) else {
-            if records[i].tasks.contains(where: { ($0.state == .unknown || $0.state == .submitting) && !$0.urls.filter(links.contains).isEmpty }) { throw SHT115Error.uncertainWrite }
+            if records[i].tasks.contains(where: { ($0.state == .unknown || $0.state == .submitting) && !$0.urls.filter(links.contains).isEmpty }) { throw SHT115Diagnostic(stage: "offline-reconcile", outcome: "历史离线任务待核验：unknown/submitting命中本次链接；保留任务锁，本次未重发", code: "") }
             throw SHT115Error.alreadySubmitted
         }
         do { try await http.verify(cid: cid, parent: records[i].parentCID, settings: settings) }

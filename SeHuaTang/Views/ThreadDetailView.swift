@@ -231,6 +231,12 @@ struct ThreadDetailView: View {
                         .contentShape(Rectangle())
                     }
                     .accessibilityLabel(panStatus == nil ? "提交115并直接播放" : "清除115操作状态")
+                    NavigationLink {
+                        Pan115ResourceView(detail: d, base: postURL, oneShot: false)
+                    } label: {
+                        Label("115只读恢复 / 脱敏诊断", systemImage: "checkmark.shield")
+                            .font(.footnote)
+                    }
                     if let panStatus {
                         Text(panStatus)
                             .font(.footnote)
@@ -661,7 +667,7 @@ struct ThreadDetailView: View {
             let settings = SHT115Settings.load()
             try settings.validate()
             let service = try Pan115UIService.get()
-            let existing = await service.resources().first { $0.tid == String(d.tid) && $0.parentCID == settings.parentCID && $0.directoryCID != nil }
+            let existing = await service.resources().first { $0.account == settings.account && $0.tid == String(d.tid) && $0.parentCID == settings.parentCID && $0.directoryCID != nil }
             var resource = existing
             if existing?.tasks.contains(where: { $0.state == .accepted }) != true {
                 panStatus = "提取中"

@@ -196,7 +196,17 @@ extension SHT115HTTP {
         SHT115Diagnostic(stage: "directory-" + stage, outcome: reason + "，已停止写入", code: "")
     }
     func matchingDirectories(name: String, parentCID: String, parentPage: SHT115Page, settings: SHT115Settings) async throws -> [SHT115Entry] {
-        let entries = try await allEntries(cid: parentCID, settings: settings, firstPage: parentPage)
+        var entries = try await allEntries(cid: parentCID, settings: settings, firstPage: parentPage)
+        for entry in entries where entry.isDirectory && entry.name.isEmpty {
+            // An unnamed listing row is not absence evidence. Resolve its fresh
+            // ancestry/name before permitting any directory creation.
+            let candidate = try await verifiedPage(cid: entry.id, parent: parentCID, settings: settings)
+            let leafName = Self.string(candidate.path.last?["name"] ?? candidate.path.last?["n"])
+            guard !leafName.isEmpty else {
+                throw Self.listingFailure("identity", "存在空名称目录且身份无法确认；禁止新建目录")
+            }
+            if leafName == name { entries.append(SHT115Entry(id: entry.id, name: leafName, isDirectory: true, pickCode: entry.pickCode, size: entry.size)) }
+        }
         let matches = entries.filter { $0.isDirectory && $0.name == name }
         for match in matches {
             let candidate = try await verifiedPage(cid: match.id, parent: parentCID, settings: settings)

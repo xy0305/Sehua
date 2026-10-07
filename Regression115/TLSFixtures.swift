@@ -55,7 +55,7 @@ final class TLS115Protocol: URLProtocol, @unchecked Sendable {
         precondition(TLS115Protocol.posts == posts + 1, "directory creation must be sent exactly once")
         let savedPosts = TLS115Protocol.posts
         do { _ = try await service.createOrReuseResource(tid: "12", title: "fixture", settings: settings); preconditionFailure() }
-        catch SHT115Error.uncertainWrite {}
+        catch let error as SHT115Diagnostic { precondition(error.stage == "directory-reconcile") }
         precondition(TLS115Protocol.posts == savedPosts, "must read only, never replay POST")
         print("PASS TLS fixtures: read fallback, safe retry, sanitized TLS UI, persisted unknown write/no replay")
     }

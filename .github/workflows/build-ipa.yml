@@ -45,6 +45,11 @@ jobs:
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/TLSFixtures.swift -o /tmp/tls-fixtures
           /tmp/tls-fixtures
 
+      - name: Read-only pending recovery and sanitized diagnostics regression
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/RecoveryFixtures.swift -o /tmp/recovery-fixtures
+          /tmp/recovery-fixtures
+
       - name: Original file playback production regression
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/PlaybackFixtures.swift -o /tmp/playback-fixtures
