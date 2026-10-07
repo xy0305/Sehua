@@ -250,7 +250,6 @@ struct ThreadListView: View {
 struct ThreadCard: View {
     let item: ThreadItem
     @State private var previewPage = 0
-    @State private var viewingImage = false
     @State private var appeared = false
     @State private var intersectsViewport = false
     @GestureState private var draggingPreview = false
@@ -260,7 +259,7 @@ struct ThreadCard: View {
     private var rotates: Bool {
         PresentationTiming.canRotate(count: item.previewURLs.count, visible: appeared && intersectsViewport,
             foreground: scenePhase == .active, reducedMotion: reduceMotion,
-            interacting: draggingPreview, viewingImage: viewingImage)
+            interacting: draggingPreview, viewingImage: false)
     }
     private var rotationKey: String { "\(rotates)-\(previewPage)-\(item.previewURLs.count)" }
 
@@ -276,16 +275,13 @@ struct ThreadCard: View {
                     ZStack(alignment: .bottom) {
                         TabView(selection: $previewPage) {
                             ForEach(Array(item.previewURLs.enumerated()), id: \.offset) { index, url in
-                                Button { viewingImage = true } label: {
-                                    SiteImage(url: url, contentMode: .fit, preservesIntrinsicAspectRatio: false, animationBudget: 4 * 1024 * 1024) {
-                                        ZStack { ForumChrome.page; ProgressView() }
-                                    }
-                                    .frame(width: geometry.size.width, height: height)
-                                    .background(ForumChrome.page)
-                                    .contentShape(Rectangle())
+                                SiteImage(url: url, contentMode: .fit, preservesIntrinsicAspectRatio: false, animationBudget: 4 * 1024 * 1024) {
+                                    ZStack { ForumChrome.page; ProgressView() }
                                 }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("查看第 \(index + 1) 张大图，可缩放")
+                                .frame(width: geometry.size.width, height: height)
+                                .background(ForumChrome.page)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
                                 .tag(index)
                             }
                         }
@@ -346,9 +342,6 @@ struct ThreadCard: View {
                 .aspectRatio(1 / 0.72, contentMode: .fit)
                 .frame(minHeight: 220, maxHeight: 280)
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22))
-                .fullScreenCover(isPresented: $viewingImage) {
-                    ThreadPreviewViewer(url: item.previewURLs[min(previewPage, item.previewURLs.count - 1)])
-                }
             }
             NavigationLink { destination } label: {
                 VStack(alignment: .leading, spacing: 12) {
