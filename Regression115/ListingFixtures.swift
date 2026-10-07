@@ -62,7 +62,7 @@ final class ListingProtocol: URLProtocol, @unchecked Sendable {
             if mode == "cap" { continue } // avoid hundreds of paced requests on old code
             #endif
             ListingProtocol.scenario = mode; ListingProtocol.calls = 0
-            let expected = ["changing":"directory-count", "duplicate":"directory-duplicate", "path":"directory-path", "cap":"directory-cap", "missing-name":"directory-list", "foreign":"directory-path", "leaf-name":"directory-path"][mode]
+            let expected = ["changing":"directory-count", "duplicate":"directory-duplicate", "path":"directory-path", "cap":"directory-cap", "foreign":"directory-path", "leaf-name":"directory-path"][mode]
             do {
                 #if BASELINE_LISTING
                 #if VERSION54

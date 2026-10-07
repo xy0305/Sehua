@@ -136,7 +136,9 @@ extension SHT115HTTP {
             let id = directory ? Self.string(item["cid"] ?? item["category_id"] ?? item["folder_id"]) : fid
             guard SHT115Settings.isCID(id), id != "0" else { throw Self.listingFailure("list", "条目标识无效") }
             let name = Self.string(item["n"] ?? item["name"] ?? item["file_name"] ?? item["category_name"])
-            guard !name.isEmpty else { throw Self.listingFailure("list", "条目名称缺失，不能证明不存在") }
+            // 52 accepted entries whose display name was absent. Missing names
+            // cannot disprove a target directory, but they also must not abort a
+            // complete ID-verified listing. Empty names remain non-matching.
             return SHT115Entry(id: id, name: name, isDirectory: directory,
                 pickCode: Self.string(item["pc"] ?? item["pick_code"] ?? item["pickcode"]), size: Int64(Self.string(item["s"] ?? item["file_size"] ?? item["size"])) ?? 0)
         }
