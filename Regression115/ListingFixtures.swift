@@ -27,7 +27,7 @@ final class ListingProtocol: URLProtocol, @unchecked Sendable {
             if offset < end { rows = (offset..<end).map { ["fid":String($0 + 1000), "n":"file"] } }
             if mode == "duplicate" && offset > 0 { rows = [["fid":"1000","n":"file"]] }
             if mode == "path" && offset > 0 { path = [["cid":"0"],["cid":"99"]] }
-            if mode == "missing-name" { rows = [["cid":"900","n":""]] }
+            if mode == "missing-name" { rows = (offset..<end).map { ["fid":String($0 + 1000), "n":""] } }
             if ["ignored-search", "foreign", "leaf-name"].contains(mode) && offset > 0 { rows = [["cid":"900","n":"wanted"]] }
         }
         let data = try! JSONSerialization.data(withJSONObject: rows)
