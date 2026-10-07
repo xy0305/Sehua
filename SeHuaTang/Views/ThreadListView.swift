@@ -127,18 +127,26 @@ struct ThreadListView: View {
     }
 
     private var compactToolbar: some View {
-        HStack(spacing: 8) {
-            Text("\(store.threadTypes.first(where: { $0.id == typeID })?.name ?? "全部") · \(orders.first(where: { $0.0 == order })?.1 ?? "最新") · 第\(store.threadSelectedPage)页" + (store.threadPage > store.threadSelectedPage ? "–\(store.threadPage)页" : ""))
-                .font(.caption).foregroundStyle(ForumChrome.secondary).lineLimit(1)
+        HStack(spacing: 10) {
+            Label("\(store.threadTypes.first(where: { $0.id == typeID })?.name ?? "全部")", systemImage: "line.3.horizontal.decrease")
+            Text("·")
+            Text(orders.first(where: { $0.0 == order })?.1 ?? "最新")
+            Text("·")
+            Text("第\(store.threadSelectedPage)页")
             Spacer(minLength: 0)
             Button { optionsPresented = true } label: {
-                Label("选项", systemImage: "slider.horizontal.3").font(.subheadline)
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                    .background(ForumChrome.accent.opacity(0.12), in: Circle())
             }
             .accessibilityLabel("筛选、排序与页码选项")
         }
-        .padding(.horizontal, 16)
-        .frame(height: 40)
-        .background(ForumChrome.bar)
+        .font(.caption.weight(.medium))
+        .foregroundStyle(ForumChrome.secondary)
+        .padding(.horizontal, 14)
+        .frame(height: 48)
+        .background(ForumChrome.page)
     }
 
     private var typeBar: some View {
@@ -261,55 +269,31 @@ struct ThreadCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            NavigationLink { destination } label: {
-            VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Text(item.author.isEmpty ? "匿名" : item.author)
-                if !item.dateText.isEmpty { Text("·"); Text(item.dateText) }
-                Spacer(minLength: 0)
-                if item.isSticky {
-                    Text("置顶").foregroundStyle(ForumChrome.blue)
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(ForumChrome.secondary)
-            Text(item.title)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(ForumChrome.text)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-            if !item.excerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(item.excerpt)
-                    .font(.system(size: 14))
-                    .foregroundStyle(ForumChrome.secondary)
-                    .lineLimit(3)
-                    .multilineTextAlignment(.leading)
-            }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            }
-            .buttonStyle(ForumPressStyle())
+        VStack(alignment: .leading, spacing: 0) {
             if !item.previewURLs.isEmpty {
                 GeometryReader { geometry in
                     let height = min(280, max(220, geometry.size.width * 0.72))
-                    TabView(selection: $previewPage) {
-                        ForEach(Array(item.previewURLs.enumerated()), id: \.offset) { index, url in
-                            Button { viewingImage = true } label: {
-                                SiteImage(url: url, contentMode: .fit, preservesIntrinsicAspectRatio: false, animationBudget: 4 * 1024 * 1024) {
-                                    ZStack { ForumChrome.page; ProgressView() }
+                    ZStack(alignment: .bottom) {
+                        TabView(selection: $previewPage) {
+                            ForEach(Array(item.previewURLs.enumerated()), id: \.offset) { index, url in
+                                Button { viewingImage = true } label: {
+                                    SiteImage(url: url, contentMode: .fit, preservesIntrinsicAspectRatio: false, animationBudget: 4 * 1024 * 1024) {
+                                        ZStack { ForumChrome.page; ProgressView() }
+                                    }
+                                    .frame(width: geometry.size.width, height: height)
+                                    .background(ForumChrome.page)
+                                    .contentShape(Rectangle())
                                 }
-                                .frame(width: geometry.size.width, height: height)
-                                .background(ForumChrome.page)
-                                .contentShape(Rectangle())
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("查看第 \(index + 1) 张大图，可缩放")
+                                .tag(index)
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("查看第 \(index + 1) 张大图，可缩放")
-                            .tag(index)
                         }
+                        .tabViewStyle(.page(indexDisplayMode: .never))
+                        LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .center, endPoint: .bottom)
+                            .frame(height: 72)
+                            .allowsHitTesting(false)
                     }
-                    .tabViewStyle(.page(indexDisplayMode: .never))
                     .simultaneousGesture(DragGesture(minimumDistance: 5)
                         .updating($draggingPreview) { _, state, _ in state = true })
                     .onGeometryChange(for: Bool.self) { proxy in
@@ -331,44 +315,84 @@ struct ThreadCard: View {
                         } catch { /* Leaving the viewport or manual input cancels the tick. */ }
                     }
                     .frame(height: height)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(alignment: .topLeading) {
+                        if item.isSticky {
+                            Text("置顶")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .foregroundStyle(.white)
+                                .background(ForumChrome.accent, in: Capsule())
+                                .padding(10)
+                        }
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        HStack(spacing: 5) {
+                            ForEach(item.previewURLs.indices, id: \.self) { index in
+                                Capsule().fill(index == previewPage ? Color.white : Color.white.opacity(0.45))
+                                    .frame(width: index == previewPage ? 14 : 5, height: 5)
+                            }
+                        }
+                        .padding(12)
+                        .allowsHitTesting(false)
+                    }
                     .overlay(alignment: .bottomTrailing) {
-                        Text("\(previewPage + 1)/\(item.previewURLs.count) · 点击放大")
-                            .font(.caption2.monospacedDigit())
-                            .padding(.horizontal, 8).padding(.vertical, 5)
-                            .foregroundStyle(.white).background(.black.opacity(0.65), in: Capsule())
-                            .padding(8).allowsHitTesting(false)
+                        Text("\(previewPage + 1)/\(item.previewURLs.count)")
+                            .font(.caption2.monospacedDigit().weight(.semibold))
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .foregroundStyle(.white).background(.black.opacity(0.35), in: Capsule())
+                            .padding(10).allowsHitTesting(false)
                     }
                 }
-                // Height depends only on available card width, never decoded pixels.
                 .aspectRatio(1 / 0.72, contentMode: .fit)
                 .frame(minHeight: 220, maxHeight: 280)
+                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22))
                 .fullScreenCover(isPresented: $viewingImage) {
                     ThreadPreviewViewer(url: item.previewURLs[min(previewPage, item.previewURLs.count - 1)])
                 }
             }
             NavigationLink { destination } label: {
-            HStack(spacing: 16) {
-                Label(item.replies.isEmpty ? "0" : item.replies, systemImage: "bubble")
-                if !item.likes.isEmpty { Label(item.likes, systemImage: "hand.thumbsup") }
-                if !item.views.isEmpty { Label(item.views, systemImage: "eye") }
-            }
-            .font(.caption)
-            .foregroundStyle(ForumChrome.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(item.title)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(ForumChrome.text)
+                        .lineSpacing(2)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !item.excerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(item.excerpt)
+                            .font(.system(size: 14))
+                            .foregroundStyle(ForumChrome.secondary)
+                            .lineLimit(2)
+                            .lineSpacing(2)
+                    }
+                    HStack(spacing: 8) {
+                        Text(String((item.author.isEmpty ? "匿名" : item.author).prefix(1)))
+                            .font(.caption.weight(.bold)).foregroundStyle(.white)
+                            .frame(width: 22, height: 22)
+                            .background(ForumChrome.accent, in: Circle())
+                        Text(item.author.isEmpty ? "匿名" : item.author)
+                            .lineLimit(1)
+                        if !item.dateText.isEmpty { Text(item.dateText).lineLimit(1) }
+                        Spacer(minLength: 0)
+                        if !item.replies.isEmpty { Label(item.replies, systemImage: "bubble") }
+                        if !item.views.isEmpty { Label(item.views, systemImage: "eye") }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(ForumChrome.secondary)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(ForumPressStyle())
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 22))
         .overlay {
-            RoundedRectangle(cornerRadius: 16).stroke(ForumChrome.line.opacity(0.5), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 22).stroke(ForumChrome.line.opacity(0.45), lineWidth: 0.5)
         }
-        .contentShape(RoundedRectangle(cornerRadius: 16))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
+        .shadow(color: .black.opacity(0.04), radius: 10, y: 4)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
     }
 }
 
