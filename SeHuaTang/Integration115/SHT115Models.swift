@@ -77,6 +77,8 @@ public struct SHT115Resource: Codable, Identifiable {
     public var directoryCID: String?
     public var directoryWritePending: Bool
     public var tasks: [SHT115Task]
+    public var directoryRecoveryOnly: Bool? = nil
+    public var directoryJournal: [SHT115DirectoryAttempt]? = nil
     public var extractions: [String: SHT115ExtractionState]? = nil
     public var extractionJobs: [String: SHT115ExtractionJob]? = nil
 }
@@ -132,3 +134,12 @@ public struct SHT115ExtractionJob: Codable {
     public var cleanup: SHT115CleanupState
 }
 public enum SHT115CleanupState: String, Codable { case waiting, submitting, recycled, rejected, unknown }
+
+/// No names, credentials or resource URLs in the creation journal.
+public struct SHT115DirectoryAttempt: Codable {
+    public let authorization: UUID
+    public let authorizedAt: Date
+    public let manualRecovery: Bool
+    public let historicalPending: Bool
+    public var state: SHT115SubmissionState
+}

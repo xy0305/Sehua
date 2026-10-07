@@ -15,6 +15,9 @@ struct Pan115ResourceView: View {
     @State private var includeExtracted = true
     @State private var busy = false
     @State private var extractionBusy = false
+    @State private var showRebuildConfirmation = false
+    @State private var rebuildAuthorization = UUID()
+    @State private var requireSeparateSubmission = false
     @State private var showConfirmation = false
     @State private var message: String?
     @State private var resource: SHT115Resource?
@@ -42,6 +45,13 @@ struct Pan115ResourceView: View {
                     .disabled(busy)
                 Button("只读核验目录（不提交任务）") { Task { await reconcile() } }
                     .disabled(busy || resource == nil)
+                Button("已在115核对无目录，确认重建") {
+                    rebuildAuthorization = UUID(); showRebuildConfirmation = true
+                }
+                .disabled(busy || resource?.directoryWritePending != true || resource?.directoryCID != nil || resource?.tasks.contains(where: { [.unknown, .submitting, .accepted].contains($0.state) }) == true)
+                if let resource {
+                    Text("设备内旧目录名：\(resource.directoryName)（不随诊断导出）").font(.caption).textSelection(.enabled)
+                }
                 ShareLink("导出脱敏诊断", item: diagnostic)
                 Text("只读核验仅在CID或同tid目录身份确证后复用；找不到保留锁。不会清空任务、解除离线unknown或自动重发。")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -109,6 +119,12 @@ struct Pan115ResourceView: View {
         }
         .navigationDestination(isPresented: $showTasks) {
             if let resource { Pan115TaskDetailView(resource: resource) }
+        }
+        .alert("已在115核对无目录，确认重建", isPresented: $showRebuildConfirmation) {
+            Button("确认：仅恢复目录", role: .destructive) { Task { await rebuildDirectory() } }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("当前父CID：\(SHT115Settings.load().parentCID)\ntid：\(detail.tid)\n设备内旧目录名：\(resource?.directoryName ?? "未知")\n完整分页仍不是事务快照，存在并发创建重复目录风险。确认后先重新全量核验，唯一目录只读复用，否则最多创建一次。结果未知不重发。不推送任何离线任务；成功后须另行确认离线推送。")
         }
         .confirmationDialog("创建 / 复用此帖独立目录并提交 \(submissionURLs.count) 个链接？", isPresented: $showConfirmation, titleVisibility: .visible) {
             Button("确认创建目录并提交") { Task { await submit() } }
@@ -180,16 +196,34 @@ struct Pan115ResourceView: View {
             showTasks = true
             return
         }
-        guard !busy, !uncertainWrite else { return }
+        guard !busy, !uncertainWrite, !requireSeparateSubmission else { return }
         stage = "提取链接"
         await extract()
         guard !extractedURLs.isEmpty else {
             message = "未提取到可提交链接，未创建目录。"
             return
         }
+        if resource?.directoryRecoveryOnly == true || resource?.directoryJournal?.contains(where: { $0.manualRecovery }) == true {
+            showConfirmation = true
+            message = "此记录经过目录恢复；请另行确认离线推送，不会自动提交。"
+            return
+        }
         stage = "创建目录并提交离线"
         await submit()
         if resource?.tasks.contains(where: { $0.state == .accepted }) == true { showTasks = true }
+    }
+
+    @MainActor private func rebuildDirectory() async {
+        guard let resource, !busy else { return }
+        busy = true; requireSeparateSubmission = true
+        defer { busy = false }
+        stage = "用户确认目录恢复"
+        do {
+            let service = try Pan115UIService.get()
+            self.resource = try await service.confirmDirectoryRebuild(resourceID: resource.id, tid: String(detail.tid), settings: SHT115Settings.load(), authorization: rebuildAuthorization)
+            message = "目录已核验恢复；未推送离线任务，请另行核对链接并确认归档。"
+        } catch { message = SHT115Settings.safeMessage(error) }
+        await loadExisting()
     }
 
     @MainActor private func reconcile() async {
