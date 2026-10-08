@@ -69,6 +69,8 @@ jobs:
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift Regression115/SearchPaginationFixtures.swift -o /tmp/search-pagination-fixtures
           /tmp/search-pagination-fixtures
+          xcrun swiftc -parse-as-library SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Network/AppStore.swift Regression115/SearchStateFixtures.swift -o /tmp/search-state-fixtures
+          /tmp/search-state-fixtures
 
       - name: Production parser regression tests
         run: |
