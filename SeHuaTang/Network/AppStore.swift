@@ -61,6 +61,8 @@ final class AppStore: ObservableObject {
     private var portalGeneration = UUID()
     private var searchGeneration = UUID()
     private var searchQuery = ""
+    private var searchNextURL: URL?
+    private var visitedSearchURLs = Set<URL>()
 
     func loadForums() async {
         guard forumState != .loading, !Task.isCancelled else { return }
@@ -195,6 +197,9 @@ final class AppStore: ObservableObject {
         let trimmed = q.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             searchGeneration = UUID()
+            searchQuery = ""
+            searchNextURL = nil
+            visitedSearchURLs = []
             searchHits = []
             searchPage = 1
             searchHasNext = false
@@ -205,13 +210,16 @@ final class AppStore: ObservableObject {
     }
 
     func loadMoreSearch() async {
-        guard searchHasNext, searchState != .loading, !searchQuery.isEmpty else { return }
-        await loadSearch(searchQuery, page: searchPage + 1, append: true)
+        guard searchHasNext, searchState == .idle, !searchQuery.isEmpty,
+              let next = searchNextURL, let page = HTML.queryInt("page", in: next.absoluteString) else { return }
+        await loadSearch(searchQuery, page: page, append: true)
     }
 
     func retrySearch() async {
         guard searchState != .loading, !searchQuery.isEmpty else { return }
-        await loadSearch(searchQuery, page: searchHits.isEmpty ? 1 : searchPage + 1, append: !searchHits.isEmpty)
+        let append = searchNextURL != nil && !searchHits.isEmpty
+        let page = append ? (HTML.queryInt("page", in: searchNextURL!.absoluteString) ?? 1) : 1
+        await loadSearch(searchQuery, page: page, append: append)
     }
 
     private func loadSearch(_ query: String, page: Int, append: Bool) async {
@@ -221,15 +229,18 @@ final class AppStore: ObservableObject {
         searchQuery = query
         searchState = .loading
         if !append {
-            searchHits = []
+            searchNextURL = nil
+            visitedSearchURLs = []
             searchPage = 1
             searchHasNext = false
         }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         let encoded = query.addingPercentEncoding(withAllowedCharacters: allowed) ?? query
-        let path = "search.php?mod=forum&searchsubmit=yes&srchtxt=\(encoded)&page=\(page)&mobile=2"
+        let firstPath = "search.php?mod=forum&searchsubmit=yes&srchtxt=\(encoded)&mobile=2"
+        guard !append || searchNextURL != nil else { return }
+        let target = append ? searchNextURL! : WebSession.shared.url(firstPath)
         do {
-            let html = try await WebSession.shared.fetchHTML(path)
+            let html = try await WebSession.shared.fetchHTML(target.absoluteString)
             guard searchGeneration == generation else { return }
             try Task.checkCancellation()
             if DiscuzParser.looksLikeChallenge(html) {
@@ -244,7 +255,10 @@ final class AppStore: ObservableObject {
                 searchHits = parsed.hits
             }
             searchPage = page
-            searchHasNext = parsed.hasNext
+            visitedSearchURLs.insert(target)
+            let next = DiscuzParser.searchNextURL(html, baseURL: target, page: page)
+            searchNextURL = next.flatMap { visitedSearchURLs.contains($0) ? nil : $0 }
+            searchHasNext = searchNextURL != nil
             searchState = .idle
         } catch {
             guard searchGeneration == generation else { return }

@@ -59,7 +59,7 @@ struct SearchView: View {
                 Text("搜索").font(.headline).frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(trimmedQuery.isEmpty || store.searchState == .loading)
+            .disabled(trimmedQuery.isEmpty)
         }
         .padding(16)
         .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
@@ -132,7 +132,7 @@ struct SearchView: View {
                 }
             }
             if store.searchHasNext && store.searchState == .idle {
-                Color.clear.frame(height: 1).onAppear { loadMore() }
+                Color.clear.frame(height: 1).id(store.searchPage).onAppear { loadMore() }
             }
             Group {
                 if store.searchState == .loading {
@@ -155,7 +155,7 @@ struct SearchView: View {
     }
 
     private func submitSearch() {
-        guard !trimmedQuery.isEmpty, store.searchState != .loading else { return }
+        guard !trimmedQuery.isEmpty else { return }
         searchFocused = false
         searchTask?.cancel()
         submittedQuery = trimmedQuery

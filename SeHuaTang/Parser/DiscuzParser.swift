@@ -564,8 +564,8 @@ enum DiscuzParser {
     static func parseSearch(_ html: String, page: Int = 1) -> (hits: [SearchHit], hasNext: Bool) {
         var hits: [SearchHit] = []
         var seen = Set<Int>()
-        let hrefs = HTML.allMatches(#"<a href="([^"]*tid=\d+[^"]*)"[^>]*>([\s\S]*?)</a>"#, in: html, group: 1)
-        let titles = HTML.allMatches(#"<a href="([^"]*tid=\d+[^"]*)"[^>]*>([\s\S]*?)</a>"#, in: html, group: 2)
+        let hrefs = HTML.allMatches(#"(?i)<a\b[^>]*\bhref\s*=\s*["']([^"']*tid=\d+[^"']*)["'][^>]*>([\s\S]*?)</a>"#, in: html, group: 1)
+        let titles = HTML.allMatches(#"(?i)<a\b[^>]*\bhref\s*=\s*["']([^"']*tid=\d+[^"']*)["'][^>]*>([\s\S]*?)</a>"#, in: html, group: 2)
         for (href, t) in zip(hrefs, titles) {
             guard let tid = HTML.queryInt("tid", in: href), seen.insert(tid).inserted else { continue }
             let title = HTML.stripTags(t)
@@ -575,6 +575,27 @@ enum DiscuzParser {
         }
         let pages = HTML.allMatches(#"search\.php\?[^"'<>]*?\bpage=(\d+)"#, in: html, group: 1).compactMap(Int.init)
         return (hits, pages.contains { $0 > page })
+    }
+
+    static func searchNextURL(_ html: String, baseURL: URL, page: Int) -> URL? {
+        let hrefs = HTML.allMatches(#"(?i)<a\b[^>]*\bhref\s*=\s*["']([^"']+)["']"#, in: html, group: 1)
+        return hrefs.compactMap { href -> URL? in
+            let decoded = href.replacingOccurrences(of: "&amp;", with: "&")
+            guard let url = URL(string: decoded, relativeTo: baseURL)?.absoluteURL,
+                  url.scheme == "https", url.host == baseURL.host,
+                  url.user == nil, url.password == nil, url.port == baseURL.port,
+                  url.path == "/search.php", url.fragment == nil,
+                  let parts = URLComponents(url: url, resolvingAgainstBaseURL: true),
+                  let items = parts.queryItems else { return nil }
+            func value(_ name: String) -> String? {
+                let matches = items.filter { $0.name == name }
+                return matches.count == 1 ? matches[0].value : nil
+            }
+            guard value("mod") == "forum", let raw = value("page"),
+                  let next = Int(raw), String(next) == raw, next > page,
+                  value("searchid") != nil else { return nil }
+            return url
+        }.min { (HTML.queryInt("page", in: $0.absoluteString) ?? Int.max) < (HTML.queryInt("page", in: $1.absoluteString) ?? Int.max) }
     }
 
     static func loggedInUsername(_ html: String) -> String? {
