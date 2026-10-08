@@ -61,7 +61,7 @@ final class ExtractionMockProtocol: URLProtocol, @unchecked Sendable {
                 precondition(url.query!.contains("info_hash=" + hash))
                 precondition(!url.query!.contains("page=2"))
                 if taskFailure { throw URLError(.timedOut) }
-                return "{\"state\":true,\"tasks\":[{\"info_hash\":\"" + hash + "\",\"wp_path_id\":20,\"status\":2,\"percentDone\":100}]}"
+                return "{\"state\":true,\"page_count\":1,\"tasks\":[{\"info_hash\":\"" + hash + "\",\"wp_path_id\":20,\"status\":2,\"percentDone\":100}]}"
             }
             if path == "/files/push_extract" {
                 if request.httpMethod == "POST" { precondition(form(request) == "pick_code=archivePC&secret="); return "{\"state\":true}" }

@@ -347,6 +347,7 @@ public actor SHT115Service {
                     let pages = Int(SHT115HTTP.string(obj["page_count"] ?? data["page_count"]))
                     if let pages, page >= pages { break }
                     if rows.isEmpty { break }
+                    if pages == nil { truncated = true; break }
                     if page == 32 { truncated = true }
                 } catch { truncated = true; break }
             }
