@@ -379,13 +379,18 @@ struct ThreadCard: View {
             }
             .buttonStyle(ForumPressStyle())
         }
-        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 22))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26))
         .overlay {
-            RoundedRectangle(cornerRadius: 22).stroke(ForumChrome.line.opacity(0.45), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 26)
+                .strokeBorder(
+                    LinearGradient(colors: [.white.opacity(0.72), .white.opacity(0.18)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing),
+                    lineWidth: 0.8
+                )
         }
-        .shadow(color: .black.opacity(0.04), radius: 10, y: 4)
+        .shadow(color: .black.opacity(0.08), radius: 18, y: 8)
         .padding(.horizontal, 14)
-        .padding(.vertical, 7)
+        .padding(.vertical, 8)
     }
 }
 

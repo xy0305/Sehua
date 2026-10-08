@@ -151,8 +151,8 @@ enum DiscuzParser {
             if title.isEmpty { continue }
             if SiteConfig.isAdText(title) { continue }
 
-            let excerpt = HTML.stripTags(HTML.elements(in: card, className: "n5_htnrjj", inner: true).first
-                ?? HTML.firstMatch(#"<p>\s*<a[^>]*>([\s\S]*?)</a>"#, in: card) ?? "")
+            let excerpt = cleanedExcerpt(HTML.stripTags(HTML.elements(in: card, className: "n5_htnrjj", inner: true).first
+                ?? HTML.firstMatch(#"<p>\s*<a[^>]*>([\s\S]*?)</a>"#, in: card) ?? ""))
             let author = HTML.stripTags(HTML.firstMatch(#"class="n5_mktbhy"[^>]*>\s*<a[^>]*>([\s\S]*?)</a>"#, in: card) ?? "")
             let authorID = Int(HTML.firstMatch(#"uid=(\d+)"#, in: card) ?? "")
             let dateText = HTML.stripTags(HTML.firstMatch(#"class="n5_mktbsj[^"]*"[^>]*>([\s\S]*?)</span>"#, in: card) ?? "")
@@ -591,6 +591,12 @@ enum DiscuzParser {
         return t.contains("just a moment") || t.contains("cf-challenge") || t.contains("checking your browser")
             || (t.contains("满18岁") && t.contains("warning"))
     }
+}
+
+private func cleanedExcerpt(_ value: String) -> String {
+    value.replacingOccurrences(of: #"\[/?[a-zA-Z][a-zA-Z0-9]{0,20}(?:=[^\]]*)?\]"#, with: "", options: .regularExpression)
+        .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 private func zip3<A, B, C>(_ a: [A], _ b: [B], _ c: [C]) -> [(A, B, C)] {
