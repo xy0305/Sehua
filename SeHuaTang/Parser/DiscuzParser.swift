@@ -561,7 +561,7 @@ enum DiscuzParser {
         return nil
     }
 
-    static func parseSearch(_ html: String) -> [SearchHit] {
+    static func parseSearch(_ html: String, page: Int = 1) -> (hits: [SearchHit], hasNext: Bool) {
         var hits: [SearchHit] = []
         var seen = Set<Int>()
         let hrefs = HTML.allMatches(#"<a href="([^"]*tid=\d+[^"]*)"[^>]*>([\s\S]*?)</a>"#, in: html, group: 1)
@@ -573,7 +573,8 @@ enum DiscuzParser {
             if ["下一页", "上一页", "返回"].contains(title) { continue }
             hits.append(SearchHit(id: tid, title: title, excerpt: "", board: "", author: "", dateText: ""))
         }
-        return hits
+        let pages = HTML.allMatches(#"search\.php\?[^"'<>]*?\bpage=(\d+)"#, in: html, group: 1).compactMap(Int.init)
+        return (hits, pages.contains { $0 > page })
     }
 
     static func loggedInUsername(_ html: String) -> String? {

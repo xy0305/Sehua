@@ -36,6 +36,8 @@ final class AppStore: ObservableObject {
 
     @Published var searchHits: [SearchHit] = []
     @Published var searchState: LoadState = .idle
+    @Published var searchPage = 1
+    @Published var searchHasNext = false
     @Published var portal = PortalPage(notices: [], sections: [])
     @Published var portalState: LoadState = .idle
 
@@ -58,6 +60,8 @@ final class AppStore: ObservableObject {
     private var forumGeneration = UUID()
     private var portalGeneration = UUID()
     private var searchGeneration = UUID()
+    private var searchQuery = ""
+    private var searchQuery = ""
 
     func loadForums() async {
         guard forumState != .loading, !Task.isCancelled else { return }
@@ -189,21 +193,42 @@ final class AppStore: ObservableObject {
     }
 
     func search(_ q: String) async {
-        guard !Task.isCancelled else { return }
         let trimmed = q.trimmingCharacters(in: .whitespacesAndNewlines)
-        let generation = UUID()
-        searchGeneration = generation
         guard !trimmed.isEmpty else {
+            searchGeneration = UUID()
             searchHits = []
+            searchPage = 1
+            searchHasNext = false
             searchState = .idle
             return
         }
+        await loadSearch(trimmed, page: 1, append: false)
+    }
+
+    func loadMoreSearch() async {
+        guard searchHasNext, searchState != .loading, !searchQuery.isEmpty else { return }
+        await loadSearch(searchQuery, page: searchPage + 1, append: true)
+    }
+
+    func retrySearch() async {
+        guard searchState != .loading, !searchQuery.isEmpty else { return }
+        await loadSearch(searchQuery, page: searchHits.isEmpty ? 1 : searchPage + 1, append: !searchHits.isEmpty)
+    }
+
+    private func loadSearch(_ query: String, page: Int, append: Bool) async {
+        guard !Task.isCancelled else { return }
+        let generation = append ? searchGeneration : UUID()
+        searchGeneration = generation
+        searchQuery = query
         searchState = .loading
-        searchHits = []
-        // Query values must not treat &, +, # or = as separators.
+        if !append {
+            searchHits = []
+            searchPage = 1
+            searchHasNext = false
+        }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: allowed) ?? trimmed
-        let path = "search.php?mod=forum&searchsubmit=yes&srchtxt=\(encoded)&mobile=2"
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: allowed) ?? query
+        let path = "search.php?mod=forum&searchsubmit=yes&srchtxt=\(encoded)&page=\(page)&mobile=2"
         do {
             let html = try await WebSession.shared.fetchHTML(path)
             guard searchGeneration == generation else { return }
@@ -212,7 +237,15 @@ final class AppStore: ObservableObject {
                 searchState = .failed("需要过验证，请到「我的」打开网页登录")
                 return
             }
-            searchHits = DiscuzParser.parseSearch(html)
+            let parsed = DiscuzParser.parseSearch(html, page: page)
+            if append {
+                var seen = Set(searchHits.map(\.id))
+                searchHits.append(contentsOf: parsed.hits.filter { seen.insert($0.id).inserted })
+            } else {
+                searchHits = parsed.hits
+            }
+            searchPage = page
+            searchHasNext = parsed.hasNext
             searchState = .idle
         } catch {
             guard searchGeneration == generation else { return }

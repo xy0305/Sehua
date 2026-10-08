@@ -219,23 +219,21 @@ struct ThreadDetailView: View {
                     .padding(.top, 16)
                     .padding(.bottom, 12)
 
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 10) {
                     Button { Task { await play115(d) } } label: {
-                        Label("仅推送115", systemImage: "square.and.arrow.up")
-                            .font(.subheadline.weight(.semibold)).frame(minHeight: 44)
+                        panActionLabel("仅推送115", "square.and.arrow.up", "确认受理后结束")
                     }
-                    .disabled(panOperating)
+                    .buttonStyle(.plain).disabled(panOperating)
                     Button { Task { await play115(d, playback: true) } } label: {
-                        Label("推送并播放原文件", systemImage: "play.rectangle.fill")
-                            .font(.subheadline).frame(minHeight: 44)
+                        panActionLabel("推送并播放原文件", "play.rectangle.fill", "文件可用后进入播放")
                     }
-                    .disabled(panOperating)
+                    .buttonStyle(.plain).disabled(panOperating)
                     NavigationLink {
                         Pan115ResourceView(detail: d, base: postURL, oneShot: false)
                     } label: {
-                        Label("115只读恢复 / 脱敏诊断", systemImage: "checkmark.shield")
-                            .font(.footnote)
+                        panActionLabel("115只读恢复 / 脱敏诊断", "checkmark.shield", "核对记录，不自动提交")
                     }
+                    .buttonStyle(.plain)
                     if let panStatus {
                         Text(panStatus)
                             .font(.footnote)
@@ -248,9 +246,9 @@ struct ThreadDetailView: View {
                 .foregroundStyle(ForumChrome.accent)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
-                .background(ForumChrome.side, in: RoundedRectangle(cornerRadius: 12))
+                .background(ForumChrome.side, in: RoundedRectangle(cornerRadius: 16))
                 .padding(.horizontal, 16)
-                .padding(.bottom, 12)
+                .padding(.bottom, 16)
 
                 if let post = d.posts.first {
                     authorBar(post)
@@ -620,6 +618,25 @@ struct ThreadDetailView: View {
     }
 
     private var postURL: URL { sourceURL ?? session.url("forum.php?mod=viewthread&tid=\(tid)&mobile=2") }
+
+    private func panActionLabel(_ title: String, _ icon: String, _ subtitle: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(ForumChrome.accent)
+                .frame(width: 36, height: 36)
+                .background(ForumChrome.accent.opacity(0.12), in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(ForumChrome.text)
+                Text(subtitle).font(.caption).foregroundStyle(ForumChrome.secondary)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold)).foregroundStyle(ForumChrome.accent)
+        }
+        .padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 14))
+    }
 
     @MainActor private func loadMoreReplies() async {
         let origin = postURL
