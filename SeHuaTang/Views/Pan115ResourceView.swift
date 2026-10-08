@@ -48,8 +48,13 @@ struct Pan115ResourceView: View {
                 Button("已在115核对无目录，确认重建") {
                     rebuildAuthorization = UUID(); showRebuildConfirmation = true
                 }
-                .disabled(busy || resource?.directoryWritePending != true || resource?.directoryCID != nil || resource?.tasks.contains(where: { [.unknown, .submitting, .accepted].contains($0.state) }) == true)
+                .disabled(busy || resource?.manualRecoveryLocked == true || resource?.directoryWritePending != true || resource?.directoryCID != nil || resource?.tasks.contains(where: { [.unknown, .submitting, .accepted].contains($0.state) }) == true)
                 if let resource {
+                    Text(resource.directoryStatusText).font(.footnote).foregroundStyle(.orange)
+                    if resource.manualRecoveryLocked {
+                        Text("上次人工恢复写入结果未知：禁止再次重建，即使重新确认也不会重发。请在115核对，仅可只读核验；未找到不解除锁。")
+                            .font(.footnote).foregroundStyle(.orange)
+                    }
                     Text("设备内旧目录名：\(resource.directoryName)（不随诊断导出）").font(.caption).textSelection(.enabled)
                 }
                 ShareLink("导出脱敏诊断", item: diagnostic)
@@ -93,7 +98,7 @@ struct Pan115ResourceView: View {
                 if busy { ProgressView() }
                 if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
                 if uncertainWrite {
-                    Text("写入结果不确定，已禁止此页再次提交。请进入本机任务详情手动刷新，并在115核对；不要盲目重试。")
+                    Text(resource?.directoryCreatedAwaitingPath == true ? "目录已明确创建，但路径尚未核验；禁止重建及离线提交。仅可只读核验，读取失败不改变创建成功证据。" : "写入结果不确定，已禁止此页再次提交。请进入本机任务详情手动刷新，并在115核对；不要盲目重试。")
                         .font(.footnote).foregroundStyle(.orange)
                     Link("在115核对", destination: URL(string: "https://115.com/")!)
                 }

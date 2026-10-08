@@ -143,4 +143,39 @@ public struct SHT115DirectoryAttempt: Codable {
     public let manualRecovery: Bool
     public let historicalPending: Bool
     public var state: SHT115SubmissionState
+    public var evidence: SHT115DirectoryEvidence? = nil
+}
+
+/// Fixed fields only: never persist an Error, URL, body, cookie or directory name.
+public struct SHT115DirectoryEvidence: Codable {
+    public var request: String = "directory-create-post"
+    public var httpStatus: Int? = nil
+    public var response: String = "not-confirmed"
+    public var cid: String? = nil
+    public var failurePhase: String? = nil
+    public var failureCode: String? = nil
+    public var path: String = "pending"
+    public var pathError: String? = nil
+    public var pathErrorCode: String? = nil
+    var safeSummary: String {
+        func token(_ value: String?, _ allowed: [String]) -> String {
+            guard let value, allowed.contains(value) else { return "未采集" }; return value
+        }
+        func numeric(_ value: String?) -> String {
+            guard let value, !value.isEmpty, value.count <= 32, value.utf8.allSatisfy({ (48...57).contains($0) || $0 == 45 }) else { return "未采集" }; return value
+        }
+        return "request=\(token(request, ["directory-create-post"])) · HTTP=\(httpStatus.map { (100...599).contains($0) ? String($0) : "未采集" } ?? "未采集") · response=\(token(response, ["not-confirmed", "unconfirmed-state", "explicit-rejection", "success-state"])) · CID=\(numeric(cid)) · failurePhase=\(token(failurePhase, ["request", "http", "response", "response-json", "cid", "restart-interrupted"])) · failureCode=\(numeric(failureCode)) · path=\(token(path, ["pending", "verified"])) · pathError=\(token(pathError, ["http-read", "json-read", "directory-path", "directory-list", "directory-pagination", "directory-count", "path-verification"])) · pathErrorCode=\(numeric(pathErrorCode))"
+    }
+}
+
+extension SHT115Resource {
+    public var directoryCreatedAwaitingPath: Bool {
+        directoryWritePending && directoryCID != nil && (directoryJournal ?? []).contains { $0.state == .accepted }
+    }
+    public var manualRecoveryLocked: Bool {
+        (directoryJournal ?? []).contains { $0.manualRecovery && [.unknown, .submitting].contains($0.state) }
+    }
+    public var directoryStatusText: String {
+        directoryCreatedAwaitingPath ? "目录已创建，待路径核验（不重建）" : (directoryWritePending ? "目录写入结果未知，保留锁（不重发）" : "目录路径已核验")
+    }
 }

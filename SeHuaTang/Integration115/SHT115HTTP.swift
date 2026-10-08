@@ -20,7 +20,7 @@ struct SHT115HTTP {
             (key.addingPercentEncoding(withAllowedCharacters: allowed) ?? "") + "=" + (value.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")
         }.joined(separator: "&")
     }
-    func data(_ endpoint: String, settings: SHT115Settings, fields: [(String, String)]? = nil) async throws -> (Data, URL) {
+    func data(_ endpoint: String, settings: SHT115Settings, fields: [(String, String)]? = nil) async throws -> (Data, URL, Int) {
         guard let url = URL(string: endpoint) else { throw SHT115Error.invalidInput }
         var request = URLRequest(url: url)
         Self.headers(settings).forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
@@ -39,14 +39,17 @@ struct SHT115HTTP {
         }
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode
-            throw SHT115Diagnostic(stage: fields == nil ? "http-read" : "http-write", outcome: fields == nil ? "读取失败" : "写入结果未知", code: status.map(String.init) ?? "")
+            throw SHT115Diagnostic(stage: fields == nil ? "http-read" : "http-write", outcome: fields == nil ? "读取失败" : "写入结果未知", code: status.map(String.init) ?? "", httpStatus: status)
         }
-        return (data, response.url ?? url)
+        return (data, response.url ?? url, response.statusCode)
     }
     func json(_ endpoint: String, settings: SHT115Settings, fields: [(String, String)]? = nil) async throws -> [String: Any] {
-        let (data, _) = try await data(endpoint, settings: settings, fields: fields)
+        try await jsonEvidence(endpoint, settings: settings, fields: fields).object
+    }
+    func jsonEvidence(_ endpoint: String, settings: SHT115Settings, fields: [(String, String)]? = nil) async throws -> (object: [String: Any], status: Int) {
+        let (data, _, status) = try await data(endpoint, settings: settings, fields: fields)
         // Preserve identifier tokens before Foundation JSON parsing (never Double).
-        guard var text = String(data: data, encoding: .utf8) else { throw SHT115Diagnostic(stage: "directory-path", outcome: "路径或直属父目录无法验证，已停止写入", code: "") }
+        guard var text = String(data: data, encoding: .utf8) else { throw SHT115Diagnostic(stage: fields == nil ? "json-read" : "json-write", outcome: "响应不是可验证JSON", code: "", httpStatus: status) }
         let regex = try NSRegularExpression(pattern: "(\"(?:cid|pid|parent_id|category_id|folder_id|file_id|fid|id|wp_path_id)\"\\s*:\\s*)([0-9]+)(?=\\s*[,}])")
         text = regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1\"$2\"")
         let obj: [String: Any]
@@ -54,9 +57,9 @@ struct SHT115HTTP {
             guard let decoded = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { throw SHT115Diagnostic(stage: "directory-path", outcome: "路径或直属父目录无法验证，已停止写入", code: "") }
             obj = decoded
         } catch {
-            throw SHT115Diagnostic(stage: fields == nil ? "json-read" : "json-write", outcome: fields == nil ? "响应不是可验证JSON" : "结果未知：响应不是可验证JSON，不自动重发", code: "")
+            throw SHT115Diagnostic(stage: fields == nil ? "json-read" : "json-write", outcome: fields == nil ? "响应不是可验证JSON" : "结果未知：响应不是可验证JSON，不自动重发", code: "", httpStatus: status)
         }
-        return obj
+        return (obj, status)
     }
     static func transportDiagnostic(_ error: URLError, url: URL, writing: Bool) -> SHT115Diagnostic {
         let tls = [-1200, -1201, -1202, -1203, -1204, -1205, -1206].contains(error.code.rawValue)

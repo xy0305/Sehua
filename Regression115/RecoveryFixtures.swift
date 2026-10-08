@@ -6,12 +6,20 @@ final class RecoveryProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var posts = 0
     nonisolated(unsafe) static var createSuccess = false
     nonisolated(unsafe) static var incomplete = false
+    nonisolated(unsafe) static var postReadFailure = false
     nonisolated(unsafe) static var badPath = false
+    nonisolated(unsafe) static var failureMode = ""
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         if request.httpMethod != "GET" {
             Self.posts += 1
+            if !Self.failureMode.isEmpty {
+                let body = Self.failureMode == "large" ? "{\"state\":true,\"cid\":3535200293442553007}" : (Self.failureMode == "json" ? "SECRET_COOKIE_URL_BODY" : (Self.failureMode == "cid" ? "{\"state\":true,\"cid\":\"SECRET_NAME\"}" : "{\"state\":false,\"errno\":7}"))
+                client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: Self.failureMode == "http" ? 503 : 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: Data(body.utf8)); client?.urlProtocolDidFinishLoading(self)
+                return
+            }
             if Self.createSuccess {
                 let data = try! JSONSerialization.data(withJSONObject: ["state":true,"cid":"20"])
                 client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
@@ -21,6 +29,9 @@ final class RecoveryProtocol: URLProtocol, @unchecked Sendable {
         }
         let q = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
         let cid = q.first { $0.name == "cid" }!.value!
+        if cid != "10" && Self.postReadFailure {
+            client?.urlProtocol(self, didFailWithError: URLError(.timedOut)); return
+        }
         let offset = Int(q.first { $0.name == "offset" }!.value!)!
         var path: [[String: Any]] = [["cid":"0"], ["cid":"10"]]
         if cid != "10" { path.append(["cid":cid, "name":Self.leaf]) }
@@ -68,7 +79,8 @@ final class RecoveryProtocol: URLProtocol, @unchecked Sendable {
     static func rebuild(rows: [[String: Any]] = [], success: Bool = false, taskState: SHT115SubmissionState? = nil, incomplete: Bool = false, badPath: Bool = false, wrong: String = "", leaf: String = "fixture_tid-12") async throws {
         RecoveryProtocol.rows = rows; RecoveryProtocol.leaf = leaf; RecoveryProtocol.posts = 0
         RecoveryProtocol.createSuccess = success; RecoveryProtocol.incomplete = incomplete; RecoveryProtocol.badPath = badPath
-        defer { RecoveryProtocol.createSuccess = false; RecoveryProtocol.incomplete = false; RecoveryProtocol.badPath = false }
+        RecoveryProtocol.postReadFailure = success && leaf == "post-read-failure"
+        defer { RecoveryProtocol.postReadFailure = false; RecoveryProtocol.createSuccess = false; RecoveryProtocol.incomplete = false; RecoveryProtocol.badPath = false }
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [RecoveryProtocol.self]
         let session = URLSession(configuration: config); defer { session.invalidateAndCancel() }
         let store = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -86,14 +98,21 @@ final class RecoveryProtocol: URLProtocol, @unchecked Sendable {
             let result = try await service.confirmDirectoryRebuild(resourceID: record.id, tid: wrong == "tid" ? "13" : "12", settings: input, authorization: authorization)
             recovered = true
             precondition(!blocked && (success || !rows.isEmpty) && result.directoryCID == "20" && !result.directoryWritePending)
-        } catch { precondition(blocked || !success) }
+        } catch { precondition(blocked || !success || RecoveryProtocol.postReadFailure) }
         let saved = await service.resources()
         precondition(saved[0].tasks.count == tasks.count)
         let expected = blocked || !rows.isEmpty ? 0 : 1
         precondition(RecoveryProtocol.posts == expected)
         if expected == 1 {
             precondition(saved[0].directoryJournal?.count == 1 && saved[0].directoryJournal?[0].historicalPending == true)
-            precondition(saved[0].directoryJournal?[0].state == (recovered ? .accepted : .unknown))
+            precondition(saved[0].directoryJournal?[0].state == (success ? .accepted : .unknown))
+            if RecoveryProtocol.postReadFailure {
+                precondition(saved[0].directoryCID == "20" && saved[0].directoryWritePending && saved[0].directoryCreatedAwaitingPath)
+                precondition(saved[0].directoryRecoveryOnly == true)
+                let evidence = saved[0].directoryJournal?[0].evidence
+                precondition(evidence?.httpStatus == 200 && evidence?.response == "success-state" && evidence?.cid == "20" && evidence?.path == "pending" && evidence?.pathError == "http-read")
+            }
+            precondition(saved[0].manualRecoveryLocked == !success)
         } else { precondition(saved[0].directoryJournal == nil, "historical pending must not gain invented attempts") }
         // Restart from the real production persistence file; both same and new authorization must not replay an unknown recovery.
         let restarted = try SHT115Service(storeURL: store, session: session)
@@ -107,6 +126,19 @@ final class RecoveryProtocol: URLProtocol, @unchecked Sendable {
         precondition(afterRestart[0].directoryWritePending == !recovered)
         let diagnostic = await restarted.safeDiagnostic(tid: "12", settings: settings)
         precondition(!diagnostic.contains("fixture_tid") && !diagnostic.contains("fake") && !diagnostic.contains("example.invalid"))
+        if RecoveryProtocol.postReadFailure {
+            RecoveryProtocol.postReadFailure = false
+            RecoveryProtocol.leaf = "wrong-name"
+            do { _ = try await restarted.reconcileDirectory(resourceID: record.id, settings: settings); preconditionFailure("identity weakened") } catch {}
+            let stillLocked = await restarted.resources()
+            precondition(stillLocked[0].directoryWritePending && stillLocked[0].directoryJournal?[0].state == .accepted)
+            RecoveryProtocol.leaf = "fixture_tid-12"
+            let verified = try await restarted.reconcileDirectory(resourceID: record.id, settings: settings)
+            precondition(!verified.directoryWritePending && verified.directoryJournal?[0].evidence?.path == "verified")
+            let again = try SHT115Service(storeURL: store, session: session)
+            let finalRecords = await again.resources()
+            precondition(!finalRecords[0].directoryWritePending && RecoveryProtocol.posts == 1)
+        }
     }
     static func restartSubmitting() async throws {
         let store = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -117,9 +149,59 @@ final class RecoveryProtocol: URLProtocol, @unchecked Sendable {
         try JSONEncoder().encode([record]).write(to: store)
         let restarted = try SHT115Service(storeURL: store)
         let records = await restarted.resources()
-        precondition(records[0].directoryJournal?[0].state == .unknown && records[0].directoryWritePending)
+        precondition(records[0].directoryJournal?[0].state == .unknown && records[0].directoryWritePending && records[0].manualRecoveryLocked)
+        let persisted = try JSONDecoder().decode([SHT115Resource].self, from: Data(contentsOf: store))
+        precondition(persisted[0].directoryJournal?[0].state == .unknown && persisted[0].directoryWritePending)
+    }
+    static func evidenceFailures() async throws {
+        let settings = SHT115Settings(cookie: "UID=123_A1; CID=fake; SEID=fake", parentCID: "10")
+        for (mode, phase, status) in [("http", "http", 503), ("json", "response-json", 200), ("cid", "cid", 200), ("rejected", "response", 200)] {
+            RecoveryProtocol.failureMode = mode; RecoveryProtocol.rows = []; RecoveryProtocol.posts = 0
+            defer { RecoveryProtocol.failureMode = "" }
+            let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [RecoveryProtocol.self]
+            let session = URLSession(configuration: config); defer { session.invalidateAndCancel() }
+            let store = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: store) }
+            let service = try SHT115Service(storeURL: store, session: session)
+            do { _ = try await service.createOrReuseResource(tid: "12", title: "fixture", settings: settings); preconditionFailure("unsafe response") } catch {}
+            let records = await service.resources()
+            let attempt = records[0].directoryJournal![0]
+            precondition(attempt.state == (mode == "rejected" ? .rejected : .unknown))
+            precondition(attempt.evidence?.failurePhase == phase && attempt.evidence?.httpStatus == status && attempt.evidence?.cid == nil)
+            let encoded = String(data: try JSONEncoder().encode(attempt), encoding: .utf8)!
+            precondition(!encoded.contains("SECRET") && !encoded.contains("fixture") && !encoded.contains("fake"))
+            precondition(RecoveryProtocol.posts == 1)
+            let restarted = try SHT115Service(storeURL: store, session: session)
+            let afterRestart = await restarted.resources()
+            precondition(afterRestart[0].directoryJournal?[0].evidence?.failurePhase == phase)
+            if mode != "rejected" {
+                do { _ = try await restarted.createOrReuseResource(tid: "12", title: "fixture", settings: settings); preconditionFailure("unknown replay") } catch {}
+                precondition(RecoveryProtocol.posts == 1)
+            }
+        }
+        var poisoned = SHT115DirectoryEvidence()
+        poisoned.request = "SECRET_URL"; poisoned.response = "SECRET_BODY"; poisoned.pathError = "SECRET_COOKIE"; poisoned.cid = "SECRET_NAME"
+        precondition(!poisoned.safeSummary.contains("SECRET"))
+    }
+    static func largeAcknowledgedCID() async throws {
+        RecoveryProtocol.failureMode = "large"; RecoveryProtocol.posts = 0; RecoveryProtocol.rows = []
+        defer { RecoveryProtocol.failureMode = "" }
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [RecoveryProtocol.self]
+        let session = URLSession(configuration: config); defer { session.invalidateAndCancel() }
+        let store = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: store) }
+        let settings = SHT115Settings(cookie: "UID=123_A1; CID=fake; SEID=fake", parentCID: "10")
+        let service = try SHT115Service(storeURL: store, session: session)
+        let resource = try await service.createOrReuseResource(tid: "12", title: "fixture", settings: settings)
+        precondition(resource.directoryCID == "3535200293442553007" && !resource.directoryWritePending)
+        precondition(resource.directoryJournal?[0].state == .accepted && resource.directoryJournal?[0].evidence?.cid == resource.directoryCID && resource.directoryJournal?[0].evidence?.path == "verified")
+        let restarted = try SHT115Service(storeURL: store, session: session)
+        let saved = await restarted.resources()
+        precondition(saved[0].directoryCID == resource.directoryCID && !saved[0].directoryWritePending && RecoveryProtocol.posts == 1)
     }
     static func main() async throws {
+        try await largeAcknowledgedCID()
+        try await evidenceFailures()
         try await restartSubmitting()
         let named: [String: Any] = ["cid":"20", "pid":"10", "n":"fixture_tid-12"]
         try await run(rows: [], success: false) // old pending, no directory
@@ -131,6 +213,7 @@ final class RecoveryProtocol: URLProtocol, @unchecked Sendable {
         try await run(rows: [named], success: true, unknownTask: true)
         try await rebuild(rows: [named]) // unique reuse: zero POST
         try await rebuild(success: true) // explicit recovery: single POST, fresh CID verified
+        try await rebuild(success: true, leaf: "post-read-failure") // acknowledged POST stays accepted through read failure/restart
         try await rebuild() // timeout: durable unknown, same/new authority cannot replay
         for state in [SHT115SubmissionState.unknown, .submitting, .accepted] { try await rebuild(taskState: state) }
         try await rebuild(incomplete: true)

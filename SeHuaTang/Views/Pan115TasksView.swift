@@ -23,7 +23,7 @@ struct Pan115TasksView: View {
                             Text("tid \(resource.tid) · \(resource.tasks.count) 次提交")
                                 .font(.caption).foregroundStyle(.secondary)
                             if resource.directoryWritePending {
-                                Text("目录写入结果不确定，请在115核对，勿重复创建")
+                                Text(resource.directoryStatusText)
                                     .font(.caption).foregroundStyle(.orange)
                             }
                         }
@@ -61,7 +61,7 @@ struct Pan115TaskDetailView: View {
                 LabeledContent("帖子 tid", value: String(resource.tid))
                 LabeledContent("目录 CID", value: resource.directoryCID ?? "未确认")
                 if resource.directoryWritePending {
-                    Text("目录创建结果不确定，请在115核对后处理；本页面不会自动重发。")
+                    Text(resource.directoryStatusText + "；本页面不会自动重发。")
                         .foregroundStyle(.orange)
                 }
                 Link("在115网页核对", destination: URL(string: "https://115.com/")!)

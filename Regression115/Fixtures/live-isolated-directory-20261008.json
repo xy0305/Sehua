@@ -1,0 +1,26 @@
+{
+  "capturedAt": "2026-10-08T15:32:05+08:00",
+  "transport": "WebKit fetch with authenticated cookie store and normal TLS validation",
+  "method": "POST",
+  "endpoint": "https://webapi.115.com/files/add",
+  "encoding": "application/x-www-form-urlencoded; charset=UTF-8",
+  "requestFields": ["pid", "cname"],
+  "parentCID": "3446865472442596828",
+  "httpStatus": 200,
+  "state": true,
+  "errno": "",
+  "cid": "3535200293442553007",
+  "nameMatches": true,
+  "responseKeys": ["state", "error", "errno", "aid", "cid", "cname", "file_id", "file_name"],
+  "dataKeys": [],
+  "subsequentRead": {
+    "httpStatus": 200,
+    "state": true,
+    "count": 0,
+    "pathCIDs": ["0", "3446865472442596828", "3535200293442553007"],
+    "leafParentCID": "3446865472442596828",
+    "leafNameMatches": true
+  },
+  "writeCounts": {"directoryCreatePOST": 1, "offlineSubmitPOST": 0},
+  "retained": true
+}

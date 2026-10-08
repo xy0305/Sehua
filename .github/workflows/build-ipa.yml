@@ -2,7 +2,7 @@ name: Build IPA
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'recovery/115-evidence-*' ]
   workflow_dispatch:
 
 jobs:
@@ -186,6 +186,7 @@ jobs:
             build
 
       - name: Package IPA
+        if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
           APP=$(find DerivedData/Build/Products -path '*/Release-iphoneos/*.app' | head -1)
@@ -207,6 +208,7 @@ jobs:
           echo "IPA_NAME=$NAME" >> "$GITHUB_ENV"
 
       - name: Upload IPA
+        if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: SeHuaTang-unsigned-ipa

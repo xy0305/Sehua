@@ -18,6 +18,14 @@ public actor SHT115Service {
         for r in records.indices {
             for j in records[r].directoryJournal?.indices ?? 0..<0 where records[r].directoryJournal?[j].state == .submitting {
                 records[r].directoryJournal?[j].state = .unknown
+                records[r].directoryWritePending = true
+                records[r].directoryJournal?[j].evidence?.failurePhase = "restart-interrupted"
+            }
+            if records[r].directoryCID == nil && (records[r].directoryJournal ?? []).contains(where: { [.unknown, .submitting].contains($0.state) }) {
+                records[r].directoryWritePending = true
+            }
+            if (records[r].directoryJournal ?? []).contains(where: { $0.state == .accepted && $0.evidence?.path == "pending" }) {
+                records[r].directoryWritePending = true
             }
             for t in records[r].tasks.indices where records[r].tasks[t].state == .submitting { records[r].tasks[t].state = .unknown }
             for (key, value) in records[r].extractions ?? [:] where value == .submitting { records[r].extractions?[key] = .unknown }
@@ -25,6 +33,12 @@ public actor SHT115Service {
                 var job = value
                 job.cleanup = .unknown; records[r].extractionJobs?[key] = job
             }
+        }
+        // Persist conservative restart normalization before any operation can run.
+        if FileManager.default.fileExists(atPath: self.storeURL.path) {
+            do { try JSONEncoder().encode(records).write(to: self.storeURL, options: .atomic) }
+            catch { throw SHT115Error.persistence }
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: self.storeURL.path)
         }
     }
     public func resources() -> [SHT115Resource] { records }
@@ -45,6 +59,13 @@ public actor SHT115Service {
         if !interactiveWaiters.isEmpty { interactiveWaiters.removeFirst().resume() }
         else if !backgroundWaiters.isEmpty { backgroundWaiters.removeFirst().resume() }
         else { operating = false }
+    }
+    private func markDirectoryPathVerified(_ i: Int) {
+        for j in records[i].directoryJournal?.indices ?? 0..<0 where records[i].directoryJournal?[j].state == .accepted {
+            records[i].directoryJournal?[j].evidence?.path = "verified"
+            records[i].directoryJournal?[j].evidence?.pathError = nil
+            records[i].directoryJournal?[j].evidence?.pathErrorCode = nil
+        }
     }
     private func save() throws {
         do {
@@ -99,7 +120,7 @@ public actor SHT115Service {
                 let page = try await http.verifiedPage(cid: cid, parent: records[i].parentCID, settings: settings)
                 guard SHT115HTTP.string(page.path.last?["name"] ?? page.path.last?["n"]) == records[i].directoryName else { throw SHT115Error.unsafeListing }
             } else { try await http.verify(cid: cid, parent: records[i].parentCID, settings: settings) }
-            records[i].directoryWritePending = false; try save(); return records[i]
+            markDirectoryPathVerified(i); records[i].directoryWritePending = false; try save(); return records[i]
         }
         if records[i].directoryWritePending && !records[i].directoryName.hasSuffix("_tid-" + records[i].tid) {
             throw SHT115Diagnostic(stage: "directory-reconcile", outcome: "目录创建待核验：旧名称缺少tid身份证据；保留锁，禁止新建", code: "")
@@ -110,7 +131,7 @@ public actor SHT115Service {
         guard matches.count <= 1 else { throw SHT115Error.ambiguousDirectory }
         if let existing = matches.first {
             try await http.verify(cid: existing.id, parent: settings.parentCID, settings: settings)
-            records[i].directoryCID = existing.id; records[i].directoryWritePending = false; try save(); return records[i]
+            records[i].directoryCID = existing.id; markDirectoryPathVerified(i); records[i].directoryWritePending = false; try save(); return records[i]
         }
         guard !records[i].directoryWritePending else {
             throw SHT115Diagnostic(stage: "directory-reconcile", outcome: "目录创建待核验：只读未找到可确证的同tid目录；保留锁，禁止新建；本次未发送离线任务", code: "")
@@ -120,34 +141,74 @@ public actor SHT115Service {
     private func createDirectory(i: Int, settings: SHT115Settings, authorization: UUID, manualRecovery: Bool) async throws -> SHT115Resource {
         let historicalPending = records[i].directoryWritePending
         if records[i].directoryJournal == nil { records[i].directoryJournal = [] }
-        records[i].directoryJournal?.append(SHT115DirectoryAttempt(authorization: authorization, authorizedAt: Date(), manualRecovery: manualRecovery, historicalPending: historicalPending, state: .submitting))
+        records[i].directoryJournal?.append(SHT115DirectoryAttempt(authorization: authorization, authorizedAt: Date(), manualRecovery: manualRecovery, historicalPending: historicalPending, state: .submitting, evidence: SHT115DirectoryEvidence()))
         let attempt = records[i].directoryJournal!.count - 1
         records[i].directoryWritePending = true; try save()
         do {
-            let obj = try await http.json("https://webapi.115.com/files/add", settings: settings, fields: [("pid", settings.parentCID), ("cname", records[i].directoryName)])
+            let response = try await http.jsonEvidence("https://webapi.115.com/files/add", settings: settings, fields: [("pid", settings.parentCID), ("cname", records[i].directoryName)])
+            let obj = response.object
+            records[i].directoryJournal?[attempt].evidence?.httpStatus = response.status
+            records[i].directoryJournal?[attempt].evidence?.response = "unconfirmed-state"
+            records[i].directoryJournal?[attempt].evidence?.failureCode = SHT115Diagnostic.apiCode(obj)
             if ["0", "false"].contains(SHT115HTTP.string(obj["state"])) {
                 records[i].directoryJournal?[attempt].state = .rejected
+                records[i].directoryJournal?[attempt].evidence?.response = "explicit-rejection"
+                records[i].directoryJournal?[attempt].evidence?.failurePhase = "response"
                 records[i].directoryWritePending = manualRecovery; try save(); throw SHT115Diagnostic(stage: "directory-create", outcome: "API明确拒绝（未创建）", code: SHT115Diagnostic.apiCode(obj))
             }
             guard SHT115HTTP.success(obj) else { throw SHT115Error.uncertainWrite }
+            records[i].directoryJournal?[attempt].evidence?.response = "success-state"
+            records[i].directoryJournal?[attempt].evidence?.failurePhase = "cid"
             let nested = obj["data"] as? [String: Any] ?? [:]
             let cid = SHT115HTTP.string(obj["cid"] ?? obj["category_id"] ?? nested["cid"] ?? nested["category_id"])
             guard SHT115Settings.isCID(cid), cid != settings.parentCID, cid != "0" else { throw SHT115Error.uncertainWrite }
-            records[i].directoryCID = cid; try save()
+            // POST acknowledgement is durable independently of the subsequent GET.
+            // Keep pending until ancestry is verified, but never turn an acknowledged
+            // creation into an unknown write merely because a read failed.
+            records[i].directoryCID = cid
+            records[i].directoryJournal?[attempt].state = .accepted
+            records[i].directoryJournal?[attempt].evidence?.cid = cid
+            records[i].directoryJournal?[attempt].evidence?.failurePhase = nil
+            if manualRecovery { records[i].directoryRecoveryOnly = true }
+            try save()
             if manualRecovery {
                 let verified = try await http.verifiedPage(cid: cid, parent: settings.parentCID, settings: settings)
                 guard SHT115HTTP.string(verified.path.last?["name"] ?? verified.path.last?["n"]) == records[i].directoryName else { throw SHT115Error.uncertainWrite }
             } else { try await http.verify(cid: cid, parent: settings.parentCID, settings: settings) }
             records[i].directoryJournal?[attempt].state = .accepted
-            records[i].directoryWritePending = false; try save(); return records[i]
+            records[i].directoryJournal?[attempt].evidence?.path = "verified"
+            markDirectoryPathVerified(i); records[i].directoryWritePending = false; try save(); return records[i]
         } catch {
+            let diagnostic = error as? SHT115Diagnostic
+            let code = diagnostic?.code ?? ""
+            let safeCode = code.count <= 12 && code.utf8.allSatisfy({ (48...57).contains($0) || $0 == 45 }) ? code : ""
+            let stage = diagnostic?.stage ?? ""
+            if records[i].directoryJournal?[attempt].state == .accepted {
+                records[i].directoryJournal?[attempt].evidence?.pathError = ["http-read", "json-read", "directory-path", "directory-list", "directory-pagination", "directory-count"].contains(stage) ? stage : "path-verification"
+                records[i].directoryJournal?[attempt].evidence?.pathErrorCode = safeCode
+            } else if records[i].directoryJournal?[attempt].state != .rejected {
+                records[i].directoryJournal?[attempt].evidence?.httpStatus = diagnostic?.httpStatus ?? records[i].directoryJournal?[attempt].evidence?.httpStatus
+                if stage == "http-write" {
+                    records[i].directoryJournal?[attempt].evidence?.failurePhase = diagnostic?.httpStatus == nil ? "request" : "http"
+                } else if stage == "json-write" {
+                    records[i].directoryJournal?[attempt].evidence?.failurePhase = "response-json"
+                } else if records[i].directoryJournal?[attempt].evidence?.failurePhase == nil {
+                    records[i].directoryJournal?[attempt].evidence?.failurePhase = "response"
+                }
+                if !safeCode.isEmpty { records[i].directoryJournal?[attempt].evidence?.failureCode = safeCode }
+            }
             if records[i].directoryJournal?[attempt].state != .rejected {
-                records[i].directoryJournal?[attempt].state = .unknown
+                if records[i].directoryJournal?[attempt].state != .accepted {
+                    records[i].directoryJournal?[attempt].state = .unknown
+                }
                 records[i].directoryWritePending = true
                 try save()
             }
             if let persistence = error as? SHT115Error, case .persistence = persistence { throw persistence }
             if records[i].directoryJournal?[attempt].state == .rejected { throw error }
+            if records[i].directoryJournal?[attempt].state == .accepted {
+                throw SHT115Diagnostic(stage: "directory-path-read", outcome: "目录已明确创建，待路径核验；保留CID和锁，不重建、不提交离线任务", code: safeCode)
+            }
             // Keep the transport's sanitized write-phase/TLS diagnostic while the
             // durable journal above still locks an unconfirmed creation.
             if let diagnostic = error as? SHT115Diagnostic, diagnostic.stage == "http-write" { throw diagnostic }
@@ -172,7 +233,7 @@ public actor SHT115Service {
         guard matches.count <= 1 else { throw SHT115Error.ambiguousDirectory }
         if let match = matches.first {
             try await http.verify(cid: match.id, parent: settings.parentCID, settings: settings)
-            records[i].directoryCID = match.id; records[i].directoryWritePending = false
+            records[i].directoryCID = match.id; markDirectoryPathVerified(i); records[i].directoryWritePending = false
             try save(); return records[i]
         }
         // A previously attempted recovery with uncertain outcome is never reauthorized.
@@ -201,6 +262,7 @@ public actor SHT115Service {
             }
             records[i].directoryCID = match.id
         }
+        markDirectoryPathVerified(i)
         records[i].directoryWritePending = false
         try save()
         return records[i] // Task unknown states are deliberately unchanged.
@@ -211,8 +273,8 @@ public actor SHT115Service {
         let header = "115诊断 v1 · tid=\(tid) · 当前父CID=\(settings.parentCID) · 本机记录=\(matching.count)"
         return ([header] + matching.map { record in
             let states = record.tasks.map { String(describing: $0.state) }.joined(separator: ",")
-            let phase = record.directoryWritePending ? "目录创建待核验" : (record.tasks.contains { $0.state == .unknown || $0.state == .submitting } ? "离线任务待核验" : (record.tasks.isEmpty ? "本机未记录离线提交" : "离线任务已有记录"))
-            return "tid后缀证据=\(record.directoryName.hasSuffix("_tid-" + record.tid)) · 目录日志数=\(record.directoryJournal?.count ?? 0) · 目录尝试状态=\((record.directoryJournal ?? []).map { $0.state.rawValue }.joined(separator: ",")) · 父CID=\(record.parentCID) · 目录CID=\(record.directoryCID ?? "未知") · directoryPending=\(record.directoryWritePending) · 阶段=\(phase) · 任务数=\(record.tasks.count) · 状态=\(states)"
+            let phase = record.directoryWritePending ? record.directoryStatusText : (record.tasks.contains { $0.state == .unknown || $0.state == .submitting } ? "离线任务待核验" : (record.tasks.isEmpty ? "本机未记录离线提交" : "离线任务已有记录"))
+            return "tid后缀证据=\(record.directoryName.hasSuffix("_tid-" + record.tid)) · 目录日志数=\(record.directoryJournal?.count ?? 0) · 目录尝试状态=\((record.directoryJournal ?? []).map { $0.state.rawValue }.joined(separator: ",")) · 父CID=\(record.parentCID) · 目录CID=\(record.directoryCID ?? "未知") · directoryPending=\(record.directoryWritePending) · 阶段=\(phase) · 任务数=\(record.tasks.count) · 状态=\(states)\n\((record.directoryJournal ?? []).map { "manualRecovery=\($0.manualRecovery) · writeState=\($0.state.rawValue) · \($0.evidence?.safeSummary ?? "证据=旧记录未采集")" }.joined(separator: "\n"))"
         } + ["本机无记录不证明服务器未写入；目录核验不解除离线任务unknown。未导出账户、Cookie、签名、URL或正文。"]).joined(separator: "\n")
     }
     /// 115 web API uses url for a single link, url[n] (not urls[n]) for a batch.
