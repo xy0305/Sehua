@@ -235,7 +235,9 @@ struct Pan115ResourceView: View {
             let settings = SHT115Settings.load()
             let service = try Pan115UIService.get()
             self.resource = try await service.reconcileDirectory(resourceID: resource.id, settings: settings)
-            message = "目录身份已只读核验；未提交或重发离线任务，原任务状态保留。"
+            let inspection = try await service.inspect(resourceID: resource.id, settings: settings, includeFiles: false)
+            self.resource = inspection.resource
+            message = inspection.verificationSummary + "；未提交或重发，unknown锁保留。"
         } catch { message = SHT115Settings.safeMessage(error) }
         await loadExisting()
     }

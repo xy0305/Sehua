@@ -110,6 +110,7 @@ public struct SHT115Inspection {
     public let resource: SHT115Resource
     public let listing: SHT115VideoListing
     public let taskPagesTruncated: Bool
+    public var verificationSummary: String = ""
 }
 public struct SHT115PlaybackSource {
     public let label: String

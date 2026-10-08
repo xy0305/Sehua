@@ -220,17 +220,16 @@ struct ThreadDetailView: View {
                     .padding(.bottom, 12)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Button { if panStatus == nil { Task { await play115(d) } } else { panStatus = nil } } label: {
-                        HStack {
-                            Label("115 归档 / 播放", systemImage: "play.rectangle.fill")
-                            Spacer()
-                            Image(systemName: panStatus == nil ? "chevron.right" : "xmark.circle")
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
+                    Button { Task { await play115(d) } } label: {
+                        Label("仅推送115", systemImage: "square.and.arrow.up")
+                            .font(.subheadline.weight(.semibold)).frame(minHeight: 44)
                     }
-                    .accessibilityLabel(panStatus == nil ? "提交115并直接播放" : "清除115操作状态")
+                    .disabled(panOperating)
+                    Button { Task { await play115(d, playback: true) } } label: {
+                        Label("推送并播放原文件", systemImage: "play.rectangle.fill")
+                            .font(.subheadline).frame(minHeight: 44)
+                    }
+                    .disabled(panOperating)
                     NavigationLink {
                         Pan115ResourceView(detail: d, base: postURL, oneShot: false)
                     } label: {
@@ -661,7 +660,12 @@ struct ThreadDetailView: View {
         }
     }
 
-    @MainActor private func play115(_ d: ThreadDetail) async {
+    @State private var panOperating = false
+
+    @MainActor private func play115(_ d: ThreadDetail, playback: Bool = false) async {
+        guard !panOperating else { return }
+        panOperating = true
+        defer { panOperating = false }
         panStatus = "提取中"
         do {
             let settings = SHT115Settings.load()
@@ -669,6 +673,16 @@ struct ThreadDetailView: View {
             let service = try Pan115UIService.get()
             let existing = await service.resources().first { $0.account == settings.account && $0.tid == String(d.tid) && $0.parentCID == settings.parentCID && $0.directoryCID != nil }
             var resource = existing
+            if let existing, existing.tasks.contains(where: { $0.state == .unknown || $0.state == .submitting }) {
+                panStatus = "历史提交未知：正在只读核验，不重发"
+                let inspection = try await service.inspect(resourceID: existing.id, settings: settings, includeFiles: playback)
+                panStatus = inspection.verificationSummary + "；unknown锁保留，未重发"
+                if playback && !inspection.listing.videos.isEmpty {
+                    playVideos = inspection.listing.videos
+                    showPlayer = true
+                }
+                return
+            }
             if existing?.tasks.contains(where: { $0.state == .accepted }) != true {
                 panStatus = "提取中"
                 let result = try await ResourceLinkExtractor.extractResult(detail: d, base: postURL)
@@ -686,8 +700,12 @@ struct ThreadDetailView: View {
                     : "未有已接受任务，请检查提交结果"
                 return
             }
-            panStatus = "已接受，等待文件"
-            for _ in 0..<12 {
+            guard playback else {
+                panStatus = "115已受理；仅推送结束，不等待下载、不取播放URL。受理不等于完成。"
+                return
+            }
+            panStatus = "已受理，读取原文件（最多12轮；非转码）"
+            for attempt in 0..<12 {
                 guard panStatus != nil else { return }
                 let listing = try await service.listVideos(resourceID: resource.id, settings: settings)
                 if listing.videos.isEmpty {
@@ -701,7 +719,8 @@ struct ThreadDetailView: View {
                     panStatus = nil
                     return
                 }
-                try await Task.sleep(nanoseconds: 5_000_000_000)
+                panStatus = "已受理，等待原文件：第\(attempt + 1)/12轮；离线未完成不代表提交失败"
+                if attempt < 11 { try await Task.sleep(nanoseconds: 5_000_000_000) }
             }
             panStatus = "已提交，文件未就绪"
         } catch {

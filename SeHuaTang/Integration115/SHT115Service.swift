@@ -314,24 +314,44 @@ public actor SHT115Service {
         }
         return SHT115VideoListing(videos: videos.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }, archives: archives, truncated: truncated)
     }
-    public func inspect(resourceID: String, settings: SHT115Settings, background: Bool = false) async throws -> SHT115Inspection {
+    public func inspect(resourceID: String, settings: SHT115Settings, background: Bool = false, includeFiles: Bool = true) async throws -> SHT115Inspection {
         try await begin(background: background); defer { end() }
         let i = try index(resourceID, settings)
         guard let target = records[i].directoryCID else { throw SHT115Error.invalidInput }
         // Directory availability is independent of the account's offline task history.
-        let listing = try await scan(resourceID: resourceID, settings: settings, maxDepth: 3)
-        var remote: [[String: Any]] = [], truncated = false
-        let hashes = Array(Set(records[i].tasks.flatMap { $0.urls }.map(Self.infoHash).filter { !$0.isEmpty })).sorted()
-        for hash in hashes.prefix(32) {
-            do {
-                let obj = try await http.json("https://115.com/web/lixian/?ct=lixian&ac=task_lists&page=1&info_hash=" + hash, settings: settings)
-                guard SHT115HTTP.success(obj) else { throw SHT115Error.rejected }
-                let data = obj["data"] as? [String: Any] ?? [:]
-                guard let rows = (obj["tasks"] as? [[String: Any]]) ?? (data["tasks"] as? [[String: Any]]) else { throw SHT115Error.unsafeListing }
-                remote += rows
-            } catch { truncated = true }
+        guard records[i].parentCID == settings.parentCID else { throw SHT115Error.accountMismatch }
+        let listing: SHT115VideoListing
+        if includeFiles {
+            listing = try await scan(resourceID: resourceID, settings: settings, maxDepth: 3)
+        } else {
+            try await http.verify(cid: target, parent: records[i].parentCID, settings: settings)
+            listing = SHT115VideoListing(videos: [], archives: [], truncated: false)
         }
-        if hashes.count > 32 { truncated = true }
+        var remote: [[String: Any]] = [], truncated = false
+        let links = Array(Set(records[i].tasks.flatMap { $0.urls }))
+        let hashes = Array(Set(links.map(Self.infoHash).filter { !$0.isEmpty })).sorted()
+        // Live GET evidence confirms hash filtering. Deduplicate filters; URL-only
+        // links use bounded pagination. Local matching still requires hash/URL + CID.
+        let filters = hashes + (links.contains(where: { Self.infoHash($0).isEmpty }) ? [""] : [])
+        var budget = 32
+        for filter in filters {
+            for page in 1...32 {
+                guard budget > 0 else { truncated = true; break }
+                budget -= 1
+                do {
+                    let obj = try await http.json("https://115.com/web/lixian/?ct=lixian&ac=task_lists&page=\(page)" + (filter.isEmpty ? "" : "&info_hash=" + filter), settings: settings)
+                    guard SHT115HTTP.success(obj) else { throw SHT115Error.rejected }
+                    let data = obj["data"] as? [String: Any] ?? [:]
+                    guard let rows = (obj["tasks"] as? [[String: Any]]) ?? (data["tasks"] as? [[String: Any]]) else { throw SHT115Error.unsafeListing }
+                    remote += rows
+                    let pages = Int(SHT115HTTP.string(obj["page_count"] ?? data["page_count"]))
+                    if let pages, page >= pages { break }
+                    if rows.isEmpty { break }
+                    if page == 32 { truncated = true }
+                } catch { truncated = true; break }
+            }
+        }
+        var targetCount = 0, completedCount = 0, otherCount = 0, unverifiedCount = 0
         for t in records[i].tasks.indices {
             var matches: [SHT115Progress] = []
             for link in records[i].tasks[t].urls {
@@ -340,15 +360,20 @@ public actor SHT115Service {
                     SHT115HTTP.string($0["wp_path_id"]) == target &&
                     (SHT115HTTP.string($0["url"] ?? $0["url_string"]) == link || (!hash.isEmpty && SHT115HTTP.string($0["info_hash"] ?? $0["hash"]).lowercased() == hash))
                 }) {
+                    targetCount += 1
+                    if Int(SHT115HTTP.string(task["status"])) == 2 { completedCount += 1 }
                     matches.append(SHT115Progress(url: link, infoHash: SHT115HTTP.string(task["info_hash"] ?? task["hash"]), status: Int(SHT115HTTP.string(task["status"])) ?? -999, percent: Double(SHT115HTTP.string(task["percentDone"] ?? task["percent"])) ?? 0))
-                }
+                } else if remote.contains(where: {
+                    SHT115HTTP.string($0["wp_path_id"]) != target &&
+                    (SHT115HTTP.string($0["url"] ?? $0["url_string"]) == link || (!hash.isEmpty && SHT115HTTP.string($0["info_hash"] ?? $0["hash"]).lowercased() == hash))
+                }) { otherCount += 1 } else { unverifiedCount += 1 }
             }
             records[i].tasks[t].progress = matches
-            if matches.count == records[i].tasks[t].urls.count { records[i].tasks[t].state = .accepted }
+            // Read evidence is not POST evidence. Preserve unknown/submitting locks.
             records[i].tasks[t].updatedAt = Date()
         }
         try save()
-        return SHT115Inspection(resource: records[i], listing: listing, taskPagesTruncated: truncated)
+        return SHT115Inspection(resource: records[i], listing: listing, taskPagesTruncated: truncated, verificationSummary: "目标目录已证实\(targetCount)项（完成\(completedCount)项）；其他目录\(otherCount)项；未证实\(unverifiedCount)项" + (truncated ? "；分页未完整，未证实不等于不存在" : ""))
     }
     static func infoHash(_ link: String) -> String {
         if link.lowercased().hasPrefix("ed2k://|file|") {

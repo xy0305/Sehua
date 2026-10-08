@@ -40,6 +40,11 @@ jobs:
           sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
 
+      - name: Read-only per-link task progress regression
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/ProgressFixtures.swift -o /tmp/progress-fixtures
+          /tmp/progress-fixtures
+
       - name: TLS read-only fallback and unknown-write regression
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/TLSFixtures.swift -o /tmp/tls-fixtures
