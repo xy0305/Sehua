@@ -168,7 +168,25 @@ final class Mock115Protocol: URLProtocol, @unchecked Sendable {
         try await run("{}", expected: .unknown)
         try await run("not-json", expected: .unknown)
         try await run("{}", expected: .unknown, transport: true)
-        try await run("{\"state\":true}", expected: .accepted, batch: true)
+        let batchLive = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "Regression115/Fixtures/live-batch-submission-20261008.json"))) as! [String: Any]
+        var batchResponse = batchLive["response"] as! [String: Any]
+        var batchRows = batchResponse["result"] as! [[String: Any]]
+        precondition(batchRows.count == 2 && batchRows.allSatisfy { $0["url"] is String && $0["info_hash"] is String })
+        precondition(SHT115Service.submissionState(batchResponse, count: 2) == .accepted)
+        batchRows[0]["url"] = ed
+        batchRows[1]["url"] = "https://example.invalid/file?a=1&b=2"
+        batchResponse["result"] = batchRows
+        precondition(SHT115Service.submissionState(batchResponse, count: 2, links: [ed, "https://example.invalid/wrong"]) == .unknown)
+        var duplicate = batchResponse
+        duplicate["result"] = [batchRows[0], batchRows[0]]
+        precondition(SHT115Service.submissionState(duplicate, count: 2, links: [ed, "https://example.invalid/file?a=1&b=2"]) == .unknown)
+        let batchText = String(data: try JSONSerialization.data(withJSONObject: batchResponse), encoding: .utf8)!
+        try await run(batchText, expected: .accepted, batch: true)
+        try await run("{\"state\":true}", expected: .unknown, batch: true)
+        try await run("{\"errcode\":0}", expected: .unknown, batch: true)
+        try await run("{\"state\":true,\"errcode\":0,\"result\":[{\"state\":true}]}", expected: .unknown, batch: true)
+        try await run("{\"state\":true,\"errcode\":0,\"result\":[{\"state\":true},{\"errcode\":0}]}", expected: .unknown, batch: true)
+        try await run("{\"result\":[{\"state\":false},{\"state\":false}]}", expected: .rejected, batch: true)
         try await run("{\"result\":[{\"state\":true},{\"state\":false}]}", expected: .unknown, batch: true)
         try await run("{\"state\":true}", expected: .accepted, brokenPath: true)
         print("PASS: create → verify → signature → submit; refusal/unknown/batch/safe preflight")

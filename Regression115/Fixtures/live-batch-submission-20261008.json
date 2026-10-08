@@ -1,0 +1,114 @@
+{
+  "actualPOSTCount": 1,
+  "http": 200,
+  "response": {
+    "errcode": 0,
+    "state": true,
+    "result": [
+      {
+        "url": "ed2k://|file|fixture-0.mp4|100|11111111111111111111111111111111|/",
+        "info_hash": "11111111111111111111111111111111",
+        "errtype": "",
+        "errno": 0,
+        "state": true,
+        "errcode": 0
+      },
+      {
+        "errtype": "",
+        "errno": 0,
+        "info_hash": "22222222222222222222222222222222",
+        "errcode": 0,
+        "url": "ed2k://|file|fixture-1.mp4|100|22222222222222222222222222222222|/",
+        "state": true
+      }
+    ],
+    "errno": 0
+  },
+  "topKeys": [
+    "state",
+    "errno",
+    "result",
+    "errcode"
+  ],
+  "scope": "real two-item add_task_urls acknowledgment; synthetic resource identities",
+  "tid": "3818209",
+  "targetCID": "3535200293442553007",
+  "preflight": [
+    {
+      "lowercaseHashQuery": true,
+      "matchingHashes": 0
+    },
+    {
+      "lowercaseHashQuery": true,
+      "matchingHashes": 0
+    }
+  ],
+  "taskVerification": {
+    "items": [
+      {
+        "state": true,
+        "http": 200,
+        "targetCIDMatches": true,
+        "percentDone": 100,
+        "matchingTasks": 1,
+        "fileIdPresent": true,
+        "hashMatches": true,
+        "status": 2
+      },
+      {
+        "percentDone": 100,
+        "targetCIDMatches": true,
+        "state": true,
+        "http": 200,
+        "status": 2,
+        "matchingTasks": 1,
+        "hashMatches": true,
+        "fileIdPresent": true
+      }
+    ],
+    "tlsVerified": true
+  },
+  "fileVerification": {
+    "rows": 3,
+    "state": true,
+    "pathIdentityMatches": true,
+    "items": [
+      {
+        "sizeMatches": true,
+        "percentDone": 100,
+        "hashMatches": true,
+        "taskFileIdMatches": false,
+        "status": 2,
+        "targetCIDMatches": true,
+        "shaPresent": true,
+        "fileIdPresent": true,
+        "nameMatches": true
+      },
+      {
+        "hashMatches": true,
+        "status": 2,
+        "fileIdPresent": true,
+        "sizeMatches": true,
+        "targetCIDMatches": true,
+        "percentDone": 100,
+        "nameMatches": true,
+        "shaPresent": true,
+        "taskFileIdMatches": false
+      },
+      {
+        "percentDone": 100,
+        "fileIdPresent": true,
+        "shaPresent": true,
+        "targetCIDMatches": true,
+        "taskFileIdMatches": false,
+        "sizeMatches": true,
+        "hashMatches": true,
+        "status": 2,
+        "nameMatches": true
+      }
+    ],
+    "tlsVerified": true,
+    "http": 200
+  },
+  "tlsVerified": true
+}

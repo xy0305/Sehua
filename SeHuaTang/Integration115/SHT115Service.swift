@@ -290,13 +290,26 @@ public actor SHT115Service {
             (links.count == 1 ? "url" : "url[\($0.offset)]", $0.element)
         }
     }
-    static func submissionState(_ obj: [String: Any], count: Int) -> SHT115SubmissionState {
+    static func submissionState(_ obj: [String: Any], count: Int, links: [String]? = nil) -> SHT115SubmissionState {
         let rows = (obj["result"] as? [[String: Any]]) ?? (obj["data"] as? [[String: Any]]) ?? (obj["tasks"] as? [[String: Any]])
         if let rows {
             guard rows.count == count else { return .unknown }
-            if rows.allSatisfy({ SHT115HTTP.success($0) }) { return .accepted }
+            if rows.allSatisfy({ SHT115HTTP.success($0) }) {
+                if count > 1, let links {
+                    let returned = rows.compactMap { $0["url"] as? String }
+                    guard returned.count == count, Set(returned).count == count,
+                          Set(returned) == Set(links) else { return .unknown }
+                }
+                return .accepted
+            }
             if rows.allSatisfy({ ["0", "false"].contains(SHT115HTTP.string($0["state"]).lowercased()) }) { return .rejected }
             return .unknown // partial acceptance must never resend the batch
+        }
+        if count > 1 {
+            // Real add_task_urls returns result[] per input. A top-level state/errcode
+            // alone cannot prove every item was accepted (and must never unlock replay).
+            if ["0", "false"].contains(SHT115HTTP.string(obj["state"]).lowercased()) { return .rejected }
+            return .unknown
         }
         if SHT115HTTP.success(obj) { return .accepted }
         if ["0", "false"].contains(SHT115HTTP.string(obj["state"]).lowercased()) { return .rejected }
@@ -338,7 +351,7 @@ public actor SHT115Service {
             let response = try await http.jsonEvidence("https://115.com/web/lixian/?ct=lixian&ac=" + action, settings: settings, fields: fields)
             let obj = response.object
             apiCode = SHT115Diagnostic.apiCode(obj)
-            let state = Self.submissionState(obj, count: links.count)
+            let state = Self.submissionState(obj, count: links.count, links: links)
             records[i].tasks[t].state = state
             records[i].tasks[t].writeEvidence?.httpStatus = response.status
             records[i].tasks[t].writeEvidence?.response = state
