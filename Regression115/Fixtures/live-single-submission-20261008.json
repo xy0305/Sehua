@@ -1,0 +1,14 @@
+{
+  "scope": "single add_task_url only; not evidence for add_task_urls batch acceptance",
+  "tid": "3818209",
+  "targetCID": "3535200293442553007",
+  "actualPOSTCount": 1,
+  "http": 200,
+  "response": {"state": true, "errcode": 0, "errno": 0, "info_hash": "<redacted:string>", "errtype": "", "url": "<redacted:string>"},
+  "topKeys": ["state", "errno", "errtype", "errcode", "info_hash", "url"],
+  "preflight": {"lowercaseHashQuery": true, "matchingHashes": 0},
+  "taskVerification": {"http": 200, "hashMatches": true, "targetCIDMatches": true, "matchingTasks": 1, "status": 2, "percentDone": 100, "fileIdPresent": true},
+  "fileVerification": {"state": "unproven", "reason": "verified-TLS directory file reads failed; task progress is not file identity evidence"},
+  "remainingLinksSubmitted": 0,
+  "tlsVerified": true
+}

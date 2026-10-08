@@ -61,6 +61,26 @@ public struct SHT115Task: Codable, Identifiable {
     public var state: SHT115SubmissionState
     public var progress: [SHT115Progress]
     public var updatedAt: Date
+    public var writeEvidence: SHT115TaskWriteEvidence? = nil
+}
+public struct SHT115TaskWriteEvidence: Codable {
+    public var request: String
+    public var httpStatus: Int? = nil
+    public var response: SHT115SubmissionState? = nil
+    public var apiCode: String? = nil
+    public var failurePhase: String? = nil
+    public var failureCode: String? = nil
+    public var readError: String? = nil
+    public var readErrorCode: String? = nil
+    var safeSummary: String {
+        func token(_ value: String?, _ allowed: [String]) -> String {
+            guard let value, allowed.contains(value) else { return "未采集" }; return value
+        }
+        func number(_ value: String?) -> String {
+            guard let value, !value.isEmpty, value.count <= 12, value.utf8.allSatisfy({ (48...57).contains($0) || $0 == 45 }) else { return "未采集" }; return value
+        }
+        return "request=\(token(request, ["single-offline-post", "batch-offline-post"])) · HTTP=\(httpStatus.map { (100...599).contains($0) ? String($0) : "未采集" } ?? "未采集") · response=\(response?.rawValue ?? "未采集") · apiCode=\(number(apiCode)) · failurePhase=\(token(failurePhase, ["request", "http", "response-json", "response", "restart-interrupted"])) · failureCode=\(number(failureCode)) · readError=\(token(readError, ["http-read", "json-read", "directory-path", "directory-list", "read-verification"])) · readErrorCode=\(number(readErrorCode))"
+    }
 }
 public struct SHT115Progress: Codable {
     public let url: String
@@ -176,6 +196,6 @@ extension SHT115Resource {
         (directoryJournal ?? []).contains { $0.manualRecovery && [.unknown, .submitting].contains($0.state) }
     }
     public var directoryStatusText: String {
-        directoryCreatedAwaitingPath ? "目录已创建，待路径核验（不重建）" : (directoryWritePending ? "目录写入结果未知，保留锁（不重发）" : "目录路径已核验")
+        directoryCreatedAwaitingPath ? "目录已创建，待路径核验（不重建）" : (directoryWritePending ? "目录写入结果未知，保留锁（不重发）" : (directoryCID == nil ? "目录尚未确认创建" : "目录路径已核验"))
     }
 }

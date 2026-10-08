@@ -46,7 +46,7 @@ final class Mock115Protocol: URLProtocol, @unchecked Sendable {
             return (String(parts[0]).removingPercentEncoding!, String(parts[1]).removingPercentEncoding!)
         })
     }
-    static func run(_ response: String, expected: SHT115SubmissionState, batch: Bool = false, brokenPath: Bool = false, transport: Bool = false) async throws {
+    static func run(_ response: String, expected: SHT115SubmissionState, batch: Bool = false, brokenPath: Bool = false, transport: Bool = false, afterReadFailure: Bool = false) async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [Mock115Protocol.self]
         let session = URLSession(configuration: config)
@@ -117,6 +117,8 @@ final class Mock115Protocol: URLProtocol, @unchecked Sendable {
             precondition(saved[0].tasks.isEmpty && !calls.contains("submit") && !calls.contains("sign"))
         } else {
             precondition(saved[0].tasks.last?.state == expected)
+            precondition(saved[0].tasks.last?.writeEvidence?.request == (batch ? "batch-offline-post" : "single-offline-post"))
+            if expected == .accepted { precondition(saved[0].tasks.last?.writeEvidence?.httpStatus == 200 && saved[0].tasks.last?.writeEvidence?.response == .accepted) }
             precondition(calls == ["create", "verify", "verify", "sign", "submit"])
             if expected != .rejected {
                 let count = calls.count
@@ -124,8 +126,43 @@ final class Mock115Protocol: URLProtocol, @unchecked Sendable {
                 precondition(calls.count == count)
             }
         }
+        if afterReadFailure {
+            precondition(!batch && expected == .accepted)
+            Mock115Protocol.handler = { request in
+                precondition(request.httpMethod == "GET", "read recovery must not POST")
+                if request.url!.path.contains("/files") {
+                    return "{\"state\":true,\"count\":0,\"data\":[],\"path\":[{\"cid\":0},{\"cid\":10},{\"cid\":20}]}"
+                }
+                let q = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+                let hash = q.first { $0.name == "info_hash" }!.value!
+                precondition(hash == SHT115Service.infoHash(ed) && hash == hash.lowercased())
+                return "{\"state\":true,\"page_count\":1,\"tasks\":[{\"info_hash\":\"" + hash + "\",\"wp_path_id\":20,\"status\":2,\"percentDone\":100}]}"
+            }
+            let inspected = try await service.inspect(resourceID: resource.id, settings: settings, includeFiles: false)
+            precondition(inspected.resource.tasks[0].state == .accepted && inspected.resource.tasks[0].progress.count == 1)
+            precondition(inspected.resource.tasks[0].progress[0].status == 2 && inspected.resource.tasks[0].progress[0].percent == 100)
+            Mock115Protocol.handler = { request in
+                precondition(request.httpMethod == "GET")
+                throw URLError(.secureConnectionFailed)
+            }
+            do { _ = try await service.inspect(resourceID: resource.id, settings: settings, includeFiles: true); preconditionFailure("file read must fail") } catch {}
+            let restarted = try SHT115Service(storeURL: store, session: session)
+            let records = await restarted.resources()
+            let task = records[0].tasks[0]
+            precondition(task.state == .accepted && task.writeEvidence?.response == .accepted && task.writeEvidence?.httpStatus == 200 && task.writeEvidence?.apiCode == "0")
+            precondition(task.writeEvidence?.readError == "http-read" && task.writeEvidence?.readErrorCode == "-1200")
+            do { _ = try await restarted.submit(urls: [ed], resourceID: resource.id, settings: settings); preconditionFailure("accepted replay") } catch {}
+            let diagnostic = await restarted.safeDiagnostic(tid: "3803873", settings: settings)
+            precondition(diagnostic.contains("response=accepted") && diagnostic.contains("readError=http-read") && !diagnostic.contains(ed) && !diagnostic.contains("mock-sign") && !diagnostic.contains("fake"))
+        }
     }
     static func main() async throws {
+        let live = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "Regression115/Fixtures/live-single-submission-20261008.json"))) as! [String: Any]
+        let response = live["response"] as! [String: Any]
+        precondition(response["info_hash"] is String && response["url"] is String && response["tasks"] == nil && response["data"] == nil && response["result"] == nil)
+        precondition(SHT115Service.submissionState(response, count: 1) == .accepted)
+        let liveResponse = String(data: try JSONSerialization.data(withJSONObject: response), encoding: .utf8)!
+        try await run(liveResponse, expected: .accepted, afterReadFailure: true)
         try await run("{\"state\":true}", expected: .accepted)
         try await run("{\"state\":false,\"errcode\":911,\"error_msg\":\"secret must not leak\"}", expected: .rejected)
         try await run("{}", expected: .unknown)

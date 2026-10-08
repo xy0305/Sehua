@@ -29,7 +29,10 @@ public actor SHT115Service {
             if (loaded[r].directoryJournal ?? []).contains(where: { $0.state == .accepted && $0.evidence?.path == "pending" }) {
                 loaded[r].directoryWritePending = true
             }
-            for t in loaded[r].tasks.indices where loaded[r].tasks[t].state == .submitting { loaded[r].tasks[t].state = .unknown }
+            for t in loaded[r].tasks.indices where loaded[r].tasks[t].state == .submitting {
+                loaded[r].tasks[t].state = .unknown
+                loaded[r].tasks[t].writeEvidence?.failurePhase = "restart-interrupted"
+            }
             for (key, value) in loaded[r].extractions ?? [:] where value == .submitting { loaded[r].extractions?[key] = .unknown }
             for (key, value) in loaded[r].extractionJobs ?? [:] where value.cleanup == .submitting {
                 var job = value
@@ -278,7 +281,7 @@ public actor SHT115Service {
         return ([header] + matching.map { record in
             let states = record.tasks.map { String(describing: $0.state) }.joined(separator: ",")
             let phase = record.directoryWritePending ? record.directoryStatusText : (record.tasks.contains { $0.state == .unknown || $0.state == .submitting } ? "离线任务待核验" : (record.tasks.isEmpty ? "本机未记录离线提交" : "离线任务已有记录"))
-            return "tid后缀证据=\(record.directoryName.hasSuffix("_tid-" + record.tid)) · 目录日志数=\(record.directoryJournal?.count ?? 0) · 目录尝试状态=\((record.directoryJournal ?? []).map { $0.state.rawValue }.joined(separator: ",")) · 父CID=\(record.parentCID) · 目录CID=\(record.directoryCID ?? "未知") · directoryPending=\(record.directoryWritePending) · 阶段=\(phase) · 任务数=\(record.tasks.count) · 状态=\(states)\n\((record.directoryJournal ?? []).map { "manualRecovery=\($0.manualRecovery) · writeState=\($0.state.rawValue) · \($0.evidence?.safeSummary ?? "证据=旧记录未采集")" }.joined(separator: "\n"))"
+            return "tid后缀证据=\(record.directoryName.hasSuffix("_tid-" + record.tid)) · 目录日志数=\(record.directoryJournal?.count ?? 0) · 目录尝试状态=\((record.directoryJournal ?? []).map { $0.state.rawValue }.joined(separator: ",")) · 父CID=\(record.parentCID) · 目录CID=\(record.directoryCID ?? "未知") · directoryPending=\(record.directoryWritePending) · 阶段=\(phase) · 任务数=\(record.tasks.count) · 状态=\(states)\n\((record.directoryJournal ?? []).map { "manualRecovery=\($0.manualRecovery) · writeState=\($0.state.rawValue) · \($0.evidence?.safeSummary ?? "证据=旧记录未采集")" }.joined(separator: "\n"))\n\(record.tasks.map { "taskState=\($0.state.rawValue) · \($0.writeEvidence?.safeSummary ?? "证据=旧记录未采集")" }.joined(separator: "\n"))"
         } + ["本机无记录不证明服务器未写入；目录核验不解除离线任务unknown。未导出账户、Cookie、签名、URL或正文。"]).joined(separator: "\n")
     }
     /// 115 web API uses url for a single link, url[n] (not urls[n]) for a batch.
@@ -326,17 +329,29 @@ public actor SHT115Service {
         do { signature = try await sign(settings) }
         catch let error as SHT115Diagnostic { throw error }
         catch { throw SHT115Diagnostic(stage: "signature", outcome: "未提交：签名请求失败", code: "") }
-        records[i].tasks.append(SHT115Task(id: UUID(), urls: links, state: .submitting, progress: [], updatedAt: Date())); try save()
+        records[i].tasks.append(SHT115Task(id: UUID(), urls: links, state: .submitting, progress: [], updatedAt: Date(), writeEvidence: SHT115TaskWriteEvidence(request: links.count == 1 ? "single-offline-post" : "batch-offline-post"))); try save()
         let t = records[i].tasks.count - 1
         let fields = Self.submissionFields(links: links, cid: cid, uid: settings.uid, signature: signature)
         var apiCode = ""
         do {
             let action = links.count == 1 ? "add_task_url" : "add_task_urls"
-            let obj = try await http.json("https://115.com/web/lixian/?ct=lixian&ac=" + action, settings: settings, fields: fields)
+            let response = try await http.jsonEvidence("https://115.com/web/lixian/?ct=lixian&ac=" + action, settings: settings, fields: fields)
+            let obj = response.object
             apiCode = SHT115Diagnostic.apiCode(obj)
-            records[i].tasks[t].state = Self.submissionState(obj, count: links.count)
+            let state = Self.submissionState(obj, count: links.count)
+            records[i].tasks[t].state = state
+            records[i].tasks[t].writeEvidence?.httpStatus = response.status
+            records[i].tasks[t].writeEvidence?.response = state
+            records[i].tasks[t].writeEvidence?.apiCode = apiCode
+            if state == .unknown { records[i].tasks[t].writeEvidence?.failurePhase = "response" }
             records[i].tasks[t].updatedAt = Date(); try save()
         } catch {
+            if let persistence = error as? SHT115Error, case .persistence = persistence { throw persistence }
+            let diagnostic = error as? SHT115Diagnostic
+            records[i].tasks[t].writeEvidence?.httpStatus = diagnostic?.httpStatus
+            records[i].tasks[t].writeEvidence?.failurePhase = diagnostic?.stage == "http-write" ? (diagnostic?.httpStatus == nil ? "request" : "http") : "response-json"
+            let code = diagnostic?.code ?? ""
+            records[i].tasks[t].writeEvidence?.failureCode = code.count <= 12 && code.utf8.allSatisfy({ (48...57).contains($0) || $0 == 45 }) ? code : ""
             records[i].tasks[t].state = .unknown; records[i].tasks[t].updatedAt = Date(); try save()
             throw SHT115Diagnostic(stage: "submit", outcome: "结果未知：传输或响应无法确认", code: "")
         }
@@ -383,6 +398,22 @@ public actor SHT115Service {
     public func inspect(resourceID: String, settings: SHT115Settings, background: Bool = false, includeFiles: Bool = true) async throws -> SHT115Inspection {
         try await begin(background: background); defer { end() }
         let i = try index(resourceID, settings)
+        do { return try await inspectUnlocked(resourceID: resourceID, settings: settings, includeFiles: includeFiles, i: i) }
+        catch { try recordTaskReadError(i, error); throw error }
+    }
+    private func recordTaskReadError(_ i: Int, _ error: Error) throws {
+        let diagnostic = error as? SHT115Diagnostic
+        let stage = diagnostic?.stage ?? ""
+        let safeStage = ["http-read", "json-read", "directory-path", "directory-list"].contains(stage) ? stage : "read-verification"
+        let code = diagnostic?.code ?? ""
+        let safeCode = code.count <= 12 && code.utf8.allSatisfy({ (48...57).contains($0) || $0 == 45 }) ? code : ""
+        for t in records[i].tasks.indices {
+            records[i].tasks[t].writeEvidence?.readError = safeStage
+            records[i].tasks[t].writeEvidence?.readErrorCode = safeCode
+        }
+        try save() // GET diagnostics never modify POST state or unlock a task.
+    }
+    private func inspectUnlocked(resourceID: String, settings: SHT115Settings, includeFiles: Bool, i: Int) async throws -> SHT115Inspection {
         guard let target = records[i].directoryCID else { throw SHT115Error.invalidInput }
         // Directory availability is independent of the account's offline task history.
         guard records[i].parentCID == settings.parentCID else { throw SHT115Error.accountMismatch }
@@ -415,7 +446,7 @@ public actor SHT115Service {
                     if rows.isEmpty { break }
                     if pages == nil { truncated = true; break }
                     if page == 32 { truncated = true }
-                } catch { truncated = true; break }
+                } catch { try recordTaskReadError(i, error); truncated = true; break }
             }
         }
         var targetCount = 0, completedCount = 0, otherCount = 0, unverifiedCount = 0
