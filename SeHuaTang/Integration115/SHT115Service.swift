@@ -9,37 +9,40 @@ public actor SHT115Service {
     private var backgroundWaiters: [CheckedContinuation<Void, Never>] = []
     public init(storeURL: URL? = nil, session: URLSession? = nil) throws {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        self.storeURL = storeURL ?? base.appendingPathComponent("SeHuaTang/115-resources-v1.json")
+        let persistenceURL = storeURL ?? base.appendingPathComponent("SeHuaTang/115-resources-v1.json")
+        self.storeURL = persistenceURL
         self.http = SHT115HTTP(session: session)
-        if FileManager.default.fileExists(atPath: self.storeURL.path) {
-            do { records = try JSONDecoder().decode([SHT115Resource].self, from: Data(contentsOf: self.storeURL)) }
+        var loaded: [SHT115Resource]
+        if FileManager.default.fileExists(atPath: persistenceURL.path) {
+            do { loaded = try JSONDecoder().decode([SHT115Resource].self, from: Data(contentsOf: persistenceURL)) }
             catch { throw SHT115Error.persistence }
-        } else { records = [] }
-        for r in records.indices {
-            for j in records[r].directoryJournal?.indices ?? 0..<0 where records[r].directoryJournal?[j].state == .submitting {
-                records[r].directoryJournal?[j].state = .unknown
-                records[r].directoryWritePending = true
-                records[r].directoryJournal?[j].evidence?.failurePhase = "restart-interrupted"
+        } else { loaded = [] }
+        for r in loaded.indices {
+            for j in loaded[r].directoryJournal?.indices ?? 0..<0 where loaded[r].directoryJournal?[j].state == .submitting {
+                loaded[r].directoryJournal?[j].state = .unknown
+                loaded[r].directoryWritePending = true
+                loaded[r].directoryJournal?[j].evidence?.failurePhase = "restart-interrupted"
             }
-            if records[r].directoryCID == nil && (records[r].directoryJournal ?? []).contains(where: { [.unknown, .submitting].contains($0.state) }) {
-                records[r].directoryWritePending = true
+            if loaded[r].directoryCID == nil && (loaded[r].directoryJournal ?? []).contains(where: { [.unknown, .submitting, .accepted].contains($0.state) }) {
+                loaded[r].directoryWritePending = true
             }
-            if (records[r].directoryJournal ?? []).contains(where: { $0.state == .accepted && $0.evidence?.path == "pending" }) {
-                records[r].directoryWritePending = true
+            if (loaded[r].directoryJournal ?? []).contains(where: { $0.state == .accepted && $0.evidence?.path == "pending" }) {
+                loaded[r].directoryWritePending = true
             }
-            for t in records[r].tasks.indices where records[r].tasks[t].state == .submitting { records[r].tasks[t].state = .unknown }
-            for (key, value) in records[r].extractions ?? [:] where value == .submitting { records[r].extractions?[key] = .unknown }
-            for (key, value) in records[r].extractionJobs ?? [:] where value.cleanup == .submitting {
+            for t in loaded[r].tasks.indices where loaded[r].tasks[t].state == .submitting { loaded[r].tasks[t].state = .unknown }
+            for (key, value) in loaded[r].extractions ?? [:] where value == .submitting { loaded[r].extractions?[key] = .unknown }
+            for (key, value) in loaded[r].extractionJobs ?? [:] where value.cleanup == .submitting {
                 var job = value
-                job.cleanup = .unknown; records[r].extractionJobs?[key] = job
+                job.cleanup = .unknown; loaded[r].extractionJobs?[key] = job
             }
         }
-        // Persist conservative restart normalization before any operation can run.
-        if FileManager.default.fileExists(atPath: self.storeURL.path) {
-            do { try JSONEncoder().encode(records).write(to: self.storeURL, options: .atomic) }
+        // Normalize locally before assigning actor-isolated storage; persist before use.
+        if FileManager.default.fileExists(atPath: persistenceURL.path) {
+            do { try JSONEncoder().encode(loaded).write(to: persistenceURL, options: .atomic) }
             catch { throw SHT115Error.persistence }
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: self.storeURL.path)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: persistenceURL.path)
         }
+        self.records = loaded
     }
     public func resources() -> [SHT115Resource] { records }
     // Hold the permit across actor reentrancy. Interactive FIFO wins at each
@@ -187,7 +190,8 @@ public actor SHT115Service {
                 records[i].directoryJournal?[attempt].evidence?.pathError = ["http-read", "json-read", "directory-path", "directory-list", "directory-pagination", "directory-count"].contains(stage) ? stage : "path-verification"
                 records[i].directoryJournal?[attempt].evidence?.pathErrorCode = safeCode
             } else if records[i].directoryJournal?[attempt].state != .rejected {
-                records[i].directoryJournal?[attempt].evidence?.httpStatus = diagnostic?.httpStatus ?? records[i].directoryJournal?[attempt].evidence?.httpStatus
+                let retainedStatus = records[i].directoryJournal?[attempt].evidence?.httpStatus
+                records[i].directoryJournal?[attempt].evidence?.httpStatus = diagnostic?.httpStatus ?? retainedStatus
                 if stage == "http-write" {
                     records[i].directoryJournal?[attempt].evidence?.failurePhase = diagnostic?.httpStatus == nil ? "request" : "http"
                 } else if stage == "json-write" {
