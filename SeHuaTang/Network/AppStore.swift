@@ -61,7 +61,6 @@ final class AppStore: ObservableObject {
     private var portalGeneration = UUID()
     private var searchGeneration = UUID()
     private var searchQuery = ""
-    private var searchQuery = ""
 
     func loadForums() async {
         guard forumState != .loading, !Task.isCancelled else { return }
