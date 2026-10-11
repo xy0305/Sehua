@@ -478,10 +478,11 @@ public actor SHT115Service {
             var matches: [SHT115Progress] = []
             for link in records[i].tasks[t].urls {
                 let hash = Self.infoHash(link)
-                if let task = remote.first(where: {
+                let matchingTasks = remote.filter {
                     SHT115HTTP.string($0["wp_path_id"]) == target &&
                     (SHT115HTTP.string($0["url"] ?? $0["url_string"]) == link || (!hash.isEmpty && SHT115HTTP.string($0["info_hash"] ?? $0["hash"]).lowercased() == hash))
-                }) {
+                }
+                if matchingTasks.count == 1, let task = matchingTasks.first {
                     targetCount += 1
                     if Int(SHT115HTTP.string(task["status"])) == 2 { completedCount += 1 }
                     matches.append(SHT115Progress(url: link, infoHash: SHT115HTTP.string(task["info_hash"] ?? task["hash"]), status: Int(SHT115HTTP.string(task["status"])) ?? -999, percent: Double(SHT115HTTP.string(task["percentDone"] ?? task["percent"])) ?? 0, fileID: SHT115HTTP.string(task["file_id"] ?? task["fid"])))
@@ -570,16 +571,21 @@ public actor SHT115Service {
         guard SHT115HTTP.string(status["unzip_status"]) == "4", (Double(SHT115HTTP.string(status["progress"])) ?? 0) >= 100 else {
             return SHT115ExtractionResult(state: .parsing, message: "压缩包解析中；前台刷新继续查询，不重发解析请求")
         }
-        let info = try await http.json("https://webapi.115.com/files/extract_info?" + SHT115HTTP.form([("pick_code", pick), ("file_name", ""), ("paths", "文件"), ("page_count", "999")]), settings: settings)
+        let info = try await http.json("https://webapi.115.com/files/extract_info?" + SHT115HTTP.form([("pick_code", pick), ("file_name", ""), ("paths", "文件"), ("page_count", "999"), ("next_marker", "")]), settings: settings)
         let contents = info["data"] as? [String: Any] ?? [:]
-        guard SHT115HTTP.success(info), let entries = contents["list"] as? [[String: Any]], !entries.isEmpty, entries.count < 999 else { throw SHT115Error.unsafeListing }
-        if let total = Int(SHT115HTTP.string(contents["count"])), total != entries.count { throw SHT115Error.unsafeListing }
+        guard SHT115HTTP.success(info), let marker = contents["next_marker"] as? String, marker.isEmpty,
+              let entries = contents["list"] as? [[String: Any]], !entries.isEmpty, entries.count < 999 else { throw SHT115Error.unsafeListing }
+        if contents["count"] != nil {
+            guard Int(SHT115HTTP.string(contents["count"])) == entries.count else { throw SHT115Error.unsafeListing }
+        }
         var fields = [("pick_code", pick), ("to_pid", target), ("paths", "文件")]
         var names = Set<String>()
         var outputs: [SHT115ExtractionOutput] = []
         for entry in entries {
             let name = SHT115HTTP.string(entry["file_name"] ?? entry["name"] ?? entry["n"])
-            guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\\"), !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }), names.insert(name).inserted else { throw SHT115Error.unsafeListing }
+            guard !name.isEmpty, !name.hasPrefix("."), !(name as NSString).deletingPathExtension.isEmpty,
+                  (name as NSString).deletingPathExtension.count <= 75, (name as NSString).pathExtension.utf8.count <= 254,
+                  !name.contains(where: { "<>\"".contains($0) }), name != ".", name != "..", !name.contains("/"), !name.contains("\\"), !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }), names.insert(name.precomposedStringWithCanonicalMapping.lowercased()).inserted else { throw SHT115Error.unsafeListing }
             let directory = SHT115HTTP.string(entry["size"]) == "0" && SHT115HTTP.string(entry["ico"]).isEmpty
             outputs.append(SHT115ExtractionOutput(name: name, directory: directory, size: Int64(SHT115HTTP.string(entry["size"])) ?? -1, sha1: SHT115HTTP.string(entry["sha1"] ?? entry["sha"])))
             fields.append((directory ? "extract_dir[]" : "extract_file[]", name))
@@ -589,7 +595,7 @@ public actor SHT115Service {
         let before = try await http.allEntries(cid: target, settings: settings)
         guard outputs.allSatisfy({ !$0.directory && $0.size > 0 && $0.size <= 1_073_741_824 }),
               outputs.reduce(Int64(0), { $0 + $1.size }) <= 2_147_483_648,
-              !before.contains(where: { names.contains($0.name) }) else {
+              !before.contains(where: { names.contains($0.name.precomposedStringWithCanonicalMapping.lowercased()) }) else {
             try persist(.unsupported)
             return SHT115ExtractionResult(state: .unsupported, message: "仅支持无重名的平铺非空文件（单文件≤1GiB，总计≤2GiB）；保留原包")
         }

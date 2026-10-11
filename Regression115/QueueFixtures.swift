@@ -50,7 +50,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
             }
             if path == "/files/extract_info" {
                 let sha = mode == "noOutputHash" ? "" : ",\"sha1\":\"\(outputSHA)\""
-                return "{\"state\":true,\"data\":{\"count\":1,\"list\":[{\"file_name\":\"movie.mp4\",\"size\":42,\"ico\":\"mp4\"\(sha)}]}}"
+                return "{\"state\":true,\"data\":{\"count\":1,\"next_marker\":\"\",\"list\":[{\"file_name\":\"movie.mp4\",\"size\":42,\"ico\":\"mp4\"\(sha)}]}}"
             }
             if path == "/files/add_extract_file" {
                 if request.httpMethod == "POST" { released = true; return "{\"state\":true,\"data\":{\"extract_id\":900}}" }

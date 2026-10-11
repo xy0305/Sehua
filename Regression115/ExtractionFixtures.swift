@@ -71,7 +71,7 @@ final class ExtractionMockProtocol: URLProtocol, @unchecked Sendable {
             }
             if path == "/files/extract_info" {
                 let name = unsafe ? "../escape" : "movie.mp4"
-                return "{\"state\":true,\"data\":{\"count\":1,\"list\":[{\"file_name\":\"" + name + "\",\"size\":42,\"ico\":\"mp4\"}]}}"
+                return "{\"state\":true,\"data\":{\"count\":1,\"next_marker\":\"\",\"list\":[{\"file_name\":\"" + name + "\",\"size\":42,\"ico\":\"mp4\"}]}}"
             }
             precondition(path == "/files/add_extract_file", "Unexpected mock endpoint: " + path)
             let body = form(request)

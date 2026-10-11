@@ -50,7 +50,7 @@ struct SHT115HTTP {
         let (data, _, status) = try await data(endpoint, settings: settings, fields: fields)
         // Preserve identifier tokens before Foundation JSON parsing (never Double).
         guard var text = String(data: data, encoding: .utf8) else { throw SHT115Diagnostic(stage: fields == nil ? "json-read" : "json-write", outcome: "响应不是可验证JSON", code: "", httpStatus: status) }
-        let regex = try NSRegularExpression(pattern: "(\"(?:cid|pid|parent_id|category_id|folder_id|file_id|fid|id|wp_path_id)\"\\s*:\\s*)([0-9]+)(?=\\s*[,}])")
+        let regex = try NSRegularExpression(pattern: "(\"(?:cid|pid|parent_id|category_id|folder_id|file_id|fid|id|wp_path_id|extract_id)\"\\s*:\\s*)([0-9]+)(?=\\s*[,}])")
         text = regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1\"$2\"")
         let obj: [String: Any]
         do {
