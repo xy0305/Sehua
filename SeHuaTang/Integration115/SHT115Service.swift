@@ -713,7 +713,9 @@ public actor SHT115Service {
     public func cancelExtractionQueue(resourceID: String, queueID: UUID, settings: SHT115Settings) async throws {
         try await begin(); defer { end() }
         let i = try index(resourceID, settings)
-        guard let q = records[i].extractionQueue?.firstIndex(where: { $0.id == queueID }) else { return }
+        guard records[i].parentCID == settings.parentCID else { throw SHT115Error.accountMismatch }
+        guard let q = records[i].extractionQueue?.firstIndex(where: { $0.id == queueID }),
+              let state = records[i].extractionQueue?[q].state, [.waiting, .processing].contains(state) else { return }
         records[i].extractionQueue?[q].state = .cancelled
         records[i].extractionQueue?[q].note = "已取消后续自动处理；已受理的云端任务不会撤回"
         try save()

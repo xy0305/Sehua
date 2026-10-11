@@ -67,8 +67,8 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
             if submitted || mode == "existingSource" {
                 entries.append(["fid": "21", "n": "fixture.zip", "s": 42, "pc": "sourcePC", "sha": sha])
             }
-            if released { entries.append(["fid": "22", "n": "movie.mp4", "s": 42, "pc": "outputPC", "sha": outputSHA]) }
-            let json: [String: Any] = ["state": true, "count": entries.count, "data": entries,
+            if released { entries.append(["fid": "22", "n": "movie.mp4", "s": 42, "pc": "outputPC", "sha": mode == "outputHashMismatch" ? String(repeating: "d", count: 40) : outputSHA]) }
+            let json: [String: Any] = ["state": true, "count": mode == "largeBaseline" && !submitted ? 101 : entries.count, "data": entries,
                 "path": [["cid": "0"], ["cid": "10"], ["cid": "20"]], "offset": Int(query("offset")) ?? 0,
                 "limit": 100, "order": "file_name", "is_asc": 1, "fc_mix": 1]
             return String(decoding: try JSONSerialization.data(withJSONObject: json), as: UTF8.self)
@@ -90,15 +90,25 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         try await restored.runExtractionQueue(settings: input, now: now.addingTimeInterval(301))
         let again = try SHT115Service(storeURL: store, session: session)
         try await again.runExtractionQueue(settings: input, now: now.addingTimeInterval(602))
-        let shouldExtract = ["complete", "noOutputHash", "deleteTimeout"].contains(mode)
+        let shouldExtract = ["complete", "noOutputHash", "deleteTimeout", "outputHashMismatch"].contains(mode)
         precondition(parses == (shouldExtract ? 1 : 0), mode + " parse")
         precondition(deletes == (["complete", "deleteTimeout"].contains(mode) ? 1 : 0), mode + " recycle")
         // A future launch only reads/marks exhausted; no unbounded retry or replay.
         try await again.runExtractionQueue(settings: input, now: now.addingTimeInterval(90_000))
         precondition(deletes <= 1)
+        let final = await again.resources()
+        if mode == "complete", let item = final[0].extractionQueue?.first {
+            precondition(item.state == .recycled)
+            try await again.cancelExtractionQueue(resourceID: "q", queueID: item.id, settings: settings)
+            let afterCancel = await again.resources()
+            precondition(afterCancel[0].extractionQueue?.first?.state == .recycled)
+        }
+        if ["noFileID", "existingSource", "outputHashMismatch"].contains(mode) {
+            precondition(final[0].extractionQueue?.first?.state == .exhausted)
+        }
         print("PASS queue: " + mode)
     }
     static func main() async throws {
-        for mode in ["complete", "noFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout"] { try await run(mode) }
+        for mode in ["complete", "noFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline"] { try await run(mode) }
     }
 }
