@@ -8,7 +8,7 @@ struct Pan115TasksView: View {
         List {
             Section {
                 NavigationLink("115 设置", destination: Pan115SettingsView())
-                Text("仅显示本机记录；详情自动读取目录，前台有界刷新。未知写入不重发。")
+                Text("仅显示当前账户及父目录的本机记录。安全队列独立处理；未知写入不重发。")
                     .font(.footnote).foregroundStyle(.secondary)
                 Button("重新读取本机记录") { Task { await load() } }
                 if let message { Text(message).font(.footnote) }
@@ -41,7 +41,9 @@ struct Pan115TasksView: View {
     @MainActor private func load() async {
         do {
             let service = try Pan115UIService.get()
-            resources = await service.resources()
+            let settings = SHT115Settings.load()
+            resources = await service.resources().filter { $0.account == settings.account && $0.parentCID == settings.parentCID }
+            ExtractBackground.kick()
             message = nil
         } catch { message = "无法读取本机任务记录。" }
     }
@@ -74,7 +76,7 @@ struct Pan115TaskDetailView: View {
                     }
                 }.disabled(busy)
                 if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
-                Text("进入页面后自动读取并解压，切到后台仍继续。系统挂起或杀掉 App 后无法保证；未知结果不重发。")
+                Text("仅持久队列中的新任务可自动解压；历史或未知文件不处理。iOS后台为尽力执行，不保证运行时机、持续时长或强杀后执行；下次打开恢复核验。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("提交记录") {
@@ -94,6 +96,22 @@ struct Pan115TaskDetailView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
+                }
+            }
+            Section("安全后台解压队列") {
+                ForEach(resource.extractionQueue ?? []) { item in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("状态：" + item.state.rawValue + " · 尝试 \(item.attempts)/12")
+                        Text(item.note).font(.caption)
+                        if item.state == .waiting || item.state == .processing {
+                            Button("取消此项后续自动处理") {
+                                Task { await cancel(item.id) }
+                            }.disabled(busy)
+                        }
+                    }
+                }
+                if (resource.extractionQueue ?? []).isEmpty {
+                    Text("无已授权自动任务；历史记录不会自动入队。").font(.footnote)
                 }
             }
             Section("视频选择") {
@@ -120,7 +138,7 @@ struct Pan115TaskDetailView: View {
                     ForEach(listing.archives) { archive in
                         VStack(alignment: .leading, spacing: 6) {
                             Label(archive.name, systemImage: "doc.zipper")
-                            Text("自动云解压到本资源目录；确认释放完成且新输出验证后原包移入回收站，不绕过密码。状态：" + (resource.extractions?[archive.id]?.rawValue ?? "等待解析"))
+                            Text("目录发现不构成自动处理授权；仅确证队列源可解压，完整核验后原包移回收站。状态：" + (resource.extractions?[archive.id]?.rawValue ?? "等待解析"))
                                 .font(.caption).foregroundStyle(.orange)
                             Link("在115核对密码或未知结果", destination: URL(string: "https://115.com/")!)
                         }
@@ -134,15 +152,16 @@ struct Pan115TaskDetailView: View {
         .navigationTitle("归档任务详情")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .task {
-            // Keep polling while the app is backgrounded. iOS may still suspend or kill it.
-            await refresh(background: true)
-            for _ in 0..<40 {
-                do { try await Task.sleep(nanoseconds: 15_000_000_000) } catch { return }
-                guard !Task.isCancelled else { return }
-                await refresh(background: true)
-            }
-        }
+        .task { await refresh(); ExtractBackground.kick() }
+    }
+
+    @MainActor private func cancel(_ id: UUID) async {
+        do {
+            let service = try Pan115UIService.get()
+            let settings = SHT115Settings.load()
+            try await service.cancelExtractionQueue(resourceID: resource.id, queueID: id, settings: settings)
+            if let updated = await service.resources().first(where: { $0.id == resource.id }) { resource = updated }
+        } catch { message = SHT115Settings.safeMessage(error) }
     }
 
     private func submissionStatus(_ state: SHT115SubmissionState) -> String {
@@ -165,17 +184,9 @@ struct Pan115TaskDetailView: View {
             // Publish videos before any task query or archive write can fail.
             let current = try await service.listVideos(resourceID: resource.id, settings: settings, background: background)
             listing = current
-            if !current.truncated {
-                for archive in current.archives.prefix(4) {
-                    guard !Task.isCancelled else { return }
-                    do {
-                        let outcome = try await service.requestExtraction(archive: archive, resourceID: resource.id, settings: settings, confirmed: true, background: true)
-                        message = outcome.message
-                    } catch { message = SHT115Settings.safeMessage(error) }
-                }
-            }
             let inspection = try await service.inspect(resourceID: resource.id, settings: settings, background: background)
             resource = inspection.resource
+            ExtractBackground.kick()
             listing = inspection.listing
             if inspection.taskPagesTruncated { message = "视频目录已读取；定向任务查询失败或达到上限，进度可能不完整。" }
         } catch { message = SHT115Settings.safeMessage(error) }

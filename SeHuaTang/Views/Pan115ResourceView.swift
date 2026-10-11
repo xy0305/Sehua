@@ -102,7 +102,7 @@ struct Pan115ResourceView: View {
                         .font(.footnote).foregroundStyle(.orange)
                     Link("在115核对", destination: URL(string: "https://115.com/")!)
                 }
-                Text("详情页自动读取视频并云解压到当前资源目录；确认释放完成且新输出验证后原包移入回收站，不绕密码，未知写入不重发。前台有界刷新，关闭应用停止。")
+                Text("仅新受理且来源确证的单个 ed2k 压缩包进入安全队列；完整核验后仅原包移115回收站。未知不重发，失败不删。iOS后台尽力执行，不保证时机；重开后恢复。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
@@ -135,7 +135,7 @@ struct Pan115ResourceView: View {
             Button("确认创建目录并提交") { Task { await submit() } }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("请先核对上方全部 URL 和来源警告。这会向115发起真实写入操作；详情自动云解压到当前资源目录，仅解压明确完成且新输出验证后将本任务原包移入回收站。")
+            Text("请先核对上方全部 URL 和来源警告。这会向115发起真实写入；仅推送、不等待下载、不自动播放。开启安全队列后仅处理确证的新任务；完整核验才将该原包移115回收站，证据不足保留。")
         }
     }
 
@@ -260,8 +260,9 @@ struct Pan115ResourceView: View {
             let created = try await service.createOrReuseResource(tid: String(detail.tid), title: detail.title, settings: settings)
             resource = created
             stage = "离线任务提交"
-            resource = try await service.submit(urls: urls, resourceID: created.id, settings: settings)
-            message = "已记录提交结果；任务详情将自动读取视频并检查云解压。任务接受不等于离线完成。"
+            resource = try await service.submit(urls: urls, resourceID: created.id, settings: settings, autoExtraction: SHT115ExtractionPolicy.enabled())
+            ExtractBackground.kick()
+            message = "已记录提交结果；仅推送，不等待下载、不自动播放。符合安全条件的新压缩包由持久队列处理；受理不等于完成。"
         } catch {
             // Derive locks from the durable journal, not from a broad catch:
             // a failed read/signature is not evidence that a write was sent.

@@ -706,7 +706,8 @@ struct ThreadDetailView: View {
                 panStatus = "115目录阶段"
                 let created = try await service.createOrReuseResource(tid: String(d.tid), title: d.title.isEmpty ? title : d.title, settings: settings)
                 panStatus = "115提交阶段"
-                resource = try await service.submit(urls: result.links, resourceID: created.id, settings: settings)
+                resource = try await service.submit(urls: result.links, resourceID: created.id, settings: settings, autoExtraction: SHT115ExtractionPolicy.enabled())
+                ExtractBackground.kick()
             }
             guard let resource else { throw SHT115Error.invalidInput }
             // Submission acceptance is distinct from video readiness. Unknown or
@@ -721,25 +722,15 @@ struct ThreadDetailView: View {
                 panStatus = "115已受理；仅推送结束，不等待下载、不取播放URL。受理不等于完成。"
                 return
             }
-            panStatus = "已受理，读取原文件（最多12轮；非转码）"
-            for attempt in 0..<12 {
-                guard panStatus != nil else { return }
-                let listing = try await service.listVideos(resourceID: resource.id, settings: settings)
-                if listing.videos.isEmpty {
-                    for archive in listing.archives.prefix(2) {
-                        _ = try? await service.requestExtraction(archive: archive, resourceID: resource.id, settings: settings, confirmed: true)
-                    }
-                }
-                if !listing.videos.isEmpty {
-                    playVideos = listing.videos
-                    showPlayer = true
-                    panStatus = nil
-                    return
-                }
-                panStatus = "已受理，等待原文件：第\(attempt + 1)/12轮；离线未完成不代表提交失败"
-                if attempt < 11 { try await Task.sleep(nanoseconds: 5_000_000_000) }
+            // Explicit playback reads once; never scans archives or waits for download.
+            let listing = try await service.listVideos(resourceID: resource.id, settings: settings)
+            if !listing.videos.isEmpty {
+                playVideos = listing.videos
+                showPlayer = true
+                panStatus = nil
+            } else {
+                panStatus = "已受理，视频尚未就绪；自动解压仅由安全队列按系统机会执行，请稍后手动查看。"
             }
-            panStatus = "已提交，文件未就绪"
         } catch {
             panStatus = error is ResourceLinkExtractor.ExtractionError ? ResourceLinkExtractor.safeMessage(error) : (error is URLError ? "\(panStatus ?? "115读取阶段")：URLError \((error as! URLError).code.rawValue)；请核对任务，不自动重发。" : SHT115Settings.safeMessage(error))
         }

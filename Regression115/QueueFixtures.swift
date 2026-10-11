@@ -42,7 +42,8 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
             }
             if query("ac") == "task_lists" {
                 let fid = mode == "noFileID" ? "" : ",\"file_id\":21"
-                return "{\"state\":true,\"page_count\":1,\"tasks\":[{\"info_hash\":\"\(hash)\",\"wp_path_id\":20,\"status\":2,\"percentDone\":100\(fid)}]}"
+                let taskHash = mode == "taskHashMismatch" ? String(repeating: "e", count: 32) : hash
+                return "{\"state\":true,\"page_count\":1,\"tasks\":[{\"info_hash\":\"\(taskHash)\",\"wp_path_id\":20,\"status\":2,\"percentDone\":100\(fid)}]}"
             }
             if path == "/files/push_extract" {
                 if request.httpMethod == "POST" { parses += 1; return "{\"state\":true}" }
@@ -105,12 +106,12 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
             let afterCancel = await again.resources()
             precondition(afterCancel[0].extractionQueue?.first?.state == .recycled)
         }
-        if ["noFileID", "existingSource", "outputHashMismatch"].contains(mode) {
+        if ["noFileID", "existingSource", "outputHashMismatch", "taskHashMismatch"].contains(mode) {
             precondition(final[0].extractionQueue?.first?.state == .exhausted)
         }
         print("PASS queue: " + mode)
     }
     static func main() async throws {
-        for mode in ["complete", "noFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline"] { try await run(mode) }
+        for mode in ["complete", "noFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline", "taskHashMismatch"] { try await run(mode) }
     }
 }
