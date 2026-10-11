@@ -24,6 +24,9 @@ import UIKit
             let settings = SHT115Settings.load()
             guard let service = try? Pan115UIService.get(),
                   await service.hasPendingExtraction(settings: settings) else { return }
+            guard SHT115ExtractionPolicy.enabled(),
+                  settings.account == SHT115Settings.load().account,
+                  settings.parentCID == SHT115Settings.load().parentCID else { return }
             let request = BGProcessingTaskRequest(identifier: taskID)
             request.requiresNetworkConnectivity = true
             request.requiresExternalPower = false
@@ -75,6 +78,7 @@ struct BackgroundKeepAlive: View {
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         Color.clear.frame(width: 0, height: 0)
+            .onAppear { ExtractBackground.kick() }
             .onChange(of: scenePhase) { phase in
                 if phase == .background {
                     if SHT115ExtractionPolicy.enabled() { BackgroundRun.begin(); ExtractBackground.kick(); ExtractBackground.schedule() }
