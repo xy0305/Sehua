@@ -64,9 +64,10 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
             }
             precondition(path == "/files", "unexpected API: " + path)
             var entries = [[String: Any]]()
-            if submitted || mode == "existingSource" {
+            if submitted || mode == "existingSource" || mode == "duplicateBaseline" {
                 entries.append(["fid": "21", "n": "fixture.zip", "s": 42, "pc": "sourcePC", "sha": sha])
             }
+            if mode == "duplicateBaseline" && !submitted { let duplicate = entries; entries.append(contentsOf: duplicate) }
             if released { entries.append(["fid": "22", "n": "movie.mp4", "s": 42, "pc": "outputPC", "sha": mode == "outputHashMismatch" ? String(repeating: "d", count: 40) : outputSHA]) }
             let json: [String: Any] = ["state": true, "count": mode == "largeBaseline" && !submitted ? 101 : entries.count, "data": entries,
                 "path": [["cid": "0"], ["cid": "10"], ["cid": "20"]], "offset": Int(query("offset")) ?? 0,
@@ -80,6 +81,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         } catch { precondition(mode == "unknownSubmission") }
         let restored = try SHT115Service(storeURL: store, session: session)
         let saved = await restored.resources()
+        if ["largeBaseline", "duplicateBaseline"].contains(mode) { precondition(saved[0].extractionQueue == nil) }
         if mode == "cancelled", let item = saved[0].extractionQueue?.first {
             try await restored.cancelExtractionQueue(resourceID: "q", queueID: item.id, settings: settings)
         }
@@ -109,6 +111,6 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         print("PASS queue: " + mode)
     }
     static func main() async throws {
-        for mode in ["complete", "noFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline"] { try await run(mode) }
+        for mode in ["complete", "noFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline"] { try await run(mode) }
     }
 }

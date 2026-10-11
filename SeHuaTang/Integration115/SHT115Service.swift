@@ -343,7 +343,8 @@ public actor SHT115Service {
         // Reuse the existing path read; never add foreground pagination to push.
         // Larger/unknown-count directories are deliberately not enrolled.
         var priorIDs: [String]? = nil
-        if autoExtraction, links.count == 1, submissionPage.total == submissionPage.entries.count {
+        if autoExtraction, links.count == 1, submissionPage.total == submissionPage.entries.count,
+           Set(submissionPage.entries.map(\.id)).count == submissionPage.entries.count {
             priorIDs = submissionPage.entries.map(\.id)
         }
         let signature: [(String, String)]
