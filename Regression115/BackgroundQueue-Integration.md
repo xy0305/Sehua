@@ -2,7 +2,11 @@
 
 基线已从 origin/main 核对：3ef4e273e722463e17724046a38f115558f1f5f6（69），没有引入其他项目记忆。
 
-## 父分支接入（尚未修改这些 UI 文件，避免与并行 UI 工作冲突）
+## UI接入（已在754e92e完成）
+
+帖子及归档页已将新受理提交接入 `autoExtraction: SHT115ExtractionPolicy.enabled()`，并在受理后调用 `ExtractBackground.kick()`，不等待队列、下载或解压完成，不自动播放。旧的目录压缩包扫描写入及等待播放循环已移除。设置已添加独立开关；账户/CID配置保存先停止旧调度再恢复当前队列。任务列表限定当前账户/父目录，详情展示队列状态、尝试次数及持久取消。
+
+以下保留接入合同以便审阅：
 
 1. 新提交的调用改为：
 
@@ -34,6 +38,14 @@ ExtractBackground.kick() // 不 await；受理即可结束按钮流程
 自动回收还要求本次队列授权ID、accepted extractID、释放100%、fresh目标路径、fresh新输出唯一ID且不在解压前baseline、每个输出清单SHA1与fresh文件SHA1+大小匹配，以及fresh准确源ID/pickcode/SHA1/大小/账户/目录再次相符。只要完整性字段缺失，即使解压受理也永久停在保留状态，不自动删。
 
 每轮最多4条到期任务；每项最多12次、24小时、间隔至少5分钟；无sleep轮询。取消持久化；重启只恢复记录和读校验，submitting→unknown，unknown写入不重放。
+
+## 已联网核对的参考（收尾2026-10-11）
+
+- https://github.com/ChenyangGao/p115client/blob/main/p115client/client.py ：复用现成115公开客户端所描述的 `extract_push`（解析）、`extract_info`（清单）、POST/GET `add_extract_file`（释放及进度）和 `/rb/delete`（移回收站）契约；未引入通用框架，未使用永久清空API。此为非官方客户端源码，不应称为115官方保证。
+- https://developer.apple.com/documentation/backgroundtasks/bgprocessingtask ：系统可中断后台处理，应安装expirationHandler；设备活动亦可导致终止。
+- https://developer.apple.com/documentation/backgroundtasks/bgtaskrequest/earliestbegindate ：最早时间不是保证执行时间；5分钟是本地重试下限，不是后台定时承诺。
+
+本轮仅HTTPS公开源码/文档读取、受控URLProtocol回归和GitHub CI，不执行真实115写入、删除或用户既有资源清理。没有真机后台时机、真实云解压或回收验收；真实接口缺少file_id或SHA1时，应以保留原包为正确行为。
 
 ## mock/CI
 
