@@ -2,44 +2,66 @@ import SwiftUI
 import BackgroundTasks
 import UIKit
 
-/// Asks iOS for extra time and a processing task so cloud extraction can continue
-/// after the app leaves the foreground. The system may still suspend or kill it.
-enum ExtractBackground {
+/// iOS best effort only; force quit/suspension never promises continued execution.
+@MainActor enum ExtractBackground {
     static let taskID = "app.sehuatang.ios.extract"
+    private static var foregroundWork: Task<Void, Never>?
 
     static func register() {
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: taskID, using: nil) { task in
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: taskID, using: .main) { task in
             guard let processing = task as? BGProcessingTask else { task.setTaskCompleted(success: false); return }
-            handle(processing)
+            Task { @MainActor in handle(processing) }
         }
     }
 
     static func schedule() {
-        let request = BGProcessingTaskRequest(identifier: taskID)
-        request.requiresNetworkConnectivity = true
-        request.requiresExternalPower = false
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 60)
-        try? BGTaskScheduler.shared.submit(request)
+        guard SHT115ExtractionPolicy.enabled() else {
+            BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: taskID)
+            return
+        }
+        Task { @MainActor in
+            let settings = SHT115Settings.load()
+            guard let service = try? Pan115UIService.get(),
+                  await service.hasPendingExtraction(settings: settings) else { return }
+            let request = BGProcessingTaskRequest(identifier: taskID)
+            request.requiresNetworkConnectivity = true
+            request.requiresExternalPower = false
+            request.earliestBeginDate = Date(timeIntervalSinceNow: 300)
+            try? BGTaskScheduler.shared.submit(request)
+        }
+    }
+
+    /// Detached from the submit button: submit acceptance does not await this work.
+    static func kick() {
+        guard SHT115ExtractionPolicy.enabled(), foregroundWork == nil else { return }
+        foregroundWork = Task { @MainActor in
+            defer { foregroundWork = nil; BackgroundRun.end(); schedule() }
+            let settings = SHT115Settings.load()
+            guard let service = try? Pan115UIService.get() else { return }
+            try? await service.runExtractionQueue(settings: settings)
+        }
+    }
+
+    /// Call when account, parent CID, or automation setting changes.
+    static func stop() {
+        foregroundWork?.cancel()
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: taskID)
+        BackgroundRun.end()
     }
 
     private static func handle(_ task: BGProcessingTask) {
-        schedule()
         let work = Task { @MainActor in
-            let settings = SHT115Settings.load()
-            guard (try? settings.validate()) != nil, let service = try? Pan115UIService.get() else { return }
-            let records = await service.resources()
-            for resource in records.prefix(8) {
-                guard let listing = try? await service.listVideos(resourceID: resource.id, settings: settings, background: true),
-                      !listing.truncated else { continue }
-                for archive in listing.archives.prefix(4) {
-                    _ = try? await service.requestExtraction(archive: archive, resourceID: resource.id, settings: settings, confirmed: true, background: true)
-                }
-            }
+            guard SHT115ExtractionPolicy.enabled(), let service = try? Pan115UIService.get() else { return false }
+            do {
+                try await service.runExtractionQueue(settings: SHT115Settings.load())
+                return !Task.isCancelled
+            } catch { return false }
         }
         task.expirationHandler = { work.cancel() }
-        Task {
-            _ = await work.result
-            task.setTaskCompleted(success: true)
+        Task { @MainActor in
+            let success = await work.value
+            task.setTaskCompleted(success: success)
+            schedule()
         }
     }
 }
@@ -49,17 +71,20 @@ struct BackgroundKeepAlive: View {
     var body: some View {
         Color.clear.frame(width: 0, height: 0)
             .onChange(of: scenePhase) { phase in
-                if phase != .active { ExtractBackground.schedule(); BackgroundRun.begin() }
-                else { BackgroundRun.end() }
+                if phase == .background {
+                    if SHT115ExtractionPolicy.enabled() { BackgroundRun.begin(); ExtractBackground.kick(); ExtractBackground.schedule() }
+                } else if phase == .active {
+                    BackgroundRun.end(); ExtractBackground.kick()
+                }
             }
     }
 }
 
-enum BackgroundRun {
+@MainActor enum BackgroundRun {
     private static var id: UIBackgroundTaskIdentifier = .invalid
     static func begin() {
         guard id == .invalid else { return }
-        id = UIApplication.shared.beginBackgroundTask(withName: "115-extract") { end() }
+        id = UIApplication.shared.beginBackgroundTask(withName: "115-extract") { Task { @MainActor in ExtractBackground.stop() } }
     }
     static func end() {
         guard id != .invalid else { return }

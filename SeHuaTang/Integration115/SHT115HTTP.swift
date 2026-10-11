@@ -83,6 +83,7 @@ struct SHT115Entry {
     let isDirectory: Bool
     let pickCode: String
     let size: Int64
+    var sha1: String? = nil
 }
 struct SHT115Page {
     let entries: [SHT115Entry]
@@ -143,7 +144,7 @@ extension SHT115HTTP {
             // cannot disprove a target directory, but they also must not abort a
             // complete ID-verified listing. Empty names remain non-matching.
             return SHT115Entry(id: id, name: name, isDirectory: directory,
-                pickCode: Self.string(item["pc"] ?? item["pick_code"] ?? item["pickcode"]), size: Int64(Self.string(item["s"] ?? item["file_size"] ?? item["size"])) ?? 0)
+                pickCode: Self.string(item["pc"] ?? item["pick_code"] ?? item["pickcode"]), size: Int64(Self.string(item["s"] ?? item["file_size"] ?? item["size"])) ?? 0, sha1: Self.string(item["sha"] ?? item["sha1"]))
         }
     }
     static func verifiedPath(_ path: [[String: Any]], cid: String, parent: String?) throws {

@@ -48,7 +48,9 @@ final class ExtractionMockProtocol: URLProtocol, @unchecked Sendable {
         let link = "ed2k://|file|fixture.zip|42|" + hash.uppercased() + "|/"
         precondition(SHT115Service.infoHash(link) == hash)
         let task = SHT115Task(id: UUID(), urls: [link], state: .accepted, progress: [], updatedAt: Date())
-        let resource = SHT115Resource(id: "fixture", account: settings.account, tid: "3802769", directoryName: "fixture", parentCID: "10", directoryCID: "20", directoryWritePending: false, tasks: [task])
+        var resource = SHT115Resource(id: "fixture", account: settings.account, tid: "3802769", directoryName: "fixture", parentCID: "10", directoryCID: "20", directoryWritePending: false, tasks: [task])
+        resource.extractionQueue = [SHT115QueueItem(id: UUID(), taskID: task.id, createdAt: Date(), priorIDs: [], state: .processing,
+            source: SHT115Archive(id: "21", name: "fixture.zip", directoryCID: "20", pickCode: "archivePC"))]
         try JSONEncoder().encode([resource]).write(to: store)
         var writes = [String](), reads = [String]()
         ExtractionMockProtocol.handler = { request in
@@ -69,11 +71,11 @@ final class ExtractionMockProtocol: URLProtocol, @unchecked Sendable {
             }
             if path == "/files/extract_info" {
                 let name = unsafe ? "../escape" : "movie.mp4"
-                return "{\"state\":true,\"data\":{\"count\":2,\"list\":[{\"file_name\":\"" + name + "\",\"size\":42,\"ico\":\"mp4\"},{\"file_name\":\"folder\",\"size\":0}]}}"
+                return "{\"state\":true,\"data\":{\"count\":1,\"list\":[{\"file_name\":\"" + name + "\",\"size\":42,\"ico\":\"mp4\"}]}}"
             }
             precondition(path == "/files/add_extract_file", "Unexpected mock endpoint: " + path)
             let body = form(request)
-            precondition(body.contains("to_pid=20") && body.contains("extract_file%5B%5D=movie.mp4") && body.contains("extract_dir%5B%5D=folder"))
+            precondition(body.contains("to_pid=20") && body.contains("extract_file%5B%5D=movie.mp4") && !body.contains("extract_dir"))
             precondition(!body.contains("delete") && !body.contains("password"))
             if unknown { throw URLError(.timedOut) }
             return "{\"state\":true}"

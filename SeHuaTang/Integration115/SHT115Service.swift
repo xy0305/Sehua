@@ -4,6 +4,7 @@ public actor SHT115Service {
     private let http: SHT115HTTP
     private let storeURL: URL
     private var records: [SHT115Resource]
+    private var queueRunning = false
     private var operating = false
     private var interactiveWaiters: [CheckedContinuation<Void, Never>] = []
     private var backgroundWaiters: [CheckedContinuation<Void, Never>] = []
@@ -315,7 +316,7 @@ public actor SHT115Service {
         if ["0", "false"].contains(SHT115HTTP.string(obj["state"]).lowercased()) { return .rejected }
         return .unknown
     }
-    public func submit(urls: [String], resourceID: String, settings: SHT115Settings) async throws -> SHT115Resource {
+    public func submit(urls: [String], resourceID: String, settings: SHT115Settings, autoExtraction: Bool = false) async throws -> SHT115Resource {
         try await begin(); defer { end() }
         let i = try index(resourceID, settings)
         let links = Array(Set(urls.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })).sorted()
@@ -338,6 +339,11 @@ public actor SHT115Service {
         }
         do { try await http.verify(cid: cid, parent: records[i].parentCID, settings: settings) }
         catch { throw SHT115Diagnostic(stage: "verify-before-submit", outcome: "未提交：目标路径无法验证", code: "") }
+        // Capture provenance BEFORE offline POST. Failure disables automation, not push.
+        var priorIDs: [String]? = nil
+        if autoExtraction, links.count == 1 {
+            priorIDs = try? await http.allEntries(cid: cid, settings: settings).map(\.id)
+        }
         let signature: [(String, String)]
         do { signature = try await sign(settings) }
         catch let error as SHT115Diagnostic { throw error }
@@ -370,6 +376,11 @@ public actor SHT115Service {
         }
         if records[i].tasks[t].state == .unknown { throw SHT115Diagnostic(stage: "submit", outcome: "结果未知：响应未确认完整受理", code: apiCode) }
         if records[i].tasks[t].state == .rejected { throw SHT115Diagnostic(stage: "submit", outcome: "API明确拒绝", code: apiCode) }
+        if let priorIDs, records[i].tasks[t].state == .accepted {
+            if records[i].extractionQueue == nil { records[i].extractionQueue = [] }
+            records[i].extractionQueue?.append(SHT115QueueItem(id: UUID(), taskID: records[i].tasks[t].id, createdAt: Date(), priorIDs: priorIDs))
+            try save()
+        }
         return records[i]
     }
     public func listVideos(resourceID: String, settings: SHT115Settings, maxDepth: Int = 3, background: Bool = false) async throws -> SHT115VideoListing {
@@ -402,7 +413,7 @@ public actor SHT115Service {
                     let ext = (entry.name as NSString).pathExtension.lowercased()
                     if videoExtensions.contains(ext), !entry.pickCode.isEmpty {
                         videos.append(SHT115Video(id: entry.id, resourceID: resourceID, directoryCID: cid, name: entry.name, pickCode: entry.pickCode, size: entry.size))
-                    } else if archiveExtensions.contains(ext) { archives.append(SHT115Archive(id: entry.id, name: entry.name, directoryCID: cid, pickCode: entry.pickCode)) }
+                    } else if archiveExtensions.contains(ext) { archives.append(SHT115Archive(id: entry.id, name: entry.name, directoryCID: cid, pickCode: entry.pickCode, size: entry.size, sha1: entry.sha1)) }
                 }
             }
         }
@@ -473,7 +484,7 @@ public actor SHT115Service {
                 }) {
                     targetCount += 1
                     if Int(SHT115HTTP.string(task["status"])) == 2 { completedCount += 1 }
-                    matches.append(SHT115Progress(url: link, infoHash: SHT115HTTP.string(task["info_hash"] ?? task["hash"]), status: Int(SHT115HTTP.string(task["status"])) ?? -999, percent: Double(SHT115HTTP.string(task["percentDone"] ?? task["percent"])) ?? 0))
+                    matches.append(SHT115Progress(url: link, infoHash: SHT115HTTP.string(task["info_hash"] ?? task["hash"]), status: Int(SHT115HTTP.string(task["status"])) ?? -999, percent: Double(SHT115HTTP.string(task["percentDone"] ?? task["percent"])) ?? 0, fileID: SHT115HTTP.string(task["file_id"] ?? task["fid"])))
                 } else if remote.contains(where: {
                     SHT115HTTP.string($0["wp_path_id"]) != target &&
                     (SHT115HTTP.string($0["url"] ?? $0["url_string"]) == link || (!hash.isEmpty && SHT115HTTP.string($0["info_hash"] ?? $0["hash"]).lowercased() == hash))
@@ -521,12 +532,17 @@ public actor SHT115Service {
         if records[i].extractions?[archive.id] == .accepted {
             return try await cleanupExtraction(index: i, archive: archive, settings: settings)
         }
+        guard records[i].parentCID == settings.parentCID,
+              records[i].extractionQueue?.contains(where: { $0.state == .processing && $0.source?.id == archive.id }) == true else {
+            return SHT115ExtractionResult(state: .unsupported, message: "旧包或未明确登记的离线产物不会自动解压/回收")
+        }
         let listing = try await scan(resourceID: resourceID, settings: settings, maxDepth: 3)
         guard !listing.truncated, let current = listing.archives.first(where: { $0.id == archive.id && $0.directoryCID == archive.directoryCID }),
+              current.name == archive.name, current.size == archive.size, current.sha1 == archive.sha1, current.pickCode == archive.pickCode,
               let pick = current.pickCode, !pick.isEmpty, pick.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) }) else { throw SHT115Error.unsafeListing }
         let key = archive.id
         var state = records[i].extractions?[key]
-        if let state, [.accepted, .unknown, .rejected, .passwordRequired].contains(state) {
+        if let state, [.accepted, .unknown, .rejected, .passwordRequired, .unsupported, .submitting].contains(state) {
             return SHT115ExtractionResult(state: state, message: "云解压状态：" + state.rawValue + "；不重复发送，不删除原包")
         }
         func persist(_ value: SHT115ExtractionState) throws {
@@ -535,6 +551,7 @@ public actor SHT115Service {
             try save()
         }
         if state == nil {
+            try Task.checkCancellation()
             try persist(.submitting)
             do {
                 let obj = try await http.json("https://webapi.115.com/files/push_extract", settings: settings, fields: [("pick_code", pick), ("secret", "")])
@@ -564,12 +581,19 @@ public actor SHT115Service {
             let name = SHT115HTTP.string(entry["file_name"] ?? entry["name"] ?? entry["n"])
             guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\\"), !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }), names.insert(name).inserted else { throw SHT115Error.unsafeListing }
             let directory = SHT115HTTP.string(entry["size"]) == "0" && SHT115HTTP.string(entry["ico"]).isEmpty
-            outputs.append(SHT115ExtractionOutput(name: name, directory: directory, size: Int64(SHT115HTTP.string(entry["size"])) ?? -1))
+            outputs.append(SHT115ExtractionOutput(name: name, directory: directory, size: Int64(SHT115HTTP.string(entry["size"])) ?? -1, sha1: SHT115HTTP.string(entry["sha1"] ?? entry["sha"])))
             fields.append((directory ? "extract_dir[]" : "extract_file[]", name))
         }
         // Revalidate destination immediately before the only extraction write.
         try await http.verify(cid: target, parent: records[i].parentCID, settings: settings)
         let before = try await http.allEntries(cid: target, settings: settings)
+        guard outputs.allSatisfy({ !$0.directory && $0.size > 0 && $0.size <= 1_073_741_824 }),
+              outputs.reduce(Int64(0), { $0 + $1.size }) <= 2_147_483_648,
+              !before.contains(where: { names.contains($0.name) }) else {
+            try persist(.unsupported)
+            return SHT115ExtractionResult(state: .unsupported, message: "仅支持无重名的平铺非空文件（单文件≤1GiB，总计≤2GiB）；保留原包")
+        }
+        try Task.checkCancellation()
         try persist(.submitting)
         do {
             let result = try await http.json("https://webapi.115.com/files/add_extract_file", settings: settings, fields: fields)
@@ -578,7 +602,7 @@ public actor SHT115Service {
                 let extractID = SHT115HTTP.string(data["extract_id"])
                 if SHT115Settings.isCID(extractID), extractID != "0" {
                     if records[i].extractionJobs == nil { records[i].extractionJobs = [:] }
-                    records[i].extractionJobs?[key] = SHT115ExtractionJob(extractID: extractID, source: current, targetCID: target, outputs: outputs, priorIDs: before.map(\.id), cleanup: .waiting)
+                    records[i].extractionJobs?[key] = SHT115ExtractionJob(extractID: extractID, source: current, targetCID: target, outputs: outputs, priorIDs: before.map(\.id), cleanup: .waiting, authorization: records[i].extractionQueue?.first(where: { $0.source?.id == current.id && $0.state == .processing })?.id)
                 }
                 try persist(.accepted)
             }
@@ -593,7 +617,12 @@ public actor SHT115Service {
         func result(_ message: String) -> SHT115ExtractionResult { SHT115ExtractionResult(state: .accepted, message: message) }
         guard var job = records[i].extractionJobs?[archive.id], job.source.id == archive.id,
               job.source.directoryCID == archive.directoryCID, job.source.name == archive.name,
-              job.source.pickCode == archive.pickCode, job.targetCID == records[i].directoryCID else {
+              job.source.pickCode == archive.pickCode, job.targetCID == records[i].directoryCID,
+              records[i].parentCID == settings.parentCID,
+              let authorization = job.authorization,
+              records[i].extractionQueue?.contains(where: { $0.id == authorization && $0.source?.id == archive.id && $0.state == .processing }) == true,
+              let sourceSize = job.source.size, sourceSize > 0,
+              SHT115ExtractionPolicy.sha1(job.source.sha1) else {
             return result("已接受；缺少可验证任务记录，保留原包")
         }
         guard job.cleanup == .waiting else { return result("原包清理：" + job.cleanup.rawValue + "；不自动重发删除") }
@@ -607,6 +636,10 @@ public actor SHT115Service {
         let targetEntries = try await http.allEntries(cid: job.targetCID, settings: settings)
         guard !job.outputs.isEmpty else { return result("输出清单为空，保留原包") }
         for output in job.outputs {
+            // A nonempty folder or equal byte count is NOT archive integrity evidence.
+            guard !output.directory, SHT115ExtractionPolicy.sha1(output.sha1) else {
+                return result("输出缺少完整性哈希，保留原包")
+            }
             let matches = targetEntries.filter { $0.name == output.name && $0.isDirectory == output.directory }
             guard matches.count == 1, let entry = matches.first, entry.id != job.source.id,
                   !job.priorIDs.contains(entry.id) else { return result("新输出无法唯一验证，保留原包") }
@@ -615,17 +648,18 @@ public actor SHT115Service {
                     return result("输出目录尚未验证到文件，保留原包")
                 }
             } else {
-                guard output.size > 0, entry.size == output.size else { return result("输出大小无法验证，保留原包") }
+                guard output.size > 0, entry.size == output.size, entry.sha1?.lowercased() == output.sha1?.lowercased() else { return result("输出大小无法验证，保留原包") }
             }
         }
         // Refresh exact source parent and identity immediately before deletion; no wildcard, CID or batch.
         let listing = try await scan(resourceID: records[i].id, settings: settings, maxDepth: 3)
         guard !listing.truncated, listing.archives.contains(where: {
-            $0.id == job.source.id && $0.directoryCID == job.source.directoryCID && $0.name == job.source.name && $0.pickCode == job.source.pickCode
+            $0.id == job.source.id && $0.directoryCID == job.source.directoryCID && $0.name == job.source.name && $0.pickCode == job.source.pickCode && $0.size == sourceSize && $0.sha1?.lowercased() == job.source.sha1?.lowercased()
         }), SHT115Settings.isCID(job.source.id), job.source.id != "0",
              job.source.id != job.targetCID, job.source.id != job.source.directoryCID else {
             return result("原包身份或路径已变化，保留原包")
         }
+        try Task.checkCancellation()
         job.cleanup = .submitting
         records[i].extractionJobs?[archive.id] = job
         try save() // durable intent BEFORE POST; on crash/timeout this can never be replayed
@@ -659,4 +693,106 @@ public actor SHT115Service {
         }
         return foundFile
     }
+    /// Explicit cancellation is durable; it never sends a remote write.
+    public func cancelExtractionQueue(resourceID: String, queueID: UUID, settings: SHT115Settings) async throws {
+        try await begin(); defer { end() }
+        let i = try index(resourceID, settings)
+        guard let q = records[i].extractionQueue?.firstIndex(where: { $0.id == queueID }) else { return }
+        records[i].extractionQueue?[q].state = .cancelled
+        records[i].extractionQueue?[q].note = "已取消后续自动处理；已受理的云端任务不会撤回"
+        try save()
+    }
+
+    public func hasPendingExtraction(settings: SHT115Settings) -> Bool {
+        records.contains { resource in
+            resource.account == settings.account && resource.parentCID == settings.parentCID &&
+            (resource.extractionQueue ?? []).contains { [.waiting, .processing].contains($0.state) }
+        }
+    }
+
+    /// One bounded pass; no sleeps, loops over progress, global scan, or old-task migration.
+    /// Every resumed operation starts with fresh read proof. Unknown writes stay locked.
+    public func runExtractionQueue(settings: SHT115Settings, now: Date = Date()) async throws {
+        guard !queueRunning else { return }
+        queueRunning = true; defer { queueRunning = false }
+        try settings.validate()
+        let candidates = records.filter { $0.account == settings.account && $0.parentCID == settings.parentCID }
+            .flatMap { resource in (resource.extractionQueue ?? []).map { (resource.id, $0.id) } }
+        for (resourceID, queueID) in candidates.prefix(4) {
+            try Task.checkCancellation()
+            let i = try index(resourceID, settings)
+            guard let q = records[i].extractionQueue?.firstIndex(where: { $0.id == queueID }),
+                  var item = records[i].extractionQueue?[q], [.waiting, .processing].contains(item.state),
+                  item.nextAttempt <= now else { continue }
+            func update(_ state: SHT115QueueState, _ note: String) throws {
+                // Cancellation during a read must not be undone by a late response.
+                guard records[i].extractionQueue?[q].state != .cancelled else { return }
+                records[i].extractionQueue?[q].state = state
+                records[i].extractionQueue?[q].note = note
+                try save()
+            }
+            if item.attempts >= 12 || now.timeIntervalSince(item.createdAt) > 86_400 {
+                try update(.exhausted, "已达12次/24小时处理预算；保留原包，不无限轮询")
+                continue
+            }
+            item.attempts += 1; item.nextAttempt = now.addingTimeInterval(300)
+            records[i].extractionQueue?[q] = item
+            try save()
+            do {
+                guard let task = records[i].tasks.first(where: { $0.id == item.taskID }), task.state == .accepted,
+                      task.urls.count == 1, task.urls[0].lowercased().hasPrefix("ed2k://|file|") else {
+                    try update(.retained, "首版仅自动处理本App新提交的单个ed2k压缩包；其他任务保留")
+                    continue
+                }
+                let parts = task.urls[0].components(separatedBy: "|")
+                guard parts.count >= 6, let size = Int64(parts[3]), size > 0, size <= 1_073_741_824,
+                      ["zip", "7z", "rar"].contains((parts[2] as NSString).pathExtension.lowercased()) else {
+                    try update(.retained, "只支持≤1GiB的zip/7z/rar单包；保留其他资源")
+                    continue
+                }
+                let inspection = try await inspect(resourceID: resourceID, settings: settings, background: true, includeFiles: false)
+                guard !inspection.taskPagesTruncated,
+                      let freshTask = inspection.resource.tasks.first(where: { $0.id == item.taskID }),
+                      freshTask.progress.count == 1, let progress = freshTask.progress.first,
+                      progress.status == 2, progress.percent == 100,
+                      let fid = progress.fileID, SHT115Settings.isCID(fid), fid != "0",
+                      !item.priorIDs.contains(fid) else {
+                    try update(.waiting, "离线完成/文件ID/来源证据尚不完整；只读等待，未解压未删除")
+                    continue
+                }
+                // Exact target only. No recursive discovery and no unrelated archive candidates.
+                guard let target = inspection.resource.directoryCID else { throw SHT115Error.invalidInput }
+                let entries = try await http.allEntries(cid: target, settings: settings)
+                guard let entry = entries.first(where: { $0.id == fid && !$0.isDirectory }),
+                      entry.name == parts[2], entry.size == size, SHT115ExtractionPolicy.sha1(entry.sha1),
+                      !entry.pickCode.isEmpty else {
+                    try update(.retained, "源文件ID/名称/大小/哈希不能证明同一新产物；保留")
+                    continue
+                }
+                let archive = SHT115Archive(id: entry.id, name: entry.name, directoryCID: target,
+                    pickCode: entry.pickCode, size: entry.size, sha1: entry.sha1)
+                if let previous = item.source, previous.id != archive.id || previous.sha1 != archive.sha1 || previous.size != archive.size {
+                    try update(.retained, "已记录源身份发生变化；保留")
+                    continue
+                }
+                guard records[i].extractionQueue?[q].state != .cancelled else { continue }
+                records[i].extractionQueue?[q].source = archive
+                try update(.processing, "已验证离线新产物；云解压/完整性核验中")
+                let result = try await requestExtraction(archive: archive, resourceID: resourceID, settings: settings, confirmed: true, background: true)
+                if let job = records[i].extractionJobs?[archive.id], job.cleanup == .recycled {
+                    try update(.recycled, "已完整核验；仅此原包移入115回收站（可恢复）")
+                } else if [.unknown, .rejected, .passwordRequired, .unsupported].contains(result.state) {
+                    try update(.retained, "解压未获安全证明；保留原包，不重发未知写入")
+                } else if let job = records[i].extractionJobs?[archive.id], job.cleanup != .waiting {
+                    try update(.retained, "回收状态：" + job.cleanup.rawValue + "；不重发")
+                } else if let job = records[i].extractionJobs?[archive.id], job.outputs.contains(where: { $0.directory || !SHT115ExtractionPolicy.sha1($0.sha1) }) {
+                    try update(.retained, "输出缺少完整性哈希；解压后保留原包，不自动回收")
+                } else {
+                    try update(.processing, result.message)
+                }
+            } catch is CancellationError { throw CancellationError() }
+            catch { try update(.waiting, "本轮未完成核验；保留原包，未知写入不会重发") }
+        }
+    }
+
 }

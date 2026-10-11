@@ -36,8 +36,10 @@ final class SequenceProtocol: URLProtocol, @unchecked Sendable {
         let store = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: store) }
         let settings = SHT115Settings(cookie: "UID=123_A1; CID=fake; SEID=fake", parentCID: "10")
-        let a = SHT115Resource(id: "a", account: settings.account, tid: "1", directoryName: "A_tid-1", parentCID: "10", directoryCID: "20", directoryWritePending: false, tasks: [])
+        var a = SHT115Resource(id: "a", account: settings.account, tid: "1", directoryName: "A_tid-1", parentCID: "10", directoryCID: "20", directoryWritePending: false, tasks: [])
         let b = SHT115Resource(id: "b", account: settings.account, tid: "2", directoryName: "B_tid-2", parentCID: "10", directoryCID: "30", directoryWritePending: false, tasks: [])
+        a.extractionQueue = [SHT115QueueItem(id: UUID(), taskID: UUID(), createdAt: Date(), priorIDs: [], state: .processing,
+            source: SHT115Archive(id: "50", name: "a.zip", directoryCID: "20", pickCode: "pickA"))]
         try JSONEncoder().encode([a,b]).write(to: store)
         let service = try SHT115Service(storeURL: store, session: session)
         let lock = NSLock()

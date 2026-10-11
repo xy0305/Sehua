@@ -42,11 +42,13 @@ final class CleanupMock: URLProtocol, @unchecked Sendable {
         let store = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: store) }
         let settings = SHT115Settings(cookie: "UID=123_A1; CID=fake; SEID=fake", parentCID: "10")
-        let archive = SHT115Archive(id: "21", name: "fixture.zip", directoryCID: "20", pickCode: "archivePC")
+        let archive = SHT115Archive(id: "21", name: "fixture.zip", directoryCID: "20", pickCode: "archivePC", size: 42, sha1: String(repeating: "a", count: 40))
         var resource = SHT115Resource(id: "fixture", account: settings.account, tid: "1", directoryName: "fixture", parentCID: "10", directoryCID: "20", directoryWritePending: false, tasks: [])
+        let authorization = UUID()
+        resource.extractionQueue = [SHT115QueueItem(id: authorization, taskID: UUID(), createdAt: Date(), priorIDs: [], state: mode == "cancelled" ? .cancelled : .processing, source: archive)]
         resource.extractions = ["21": mode == "unknownExtraction" ? .unknown : .accepted]
         if mode != "legacy" {
-            resource.extractionJobs = ["21": SHT115ExtractionJob(extractID: "900", source: archive, targetCID: "20", outputs: [SHT115ExtractionOutput(name: "movie.mp4", directory: false, size: 42)], priorIDs: mode == "existing" ? ["21", "22"] : ["21"], cleanup: mode == "crash" ? .submitting : .waiting)]
+            resource.extractionJobs = ["21": SHT115ExtractionJob(extractID: "900", source: archive, targetCID: "20", outputs: [SHT115ExtractionOutput(name: "movie.mp4", directory: mode == "directoryOutput", size: 42, sha1: mode == "noOutputHash" ? nil : String(repeating: "b", count: 40))], priorIDs: mode == "existing" ? ["21", "22"] : ["21"], cleanup: mode == "crash" ? .submitting : .waiting, authorization: mode == "noAuthorization" ? nil : authorization)]
         }
         try JSONEncoder().encode([resource]).write(to: store)
         var deletions = 0
@@ -69,9 +71,9 @@ final class CleanupMock: URLProtocol, @unchecked Sendable {
             }
             precondition(["/files", "/natsort/files.php", "/android/2.0/ufile/files"].contains(url.path) && request.httpMethod != "POST")
             let source = mode == "changedSource" ? "otherPC" : "archivePC"
-            let output = mode == "missing" ? "" : ",{\"fid\":22,\"n\":\"movie.mp4\",\"pc\":\"moviePC\",\"s\":" + (mode == "sizeMismatch" ? "41" : "42") + "}"
+            let output = mode == "missing" ? "" : ",{\"fid\":22,\"n\":\"movie.mp4\",\"pc\":\"moviePC\",\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"s\":" + (mode == "sizeMismatch" ? "41" : "42") + "}"
             let count = mode == "missing" ? 1 : 2
-            return "{\"state\":true,\"count\":" + String(count) + ",\"path\":[{\"cid\":0},{\"cid\":10},{\"cid\":20}],\"data\":[{\"fid\":21,\"n\":\"fixture.zip\",\"pc\":\"" + source + "\",\"s\":42}" + output + "]}"
+            return "{\"state\":true,\"count\":" + String(count) + ",\"path\":[{\"cid\":0},{\"cid\":10},{\"cid\":20}],\"data\":[{\"fid\":21,\"n\":\"fixture.zip\",\"pc\":\"" + source + "\",\"sha\":\"" + String(repeating: mode == "sourceHashMismatch" ? "c" : "a", count: 40) + "\",\"s\":42}" + output + "]}"
         }
         let service = try SHT115Service(storeURL: store, session: session)
         _ = try await service.requestExtraction(archive: archive, resourceID: "fixture", settings: settings, confirmed: true)
@@ -85,6 +87,6 @@ final class CleanupMock: URLProtocol, @unchecked Sendable {
         print("PASS cleanup: " + mode)
     }
     static func main() async throws {
-        for mode in ["complete", "pending", "failed", "unknownProgress", "unknownExtraction", "missing", "existing", "sizeMismatch", "changedSource", "legacy", "timeout", "rejected", "unknownDelete", "crash"] { try await run(mode) }
+        for mode in ["complete", "pending", "failed", "unknownProgress", "unknownExtraction", "missing", "existing", "sizeMismatch", "changedSource", "legacy", "timeout", "rejected", "unknownDelete", "crash", "cancelled", "noAuthorization", "noOutputHash", "directoryOutput", "sourceHashMismatch"] { try await run(mode) }
     }
 }

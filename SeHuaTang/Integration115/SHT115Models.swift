@@ -87,6 +87,7 @@ public struct SHT115Progress: Codable {
     public let infoHash: String
     public let status: Int
     public let percent: Double
+    public var fileID: String? = nil
 }
 public struct SHT115Resource: Codable, Identifiable {
     public let id: String
@@ -101,6 +102,7 @@ public struct SHT115Resource: Codable, Identifiable {
     public var directoryJournal: [SHT115DirectoryAttempt]? = nil
     public var extractions: [String: SHT115ExtractionState]? = nil
     public var extractionJobs: [String: SHT115ExtractionJob]? = nil
+    public var extractionQueue: [SHT115QueueItem]? = nil
 }
 public struct SHT115Video: Codable, Identifiable {
     public let id: String
@@ -120,6 +122,8 @@ public struct SHT115Archive: Codable, Identifiable {
     public let name: String
     public let directoryCID: String
     public var pickCode: String? = nil
+    public var size: Int64? = nil
+    public var sha1: String? = nil
 }
 public struct SHT115VideoListing {
     public let videos: [SHT115Video]
@@ -145,6 +149,7 @@ public struct SHT115ExtractionOutput: Codable {
     public let name: String
     public let directory: Bool
     public let size: Int64
+    public var sha1: String? = nil
 }
 public struct SHT115ExtractionJob: Codable {
     public let extractID: String
@@ -153,6 +158,7 @@ public struct SHT115ExtractionJob: Codable {
     public let outputs: [SHT115ExtractionOutput]
     public let priorIDs: [String]
     public var cleanup: SHT115CleanupState
+    public var authorization: UUID? = nil
 }
 public enum SHT115CleanupState: String, Codable { case waiting, submitting, recycled, rejected, unknown }
 
@@ -197,5 +203,31 @@ extension SHT115Resource {
     }
     public var directoryStatusText: String {
         directoryCreatedAwaitingPath ? "目录已创建，待路径核验（不重建）" : (directoryWritePending ? "目录写入结果未知，保留锁（不重发）" : (directoryCID == nil ? "目录尚未确认创建" : "目录路径已核验"))
+    }
+}
+
+/// Only newly accepted app submissions opt in. No migration from old resources.
+public enum SHT115QueueState: String, Codable {
+    case waiting, processing, retained, recycled, cancelled, exhausted
+}
+public struct SHT115QueueItem: Codable, Identifiable {
+    public let id: UUID
+    public let taskID: UUID
+    public let createdAt: Date
+    public let priorIDs: [String]
+    public var state: SHT115QueueState = .waiting
+    public var attempts: Int = 0
+    public var nextAttempt: Date = .distantPast
+    public var source: SHT115Archive? = nil
+    public var note: String = "等待离线完成身份核验"
+}
+public enum SHT115ExtractionPolicy {
+    public static let enabledKey = "avdb.115.backgroundExtraction"
+    public static func enabled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: enabledKey) == nil || defaults.bool(forKey: enabledKey)
+    }
+    public static func sha1(_ value: String?) -> Bool {
+        guard let value else { return false }
+        return value.count == 40 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) || (65...70).contains($0) }
     }
 }
