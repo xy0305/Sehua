@@ -378,7 +378,8 @@ public actor SHT115Service {
         if records[i].tasks[t].state == .rejected { throw SHT115Diagnostic(stage: "submit", outcome: "API明确拒绝", code: apiCode) }
         if let priorIDs, records[i].tasks[t].state == .accepted {
             if records[i].extractionQueue == nil { records[i].extractionQueue = [] }
-            records[i].extractionQueue?.append(SHT115QueueItem(id: UUID(), taskID: records[i].tasks[t].id, createdAt: Date(), priorIDs: priorIDs))
+            let queueItem = SHT115QueueItem(id: UUID(), taskID: records[i].tasks[t].id, createdAt: Date(), priorIDs: priorIDs)
+            records[i].extractionQueue?.append(queueItem)
             try save()
         }
         return records[i]

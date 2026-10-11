@@ -40,6 +40,11 @@ jobs:
           sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
 
+      - name: Bounded extraction queue and source provenance regression
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/QueueFixtures.swift -o /tmp/queue-fixtures
+          /tmp/queue-fixtures
+
       - name: Read-only per-link task progress regression
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/ProgressFixtures.swift -o /tmp/progress-fixtures
@@ -139,11 +144,6 @@ jobs:
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/SequenceFixtures.swift -o /tmp/sequence-fixtures
           /tmp/sequence-fixtures
-
-      - name: Bounded extraction queue and source provenance regression
-        run: |
-          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/QueueFixtures.swift -o /tmp/queue-fixtures
-          /tmp/queue-fixtures
 
       - name: Guarded archive recycle mock fixtures
         run: |
