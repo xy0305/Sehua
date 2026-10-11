@@ -773,6 +773,7 @@ public actor SHT115Service {
                       let freshTask = inspection.resource.tasks.first(where: { $0.id == item.taskID }),
                       freshTask.progress.count == 1, let progress = freshTask.progress.first,
                       progress.status == 2, progress.percent == 100,
+                      progress.infoHash.lowercased() == Self.infoHash(task.urls[0]),
                       let fid = progress.fileID, SHT115Settings.isCID(fid), fid != "0",
                       !item.priorIDs.contains(fid) else {
                     try update(.waiting, "离线完成/文件ID/来源证据尚不完整；只读等待，未解压未删除")
