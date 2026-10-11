@@ -29,7 +29,7 @@ ExtractBackground.kick() // 不 await；受理即可结束按钮流程
 
 ## 首版保守支持范围
 
-只对本 App 新受理且 opt-in 的单链接 ed2k zip/7z/rar，源≤1GiB；fresh任务必须同父目标目录 status=2、percent=100、唯一匹配且提供 file_id；ID必须不在提交前baseline中；fresh源ID/目录/名称/大小/pickcode/SHA1全相符。输出仅平铺非空文件（单项≤1GiB，总计≤2GiB，<999项），清单游标明确终止。历史 accepted/unknown 不迁移；magnet、多链接、子目录、加密、超限不冒险。
+只对本 App 新受理且 opt-in 的单链接 ed2k zip/7z/rar，源≤1GiB；提交前目标目录须在既有路径首屏中完整返回（≤100项、总数明确），否则不登记自动任务；不新增前台分页等待。后台只读目标直属目录，最多2000项、不递归扫描。fresh任务必须同父目标目录 status=2、percent=100、唯一匹配且提供 file_id；ID必须不在提交前baseline中；fresh源ID/目录/名称/大小/pickcode/SHA1全相符。输出仅平铺非空文件（单项≤1GiB，总计≤2GiB，<999项），清单游标明确终止。历史 accepted/unknown 不迁移；magnet、多链接、子目录、加密、超限不冒险。
 
 自动回收还要求本次队列授权ID、accepted extractID、释放100%、fresh目标路径、fresh新输出唯一ID且不在解压前baseline、每个输出清单SHA1与fresh文件SHA1+大小匹配，以及fresh准确源ID/pickcode/SHA1/大小/账户/目录再次相符。只要完整性字段缺失，即使解压受理也永久停在保留状态，不自动删。
 

@@ -167,7 +167,7 @@ extension SHT115HTTP {
     }
     /// Full bounded enumeration is the only absence proof; /files search_value
     /// is not a search contract and may silently return an ordinary first page.
-    func allEntries(cid: String, settings: SHT115Settings, firstPage: SHT115Page? = nil) async throws -> [SHT115Entry] {
+    func allEntries(cid: String, settings: SHT115Settings, firstPage: SHT115Page? = nil, maximumEntries: Int = 50_000) async throws -> [SHT115Entry] {
         var entries: [SHT115Entry] = [], seen = Set<String>()
         var initial: SHT115Page?
         for index in 0..<500 {
@@ -183,11 +183,12 @@ extension SHT115HTTP {
                 let old = initial.path.map { Self.string($0["cid"] ?? $0["category_id"] ?? $0["folder_id"]) }
                 guard ids == old else { throw Self.listingFailure("path", "分页路径变化") }
             } else { initial = current }
-            if let total = current.total, total > 50_000 { throw Self.listingFailure("cap", "总数超过500页只读上限") }
+            if let total = current.total, total > min(50_000, maximumEntries) { throw Self.listingFailure("cap", "总数超过本次只读预算") }
             guard current.entries.count <= 100 else { throw Self.listingFailure("list", "返回超过请求页长") }
             let ids = current.entries.map { ($0.isDirectory ? "d" : "f") + $0.id }
             guard Set(ids).count == ids.count, ids.allSatisfy({ !seen.contains($0) }) else { throw Self.listingFailure("duplicate", "分页条目重复") }
             seen.formUnion(ids); entries += current.entries
+            guard entries.count <= min(50_000, maximumEntries) else { throw Self.listingFailure("cap", "累计条目超过本次只读预算") }
             if let total = current.total {
                 guard total >= 0, entries.count <= total else { throw Self.listingFailure("count", "累计条目与总数冲突") }
                 if entries.count == total { return entries }

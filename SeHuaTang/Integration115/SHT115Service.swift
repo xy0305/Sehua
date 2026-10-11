@@ -337,12 +337,14 @@ public actor SHT115Service {
             if records[i].tasks.contains(where: { ($0.state == .unknown || $0.state == .submitting) && !$0.urls.filter(links.contains).isEmpty }) { throw SHT115Diagnostic(stage: "offline-reconcile", outcome: "历史离线任务待核验：unknown/submitting命中本次链接；保留任务锁，本次未重发", code: "") }
             throw SHT115Error.alreadySubmitted
         }
-        do { try await http.verify(cid: cid, parent: records[i].parentCID, settings: settings) }
+        let submissionPage: SHT115Page
+        do { submissionPage = try await http.verifiedPage(cid: cid, parent: records[i].parentCID, settings: settings) }
         catch { throw SHT115Diagnostic(stage: "verify-before-submit", outcome: "未提交：目标路径无法验证", code: "") }
-        // Capture provenance BEFORE offline POST. Failure disables automation, not push.
+        // Reuse the existing path read; never add foreground pagination to push.
+        // Larger/unknown-count directories are deliberately not enrolled.
         var priorIDs: [String]? = nil
-        if autoExtraction, links.count == 1 {
-            priorIDs = try? await http.allEntries(cid: cid, settings: settings).map(\.id)
+        if autoExtraction, links.count == 1, submissionPage.total == submissionPage.entries.count {
+            priorIDs = submissionPage.entries.map(\.id)
         }
         let signature: [(String, String)]
         do { signature = try await sign(settings) }
@@ -538,9 +540,12 @@ public actor SHT115Service {
               records[i].extractionQueue?.contains(where: { $0.state == .processing && $0.source?.id == archive.id }) == true else {
             return SHT115ExtractionResult(state: .unsupported, message: "旧包或未明确登记的离线产物不会自动解压/回收")
         }
-        let listing = try await scan(resourceID: resourceID, settings: settings, maxDepth: 3)
-        guard !listing.truncated, let current = listing.archives.first(where: { $0.id == archive.id && $0.directoryCID == archive.directoryCID }),
-              current.name == archive.name, current.size == archive.size, current.sha1 == archive.sha1, current.pickCode == archive.pickCode,
+        guard archive.directoryCID == target else { throw SHT115Error.unsafeListing }
+        let sourcePage = try await http.verifiedPage(cid: target, parent: records[i].parentCID, settings: settings)
+        let sourceEntries = try await http.allEntries(cid: target, settings: settings, firstPage: sourcePage, maximumEntries: 2_000)
+        guard let source = sourceEntries.first(where: { $0.id == archive.id && !$0.isDirectory }) else { throw SHT115Error.unsafeListing }
+        let current = SHT115Archive(id: source.id, name: source.name, directoryCID: target, pickCode: source.pickCode, size: source.size, sha1: source.sha1)
+        guard current.name == archive.name, current.size == archive.size, current.sha1 == archive.sha1, current.pickCode == archive.pickCode,
               let pick = current.pickCode, !pick.isEmpty, pick.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) }) else { throw SHT115Error.unsafeListing }
         let key = archive.id
         var state = records[i].extractions?[key]
@@ -593,7 +598,7 @@ public actor SHT115Service {
         }
         // Revalidate destination immediately before the only extraction write.
         try await http.verify(cid: target, parent: records[i].parentCID, settings: settings)
-        let before = try await http.allEntries(cid: target, settings: settings)
+        let before = try await http.allEntries(cid: target, settings: settings, maximumEntries: 2_000)
         guard outputs.allSatisfy({ !$0.directory && $0.size > 0 && $0.size <= 1_073_741_824 }),
               outputs.reduce(Int64(0), { $0 + $1.size }) <= 2_147_483_648,
               !before.contains(where: { names.contains($0.name.precomposedStringWithCanonicalMapping.lowercased()) }) else {
@@ -609,7 +614,9 @@ public actor SHT115Service {
                 let extractID = SHT115HTTP.string(data["extract_id"])
                 if SHT115Settings.isCID(extractID), extractID != "0" {
                     if records[i].extractionJobs == nil { records[i].extractionJobs = [:] }
-                    records[i].extractionJobs?[key] = SHT115ExtractionJob(extractID: extractID, source: current, targetCID: target, outputs: outputs, priorIDs: before.map(\.id), cleanup: .waiting, authorization: records[i].extractionQueue?.first(where: { $0.source?.id == current.id && $0.state == .processing })?.id)
+                    let authorization = records[i].extractionQueue?.first(where: { $0.source?.id == current.id && $0.state == .processing })?.id
+                    let job = SHT115ExtractionJob(extractID: extractID, source: current, targetCID: target, outputs: outputs, priorIDs: before.map(\.id), cleanup: .waiting, authorization: authorization)
+                    records[i].extractionJobs?[key] = job
                 }
                 try persist(.accepted)
             }
@@ -640,7 +647,7 @@ public actor SHT115Service {
             return result("解压释放未明确完成，保留原包")
         }
         try await http.verify(cid: job.targetCID, parent: records[i].parentCID, settings: settings)
-        let targetEntries = try await http.allEntries(cid: job.targetCID, settings: settings)
+        let targetEntries = try await http.allEntries(cid: job.targetCID, settings: settings, maximumEntries: 2_000)
         guard !job.outputs.isEmpty else { return result("输出清单为空，保留原包") }
         for output in job.outputs {
             // A nonempty folder or equal byte count is NOT archive integrity evidence.
@@ -659,9 +666,11 @@ public actor SHT115Service {
             }
         }
         // Refresh exact source parent and identity immediately before deletion; no wildcard, CID or batch.
-        let listing = try await scan(resourceID: records[i].id, settings: settings, maxDepth: 3)
-        guard !listing.truncated, listing.archives.contains(where: {
-            $0.id == job.source.id && $0.directoryCID == job.source.directoryCID && $0.name == job.source.name && $0.pickCode == job.source.pickCode && $0.size == sourceSize && $0.sha1?.lowercased() == job.source.sha1?.lowercased()
+        guard job.source.directoryCID == job.targetCID else { return result("原包不是本任务目标目录直属文件，保留") }
+        let sourcePage = try await http.verifiedPage(cid: job.source.directoryCID, parent: records[i].parentCID, settings: settings)
+        let freshSource = try await http.allEntries(cid: job.source.directoryCID, settings: settings, firstPage: sourcePage, maximumEntries: 2_000)
+        guard freshSource.contains(where: {
+            !$0.isDirectory && $0.id == job.source.id && $0.name == job.source.name && $0.pickCode == job.source.pickCode && $0.size == sourceSize && $0.sha1?.lowercased() == job.source.sha1?.lowercased()
         }), SHT115Settings.isCID(job.source.id), job.source.id != "0",
              job.source.id != job.targetCID, job.source.id != job.source.directoryCID else {
             return result("原包身份或路径已变化，保留原包")
@@ -769,7 +778,7 @@ public actor SHT115Service {
                 }
                 // Exact target only. No recursive discovery and no unrelated archive candidates.
                 guard let target = inspection.resource.directoryCID else { throw SHT115Error.invalidInput }
-                let entries = try await http.allEntries(cid: target, settings: settings)
+                let entries = try await http.allEntries(cid: target, settings: settings, maximumEntries: 2_000)
                 guard let entry = entries.first(where: { $0.id == fid && !$0.isDirectory }),
                       entry.name == parts[2], entry.size == size, SHT115ExtractionPolicy.sha1(entry.sha1),
                       !entry.pickCode.isEmpty else {
