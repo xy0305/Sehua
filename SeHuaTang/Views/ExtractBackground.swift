@@ -6,6 +6,7 @@ import UIKit
 @MainActor enum ExtractBackground {
     static let taskID = "app.sehuatang.ios.extract"
     private static var foregroundWork: Task<Void, Never>?
+    private static var backgroundWork: Task<Bool, Never>?
 
     static func register() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: taskID, using: .main) { task in
@@ -45,6 +46,7 @@ import UIKit
     /// Call when account, parent CID, or automation setting changes.
     static func stop() {
         foregroundWork?.cancel()
+        backgroundWork?.cancel()
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: taskID)
         BackgroundRun.end()
     }
@@ -57,9 +59,12 @@ import UIKit
                 return !Task.isCancelled
             } catch { return false }
         }
+        backgroundWork?.cancel()
+        backgroundWork = work
         task.expirationHandler = { work.cancel() }
         Task { @MainActor in
             let success = await work.value
+            backgroundWork = nil
             task.setTaskCompleted(success: success)
             schedule()
         }

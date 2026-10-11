@@ -723,7 +723,7 @@ public actor SHT115Service {
         queueRunning = true; defer { queueRunning = false }
         try settings.validate()
         let candidates = records.filter { $0.account == settings.account && $0.parentCID == settings.parentCID }
-            .flatMap { resource in (resource.extractionQueue ?? []).map { (resource.id, $0.id) } }
+            .flatMap { resource in (resource.extractionQueue ?? []).filter { [.waiting, .processing].contains($0.state) && $0.nextAttempt <= now }.map { (resource.id, $0.id) } }
         for (resourceID, queueID) in candidates.prefix(4) {
             try Task.checkCancellation()
             let i = try index(resourceID, settings)
