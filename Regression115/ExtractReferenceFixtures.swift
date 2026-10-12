@@ -40,14 +40,16 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
         let sha = String(repeating: "b", count: 40), outputSHA = String(repeating: "c", count: 40)
         let nested = mode.hasPrefix("nested")
         let batch = mode.hasPrefix("batch")
-        let size: Int64 = 2_147_483_649, outputSize: Int64 = 4_294_967_298
+        let size: Int64 = 2_147_483_649
+        let outputSize: Int64 = mode == "categoryEmptyFile" ? 0 : 4_294_967_298
         let links = ["ed2k://|file|fixture.zip|\(size)|\(hash)|/"] + (batch ? ["ed2k://|file|\(mode == "batchAmbiguous" ? "fixture.zip" : "other.zip")|\(size)|\(hash2)|/"] : [])
         var submitted = false, released = false, parses = 0, releases = 0, deletes = 0, manifestReads = 0
         ExtractReferenceMock.handler = { request in
             let url = request.url!, path = url.path
             let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
             func query(_ key: String) -> String { q.first(where: { $0.name == key })?.value ?? "" }
-            func form(_ key: String) -> String { fields(request).first(where: { $0.name == key })?.value ?? "" }
+            let bodyFields = fields(request)
+            func form(_ key: String) -> String { bodyFields.first(where: { $0.name == key })?.value ?? "" }
             if query("ac") == "space" { return "{\"sign\":\"fake\",\"time\":1}" }
             if ["add_task_url", "add_task_urls"].contains(query("ac")) { submitted = true; return "{\"state\":true}" }
             if query("ac") == "task_lists" {
@@ -67,12 +69,13 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
                 manifestReads += 1
                 precondition(query("pick_code") == "sourcePC" && query("page_count") == "999")
                 var entry: [String: Any] = ["file_name": "movie.mp4", "size": outputSize, "ico": "mp4", "sha1": outputSHA]
+                if mode == "categoryEmptyFile" { entry["file_category"] = 1; entry.removeValue(forKey: "ico") }
+                if mode == "deepManifest" { entry = ["file_name": "deep", "size": 0, "file_category": 0] }
                 if mode == "noOutputHash" || mode == "nestedNoHash" { entry.removeValue(forKey: "sha1") }
                 if mode == "unsafeName" { entry["file_name"] = "../movie.mp4" }
-                if nested && query("paths") == "文件" { entry = ["file_name": "wrapper", "size": "0"] }
-                if nested && query("paths") != "文件" {
-                    precondition(query("file_name") == "wrapper" && query("paths") == "文件/wrapper")
-                }
+                precondition(query("paths") == "文件")
+                if nested && query("file_name").isEmpty { entry = ["file_name": "wrapper", "size": "0", "file_category": 0] }
+                if nested && !query("file_name").isEmpty { precondition(query("file_name") == "wrapper") }
                 var data: [String: Any] = ["list": [entry]] // script requires neither count nor marker
                 if mode == "truncatedManifest" { data["next_marker"] = "more" }
                 if mode == "badManifestCount" { data["count"] = 2 }
@@ -93,7 +96,7 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
             }
             if path == "/rb/delete" {
                 deletes += 1
-                precondition(fields(request).count == 2 && form("fid[0]") == "21" && form("pid") == "20")
+                precondition(bodyFields.count == 2 && form("fid[0]") == "21" && form("pid") == "20")
                 return "{\"state\":true}"
             }
             precondition(path == "/files", "unexpected read " + path)
@@ -112,9 +115,12 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
                     entries.append(nested ? ["cid": "23", "n": "wrapper"] : ["fid": "22", "n": "movie.mp4", "s": outputSize, "pc": "outputPC", "sha": outputSHA])
                 }
             }
-            return object(["state": true, "count": entries.count, "data": entries,
-                "path": [["cid": "0"], ["cid": "10"], ["cid": "20"]] + (query("cid") == "23" ? [["cid": "23"]] : []),
-                "offset": Int(query("offset")) ?? 0, "limit": 100, "order": "file_name", "is_asc": 1, "fc_mix": 1])
+            var pathItems: [[String: String]] = [["cid": "0"], ["cid": "10"], ["cid": "20"]]
+            if query("cid") == "23" { pathItems.append(["cid": "23"]) }
+            let response: [String: Any] = ["state": true, "count": entries.count, "data": entries,
+                "path": pathItems, "offset": Int(query("offset")) ?? 0, "limit": 100,
+                "order": "file_name", "is_asc": 1, "fc_mix": 1]
+            return object(response)
         }
         let service = try SHT115Service(storeURL: store, session: session)
         _ = try await service.submit(urls: links, resourceID: "q", settings: settings, autoExtraction: true)
@@ -125,12 +131,12 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
         let resumed = try SHT115Service(storeURL: store, session: session)
         for n in 1...3 { try await resumed.runExtractionQueue(settings: settings, now: now.addingTimeInterval(Double(n * 301))) }
         let shouldParse = !["wrongTarget", "noSourceHash", "duplicateSource", "batchAmbiguous"].contains(mode)
-        let shouldRelease = shouldParse && !["parseTimeout", "unsafeName", "truncatedManifest", "badManifestCount", "duplicateManifest", "targetCollision"].contains(mode)
-        let shouldDelete = ["largeFlat", "nestedComplete", "batchPartial"].contains(mode)
+        let shouldRelease = shouldParse && !["parseTimeout", "unsafeName", "truncatedManifest", "badManifestCount", "duplicateManifest", "targetCollision", "deepManifest"].contains(mode)
+        let shouldDelete = ["largeFlat", "categoryEmptyFile", "nestedComplete", "batchPartial"].contains(mode)
         precondition(parses == (shouldParse ? 1 : 0), mode + " parse count \(parses)")
         precondition(releases == (shouldRelease ? 1 : 0), mode + " release count \(releases)")
         precondition(deletes == (shouldDelete ? 1 : 0), mode + " recycle count \(deletes)")
-        precondition(manifestReads <= (nested ? 8 : 4), "bounded reads")
+        precondition(manifestReads <= (mode == "deepManifest" ? 24 : (nested ? 8 : 4)), "bounded reads")
         if mode == "batchPartial" {
             let final = await resumed.resources()
             precondition(final[0].extractionQueue?.filter { $0.state == .recycled }.count == 1)
@@ -139,6 +145,6 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
         print("PASS uploaded-reference production protocol: " + mode)
     }
     static func main() async throws {
-        for mode in ["largeFlat", "nestedComplete", "nestedMissing", "nestedExtra", "nestedHashMismatch", "nestedNoHash", "noOutputHash", "wrongTarget", "noSourceHash", "duplicateSource", "batchPartial", "batchAmbiguous", "parseTimeout", "releaseTimeout", "releasePending", "unsafeName", "truncatedManifest", "badManifestCount", "duplicateManifest", "targetCollision"] { try await run(mode) }
+        for mode in ["largeFlat", "categoryEmptyFile", "deepManifest", "nestedComplete", "nestedMissing", "nestedExtra", "nestedHashMismatch", "nestedNoHash", "noOutputHash", "wrongTarget", "noSourceHash", "duplicateSource", "batchPartial", "batchAmbiguous", "parseTimeout", "releaseTimeout", "releasePending", "unsafeName", "truncatedManifest", "badManifestCount", "duplicateManifest", "targetCollision"] { try await run(mode) }
     }
 }

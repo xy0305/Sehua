@@ -615,13 +615,15 @@ public actor SHT115Service {
         return SHT115ExtractionResult(state: records[i].extractions?[key] ?? .unknown, message: "已记录云解压结果；接受不代表完成；确认释放完成且新输出存在后，原包移入回收站")
     }
 
-    /// Script protocol: directory iff numeric size == 0 and ico is absent/empty.
+    /// Prefer explicit file_category (0 directory / 1 file); old script size/ico is a fallback.
+    /// Listing paths stay at root and file_name carries the full relative directory;
+    /// paths=文件/<dir> is the extraction selection path, not a second copy of the listing path.
     /// Read every descendant before submission; never infer completeness from a nonempty folder.
     private func archiveManifest(pick: String, path: [String], settings: SHT115Settings, budget: inout Int) async throws -> [SHT115ExtractionOutput] {
         guard path.count <= 5, budget >= 20 else { throw SHT115Error.unsafeListing }
         budget -= 20 // bounds directory requests as well as entries (at most 100 reads)
-        let fields = [("pick_code", pick), ("file_name", path.last ?? ""),
-                      ("paths", (["文件"] + path).joined(separator: "/")), ("page_count", "999")]
+        let fields = [("pick_code", pick), ("file_name", path.joined(separator: "/")),
+                      ("paths", "文件"), ("page_count", "999")]
         let info = try await http.json("https://webapi.115.com/files/extract_info?" + SHT115HTTP.form(fields), settings: settings)
         let data = info["data"] as? [String: Any] ?? [:]
         guard SHT115HTTP.success(info), let list = data["list"] as? [[String: Any]], list.count < 999,
@@ -637,7 +639,9 @@ public actor SHT115Service {
                   !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
                   names.insert(name.precomposedStringWithCanonicalMapping.lowercased()).inserted,
                   let size = Int64(SHT115HTTP.string(entry["size"])), size >= 0 else { throw SHT115Error.unsafeListing }
-            let directory = size == 0 && SHT115HTTP.string(entry["ico"]).isEmpty
+            let category = SHT115HTTP.string(entry["file_category"])
+            guard category.isEmpty || category == "0" || category == "1" else { throw SHT115Error.unsafeListing }
+            let directory = category.isEmpty ? (size == 0 && SHT115HTTP.string(entry["ico"]).isEmpty) : category == "0"
             let children = directory ? try await archiveManifest(pick: pick, path: path + [name], settings: settings, budget: &budget) : nil
             result.append(SHT115ExtractionOutput(name: name, directory: directory, size: size,
                 sha1: SHT115HTTP.string(entry["sha1"] ?? entry["sha"]), children: children))
