@@ -150,6 +150,11 @@ public struct SHT115ExtractionOutput: Codable {
     public let directory: Bool
     public let size: Int64
     public var sha1: String? = nil
+    /// Relative descendants; nil keeps legacy manifests readable but never authorizes folder cleanup.
+    public var children: [SHT115ExtractionOutput]? = nil
+    public var hasCompleteIdentity: Bool {
+        directory ? (children?.allSatisfy { $0.hasCompleteIdentity } ?? false) : SHT115ExtractionPolicy.sha1(sha1)
+    }
 }
 public struct SHT115ExtractionJob: Codable {
     public let extractID: String
@@ -220,6 +225,8 @@ public struct SHT115QueueItem: Codable, Identifiable {
     public var nextAttempt: Date = .distantPast
     public var source: SHT115Archive? = nil
     public var note: String = "等待离线完成身份核验"
+    /// One link per queue item; nil is the pre-batch single-link journal format.
+    public var url: String? = nil
 }
 public enum SHT115ExtractionPolicy {
     public static let enabledKey = "avdb.115.backgroundExtraction"
