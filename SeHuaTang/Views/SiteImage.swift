@@ -111,21 +111,9 @@ struct SiteImage<Placeholder: View>: View {
     private func load() async {
         image = nil
         guard let url else { return }
-        var req = URLRequest(url: url)
-        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
-        req.setValue(referer, forHTTPHeaderField: "Referer")
-        req.setValue("image/avif,image/webp,image/apng,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
-        let cookies = await WebSession.shared.webView.configuration.websiteDataStore.httpCookieStore.allCookies()
-        let matching = cookies.filter { cookie in
-            let domain = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-            let host = url.host ?? ""
-            return (host == domain || host.hasSuffix("." + domain)) && url.path.hasPrefix(cookie.path) && (!cookie.isSecure || url.scheme == "https")
-        }
-        for (key, value) in HTTPCookie.requestHeaderFields(with: matching) { req.setValue(value, forHTTPHeaderField: key) }
         do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-                  let img = await SiteImageDecodeQueue.shared.decode(data, animationBudget: animationBudget) else { return }
+            let data = try await SiteImageNetwork.shared.data(url: url, referer: referer)
+            guard let img = await SiteImageDecodeQueue.shared.decode(data, animationBudget: animationBudget) else { return }
             try Task.checkCancellation()
             image = img
         } catch {

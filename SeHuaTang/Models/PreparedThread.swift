@@ -12,6 +12,16 @@ struct PreparedThread: Sendable {
     let nextPage: URL?
     let parseMilliseconds: Double
 
+    /// Only the first three document images; all remaining fragments stay intact.
+    var firstScreenImages: [URL] {
+        guard let first = detail.posts.first else { return Array(detail.images.prefix(3)) }
+        var seen = Set<URL>()
+        return Array((blocks[first.id] ?? []).compactMap { fragment -> URL? in
+            if case .image(let url) = fragment, seen.insert(url).inserted { return url }
+            return nil
+        }.prefix(3))
+    }
+
     static func prepare(html: String, tid: Int, base: URL, title: String, page: Int) throws -> PreparedThread {
         try Task.checkCancellation()
         let start = ProcessInfo.processInfo.systemUptime

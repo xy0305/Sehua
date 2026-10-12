@@ -54,6 +54,15 @@ jobs:
           curl --noproxy '*' --retry 3 --retry-connrefused --max-time 10 -f http://127.0.0.1:18764/ready > /dev/null
           xcrun swiftc -parse-as-library SeHuaTang/Network/WebSession.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/PresentationTiming.swift SeHuaTang/Models/DetailPerformance.swift Regression115/DetailWebSessionFixtures.swift -o /tmp/detail-web-fixtures
           /tmp/detail-web-fixtures
+      - name: Detail body readiness and production image transport regression
+        run: |
+          python3 Regression115/DetailReadinessHTTPFixture.py > /tmp/detail-readiness-http.log 2>&1 &
+          FIXTURE_PID=$!
+          trap 'cat /tmp/detail-readiness-http.log; kill "$FIXTURE_PID"' EXIT
+          curl --noproxy '*' --retry 3 --retry-connrefused --max-time 10 -f http://127.0.0.1:18765/ready > /dev/null
+          xcrun swiftc -parse-as-library SeHuaTang/Network/WebSession.swift SeHuaTang/Network/SiteImageNetwork.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/PresentationTiming.swift SeHuaTang/Models/DetailPerformance.swift Regression115/DetailReadinessFixtures.swift -o /tmp/detail-readiness-fixtures
+          /tmp/detail-readiness-fixtures
+
       - name: Uploaded 115 extraction protocol and recursive identity regression
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/ExtractReferenceFixtures.swift -o /tmp/extract-reference-fixtures

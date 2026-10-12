@@ -13,6 +13,8 @@ struct ThreadDetailView: View {
     @State private var state: LoadState = .idle
     @State private var requestGate = ThreadRequestGate()
     @State private var readTask: Task<Void, Never>?
+    @State private var prefetchTask: Task<Void, Never>?
+    @Environment(\.scenePhase) private var scenePhase
     @State private var readOwner: UUID?
     @State private var preparedBlocks: [String: [[HTML.Content]]] = [:]
     @State private var inlineAttachmentIDs = Set<String>()
@@ -117,7 +119,12 @@ struct ThreadDetailView: View {
             library.record(readingItem)
             if detail == nil || requestGate.source != postURL || requestGate.tid != tid { await load() }
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { prefetchTask?.cancel(); prefetchTask = nil }
+        }
         .onDisappear {
+            prefetchTask?.cancel()
+            prefetchTask = nil
             // Generation guards alone discard results but leave WebSession occupied.
             // Cancel our owned read, never unrelated login/write/115 tasks.
             readTask?.cancel()
@@ -306,7 +313,7 @@ struct ThreadDetailView: View {
                                     case .attachment(let item):
                                         attachmentRow(ThreadAttachment(id: item.url.absoluteString, name: item.name, url: item.url, size: item.size, downloads: item.downloads))
                                     case .attachmentIcon(let url):
-                                        SiteImage(url: url, contentMode: .fit) { Image(systemName: "doc") }
+                                        SiteImage(url: url, referer: postURL.absoluteString, contentMode: .fit) { Image(systemName: "doc") }
                                             .frame(width: 28, height: 28)
                                             .accessibilityLabel("附件图标（无可识别下载链接）")
                                     case .emoticon(let smiley):
@@ -510,9 +517,9 @@ struct ThreadDetailView: View {
     private func imageStrip(_ urls: [URL]) -> some View {
         if urls.count == 1, let url = urls.first {
             NavigationLink {
-                ImagePage(url: url)
+                ImagePage(url: url, referer: postURL.absoluteString)
             } label: {
-                SiteImage(url: url, contentMode: .fit) {
+                SiteImage(url: url, referer: postURL.absoluteString, contentMode: .fit) {
                     ProgressView().frame(maxWidth: .infinity).frame(height: 120)
                 }
                 .frame(maxWidth: .infinity)
@@ -526,9 +533,9 @@ struct ThreadDetailView: View {
                 HStack(alignment: .top, spacing: 8) {
                     ForEach(Array(urls.enumerated()), id: \.offset) { _, url in
                         NavigationLink {
-                            ImagePage(url: url)
+                            ImagePage(url: url, referer: postURL.absoluteString)
                         } label: {
-                            SiteImage(url: url, contentMode: .fit) {
+                            SiteImage(url: url, referer: postURL.absoluteString, contentMode: .fit) {
                                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                             }
                             .frame(height: 180)
@@ -640,7 +647,7 @@ struct ThreadDetailView: View {
             requestGate.finish(token)
         }
         do {
-            let html = try await session.fetchHTML(url.absoluteString, interactive: true)
+            let html = try await session.fetchHTML(url.absoluteString, interactive: true, readiness: .threadBody)
             try Task.checkCancellation()
             guard requestGate.accepts(token, tid: tid, source: postURL) else { return }
             guard !DiscuzParser.looksLikeChallenge(html) else {
@@ -777,7 +784,22 @@ struct ThreadDetailView: View {
         if readOwner == owner { readTask = nil; readOwner = nil }
     }
 
+    @MainActor private func warmFirstImages(_ urls: [URL], source: URL) {
+        prefetchTask?.cancel()
+        guard scenePhase == .active else { return }
+        prefetchTask = Task { @MainActor in
+            await withTaskGroup(of: Void.self) { group in
+                for url in urls.prefix(3) {
+                    group.addTask { _ = try? await SiteImageNetwork.shared.data(url: url, referer: source.absoluteString, visible: false) }
+                }
+                await group.waitForAll()
+            }
+        }
+    }
+
     @MainActor private func performLoad() async {
+        prefetchTask?.cancel()
+        prefetchTask = nil
         let requestedURL = postURL
         let requestedTID = tid
         guard !loadingReplies, state != .loading, !Task.isCancelled,
@@ -786,7 +808,7 @@ struct ThreadDetailView: View {
         detail?.purchaseState = .unknown // stale receipt/price must not survive a failed refresh
         defer { requestGate.finish(token) }
         do {
-            let html = try await session.fetchHTML(requestedURL.absoluteString, interactive: true)
+            let html = try await session.fetchHTML(requestedURL.absoluteString, interactive: true, readiness: .threadBody)
             try Task.checkCancellation()
             guard requestGate.accepts(token, tid: tid, source: postURL) else { return }
             if DiscuzParser.looksLikeChallenge(html) {
@@ -802,6 +824,7 @@ struct ThreadDetailView: View {
                 state = .failed("未取得可读正文，可能需登录或网页权限；请到「我的」检查网页")
                 return
             }
+            warmFirstImages(prepared.firstScreenImages, source: requestedURL)
             preparedBlocks = prepared.groups
             inlineAttachmentIDs = prepared.inlineAttachmentIDs
             detail = parsed
@@ -820,9 +843,10 @@ struct ThreadDetailView: View {
 
 private struct ImagePage: View {
     let url: URL
+    let referer: String
     var body: some View {
         ScrollView(.vertical) {
-            SiteImage(url: url, contentMode: .fit) {
+            SiteImage(url: url, referer: referer, contentMode: .fit) {
                 ProgressView()
             }
             .frame(maxWidth: .infinity)
