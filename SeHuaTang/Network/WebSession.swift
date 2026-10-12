@@ -433,7 +433,14 @@ private enum ThreadDOMReadiness {
         && !placeholder && !restricted && !pendingScript && !unknownModule && !unsafeFrame && !mediaCallback && !s.loadHandlers
         && !window.onload && !window.onmessage && !document.querySelector('[onload],[onerror]') && !s.io && !s.timers.size && !s.intervals.size
         && performance.now()-s.last>=900);
-      const settled=!!(s && !s.failed && !s.io && !s.timers.size && !s.intervals.size && performance.now()-s.last>=900);
+      // Unknown permanent activity disables early delivery, not normal complete
+      // delivery forever. Give complete documents an additional bounded 8s grace;
+      // tracked finite timers/network still must drain and native sampling still
+      // requires a stable DOM. This is a compatibility fallback, not proof that
+      // arbitrary Worker/interval content has finished.
+      if(document.readyState==='complete' && s && !s.completeAt)s.completeAt=performance.now();
+      const completeFallback=!!(s && s.completeAt && performance.now()-s.completeAt>=8000 && !s.io && !s.timers.size);
+      const settled=!!(s && ((!s.failed && !s.io && !s.timers.size && !s.intervals.size && performance.now()-s.last>=900) || completeFallback));
       return {html,ready:document.readyState,signature,safe,settled};
     })();
     """#

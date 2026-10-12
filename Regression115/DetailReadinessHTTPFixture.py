@@ -28,6 +28,15 @@ class Handler(BaseHTTPRequestHandler):
    script=''
    if path=='/unsafe-frame':
     media="<img src='/slow-media'><iframe src='/slow-media'></iframe>"
+   if path=='/permanent-interval':
+    media=''
+    script="<script>setInterval(()=>{document.title=String(Date.now())},100)</script>"
+   if path=='/permanent-worker':
+    media=''
+    script="<script>new Worker(URL.createObjectURL(new Blob(['setInterval(()=>{},100)'],{type:'application/javascript'})))</script>"
+   if path=='/permanent-interval-late':
+    media=''
+    script="<script>setInterval(()=>{document.title=String(Date.now())},100);setTimeout(()=>{document.querySelector('#m').textContent='FINAL permanent activity body'},6200)</script>"
    if path=='/interval-late':
     script="<script>const id=setInterval(()=>{clearInterval(id);document.querySelector('#m').textContent='FINAL interval body'},6200)</script>"
    if path=='/streamed':

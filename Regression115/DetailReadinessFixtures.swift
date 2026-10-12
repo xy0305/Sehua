@@ -26,6 +26,12 @@ import WebKit
         precondition(unsafeTime>=5,"an unknown script-capable iframe cannot be assumed unrelated to thread injection")
         let (interval,intervalTime) = try await read("/interval-late",.threadBody)
         precondition(intervalTime>=7 && DiscuzParser.messageBodies(in:interval).joined().contains("FINAL interval body"))
+        for path in ["/permanent-interval", "/permanent-worker", "/permanent-interval-late"] {
+            let (html,elapsed) = try await read(path,.threadBody)
+            precondition(elapsed>=8 && elapsed<15,"permanent unknown activity must use bounded complete fallback, never early delivery or timeout")
+            let expected = path.hasSuffix("-late") ? "FINAL permanent activity body" : "complete body"
+            precondition(DiscuzParser.messageBodies(in:html).joined().contains(expected),"complete fallback must retain delayed body")
+        }
         let (streamed,streamedTime) = try await read("/streamed",.threadBody)
         precondition(streamedTime>=3 && DiscuzParser.messageBodies(in:streamed).joined().contains("FINAL streamed body"))
         let (late,lateTime) = try await read("/late",.threadBody)
