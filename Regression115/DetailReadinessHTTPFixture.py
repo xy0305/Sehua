@@ -7,6 +7,11 @@ class Handler(BaseHTTPRequestHandler):
   path=self.path.split('?')[0]
   with lock: counts[path]=counts.get(path,0)+1; count=counts[path]
   status=200;typ='text/html; charset=utf-8'
+  if path=='/stream-data':
+   data=b'FINAL streamed body';self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.flush();time.sleep(2.2)
+   try:self.wfile.write(data)
+   except (BrokenPipeError,ConnectionResetError):pass
+   return
   if path=='/redirect':
    self.send_response(302);self.send_header('Location','/net-image-redirect.gif');self.send_header('Content-Length','0');self.end_headers();return
   if path=='/stats':
@@ -23,6 +28,8 @@ class Handler(BaseHTTPRequestHandler):
    script=''
    if path=='/unsafe-frame':
     media="<img src='/slow-media'><iframe src='/slow-media'></iframe>"
+   if path=='/streamed':
+    script="<script>fetch('/stream-data').then(r=>r.text()).then(t=>{document.querySelector('#m').textContent=t})</script>"
    if path=='/late':
     script="<script>setTimeout(()=>{document.querySelector('#m').innerHTML='FINAL body<img src=\"/net-image-late.gif\">'},1500);setTimeout(()=>{document.body.insertAdjacentHTML('beforeend','<a class=\"attachment\" href=\"/file.torrent\">FINAL attachment</a>')},2200)</script>"
    elif path=='/empty-late':

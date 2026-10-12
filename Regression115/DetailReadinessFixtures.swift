@@ -24,6 +24,8 @@ import WebKit
         precondition(oldTime>=5 && newTime<4 && old==new, "slow unrelated resources must not gate complete body; DOM/media must remain identical")
         let (_,unsafeTime) = try await read("/unsafe-frame",.threadBody)
         precondition(unsafeTime>=5,"an unknown script-capable iframe cannot be assumed unrelated to thread injection")
+        let (streamed,streamedTime) = try await read("/streamed",.threadBody)
+        precondition(streamedTime>=3 && DiscuzParser.messageBodies(in:streamed).joined().contains("FINAL streamed body"))
         let (late,lateTime) = try await read("/late",.threadBody)
         precondition(lateTime>=3 && late.contains("FINAL body") && late.contains("FINAL attachment") && late.contains("/net-image-late.gif"))
         let (empty,emptyTime) = try await read("/empty-late",.threadBody)

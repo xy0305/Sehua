@@ -387,6 +387,16 @@ private enum ThreadDOMReadiness {
         }
         const fetch=window.fetch;
         window.fetch=function(...args){s.io++;return fetch.apply(this,args).finally(()=>{s.io--;s.last=performance.now();});};
+        // Fetch resolves at headers; body consumers can still inject content later.
+        for(const method of ['text','json','blob','arrayBuffer','formData']) {
+          const original=Response.prototype[method];if(!original)continue;
+          Response.prototype[method]=function(...args){s.io++;
+            try{return original.apply(this,args).finally(()=>{s.io--;s.last=performance.now();});}
+            catch(e){s.io--;throw e;}};
+        }
+        if(window.ReadableStreamDefaultReader){const read=ReadableStreamDefaultReader.prototype.read;
+          ReadableStreamDefaultReader.prototype.read=function(...args){s.io++;
+            return read.apply(this,args).finally(()=>{s.io--;s.last=performance.now();});};}
         const send=XMLHttpRequest.prototype.send;
         XMLHttpRequest.prototype.send=function(...args){s.io++;
           this.addEventListener('loadend',()=>{s.io--;s.last=performance.now();},{once:true});
@@ -415,11 +425,12 @@ private enum ThreadDOMReadiness {
       const placeholder=document.querySelector('[aria-busy="true"],.loading,.loadmore.loading,.skeleton,[data-loading="true"],#messagetext,.alert_error,.locked,.pay,.showhide');
       const restricted=/请先登录|登录后|无权|权限不足|购买主题|购买后|隐藏内容|回复后|满18岁|Just a moment|验证您|正在加载|加载中/.test(text);
       const pendingScript=s && [...document.scripts].some(e=>e.src && !s.loaded.has(e));
+      const unknownModule=[...document.scripts].some(e=>e.type==='module' || /\bimport\s*\(/.test(e.textContent));
       const unsafeFrame=[...document.querySelectorAll('iframe,object,embed')].some(e=>
         e.tagName!=='IFRAME' || !e.hasAttribute('sandbox') || e.sandbox.contains('allow-scripts'));
       const mediaCallback=[...document.querySelectorAll('img,iframe,link,video,audio')].some(e=>e.onload || e.onerror);
       const safe=!!(s && !s.failed && document.readyState==='interactive' && populated
-        && !placeholder && !restricted && !pendingScript && !unsafeFrame && !mediaCallback && !s.loadHandlers
+        && !placeholder && !restricted && !pendingScript && !unknownModule && !unsafeFrame && !mediaCallback && !s.loadHandlers
         && !window.onload && !window.onmessage && !document.querySelector('[onload],[onerror]') && !s.io && !s.timers.size && !s.intervals.size
         && performance.now()-s.last>=900);
       const settled=!!(s && !s.failed && !s.io && !s.timers.size && performance.now()-s.last>=900);
