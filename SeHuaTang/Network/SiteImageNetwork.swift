@@ -8,10 +8,11 @@ import WebKit
     static let shared = SiteImageNetwork()
     private final class Flight {
         let request: URLRequest
+        let cookies: [HTTPCookie]
         var clients: [UUID: CheckedContinuation<Data, Error>] = [:]
         var visible = Set<UUID>()
         var task: URLSessionDataTask?
-        init(_ request: URLRequest) { self.request = request }
+        init(_ request: URLRequest, cookies: [HTTPCookie]) { self.request = request; self.cookies = cookies }
     }
     private let cache = NSCache<NSString, NSData>()
     private var flights: [String: Flight] = [:]
@@ -29,7 +30,7 @@ import WebKit
         config.httpCookieStorage = nil
         config.urlCache = nil
         config.httpMaximumConnectionsPerHost = 4
-        session = URLSession(configuration: config, delegate: SiteImageRedirectGuard(), delegateQueue: nil)
+        session = URLSession(configuration: config)
         cache.totalCostLimit = 24 * 1024 * 1024
         cache.countLimit = 12
     }
@@ -44,7 +45,7 @@ import WebKit
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
-                let flight = flights[key] ?? Flight(request)
+                let flight = flights[key] ?? Flight(request, cookies: cookies)
                 if flights[key] == nil { flights[key] = flight; order.append(key) }
                 flight.clients[id] = continuation
                 if visible { flight.visible.insert(id); flight.task?.priority = URLSessionTask.highPriority }
@@ -53,7 +54,7 @@ import WebKit
         }, onCancel: { Task { @MainActor in self.cancel(key: key, id: id) } })
     }
 
-    static func request(url: URL, referer: String, cookies: [HTTPCookie]) -> (URLRequest, String) {
+    nonisolated static func request(url: URL, referer: String, cookies: [HTTPCookie]) -> (URLRequest, String) {
         var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         req.httpShouldHandleCookies = false
         req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
@@ -99,6 +100,7 @@ import WebKit
                     self.pump()
                 }
             }
+            task.delegate = SiteImageRedirectGuard(cookies: flight.cookies)
             flight.task = task
             task.priority = flight.visible.isEmpty ? URLSessionTask.defaultPriority : URLSessionTask.highPriority
             active += 1
@@ -108,6 +110,7 @@ import WebKit
     private func cancel(key: String, id: UUID) {
         guard let flight = flights[key], let client = flight.clients.removeValue(forKey: id) else { return }
         flight.visible.remove(id)
+        if flight.visible.isEmpty { flight.task?.priority = URLSessionTask.defaultPriority }
         client.resume(throwing: CancellationError())
         // A speculative owner's departure MUST NOT kill a visible consumer.
         if flight.clients.isEmpty {
@@ -119,20 +122,19 @@ import WebKit
     }
 }
 
-private final class SiteImageRedirectGuard: NSObject, URLSessionTaskDelegate {
+private final class SiteImageRedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    let cookies: [HTTPCookie]
+    init(cookies: [HTTPCookie]) { self.cookies = cookies }
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest,
                     completionHandler: @escaping (URLRequest?) -> Void) {
         guard let target = request.url,
               target.scheme == "https" || response.url?.scheme == "http" else { completionHandler(nil); return }
-        var next = request
-        next.httpShouldHandleCookies = false
-        if target.host != response.url?.host || target.port != response.url?.port || target.scheme != response.url?.scheme {
-            next.setValue(nil, forHTTPHeaderField: "Cookie")
-            next.setValue(nil, forHTTPHeaderField: "Authorization")
-        }
-        next.setValue(task.originalRequest?.value(forHTTPHeaderField: "Referer"), forHTTPHeaderField: "Referer")
+        let source = task.originalRequest?.value(forHTTPHeaderField: "Referer") ?? ""
+        // Re-match domain/path/secure cookies on EVERY redirect. Never forward
+        // another origin's Cookie header, or read a newer account's cookie jar.
+        let next = SiteImageNetwork.request(url: target, referer: source, cookies: cookies).0
         completionHandler(next)
     }
 }

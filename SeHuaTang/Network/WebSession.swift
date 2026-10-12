@@ -369,10 +369,10 @@ private enum ThreadDOMReadiness {
             if(typeof fn==='function') fn.apply(window,args); else (0,eval)(fn);}, delay);
           s.timers.add(id); return id;
         };
-        window.clearTimeout=function(id){s.timers.delete(id); return clear.call(window,id);};
+        window.clearTimeout=function(id){s.timers.delete(id);s.intervals.delete(id);return clear.call(window,id);};
         const interval=window.setInterval, cancel=window.clearInterval;
         window.setInterval=function(...args){const id=interval.apply(window,args);s.intervals.add(id);return id;};
-        window.clearInterval=function(id){s.intervals.delete(id);return cancel.call(window,id);};
+        window.clearInterval=function(id){s.intervals.delete(id);s.timers.delete(id);return cancel.call(window,id);};
         for(const [schedule,cancelName] of [['requestAnimationFrame','cancelAnimationFrame'],['requestIdleCallback','cancelIdleCallback']]) {
           if(!window[schedule])continue;
           const original=window[schedule], cancelOriginal=window[cancelName];
@@ -393,7 +393,7 @@ private enum ThreadDOMReadiness {
           try{return send.apply(this,args);}catch(e){s.io--;throw e;}};
         const add=EventTarget.prototype.addEventListener;
         EventTarget.prototype.addEventListener=function(type,...args){
-          if(type==='load' || type==='error')s.loadHandlers=true;
+          if(type==='load' || type==='error' || type==='message' || type.startsWith('animation') || type.startsWith('transition'))s.loadHandlers=true;
           return add.call(this,type,...args);
         };
         add.call(document,'load',e=>{if(e.target.tagName==='SCRIPT')s.loaded.add(e.target);},true);
@@ -415,9 +415,12 @@ private enum ThreadDOMReadiness {
       const placeholder=document.querySelector('[aria-busy="true"],.loading,.loadmore.loading,.skeleton,[data-loading="true"],#messagetext,.alert_error,.locked,.pay,.showhide');
       const restricted=/请先登录|登录后|无权|权限不足|购买主题|购买后|隐藏内容|回复后|满18岁|Just a moment|验证您|正在加载|加载中/.test(text);
       const pendingScript=s && [...document.scripts].some(e=>e.src && !s.loaded.has(e));
+      const unsafeFrame=[...document.querySelectorAll('iframe,object,embed')].some(e=>
+        e.tagName!=='IFRAME' || !e.hasAttribute('sandbox') || e.sandbox.contains('allow-scripts'));
+      const mediaCallback=[...document.querySelectorAll('img,iframe,link,video,audio')].some(e=>e.onload || e.onerror);
       const safe=!!(s && !s.failed && document.readyState==='interactive' && populated
-        && !placeholder && !restricted && !pendingScript && !s.loadHandlers
-        && !window.onload && !document.querySelector('[onload],[onerror]') && !s.io && !s.timers.size && !s.intervals.size
+        && !placeholder && !restricted && !pendingScript && !unsafeFrame && !mediaCallback && !s.loadHandlers
+        && !window.onload && !window.onmessage && !document.querySelector('[onload],[onerror]') && !s.io && !s.timers.size && !s.intervals.size
         && performance.now()-s.last>=900);
       const settled=!!(s && !s.failed && !s.io && !s.timers.size && performance.now()-s.last>=900);
       return {html,ready:document.readyState,signature,safe,settled};

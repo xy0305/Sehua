@@ -22,6 +22,8 @@ import WebKit
         let (old,oldTime) = try await read("/normal",.complete)
         let (new,newTime) = try await read("/normal",.threadBody)
         precondition(oldTime>=5 && newTime<4 && old==new, "slow unrelated resources must not gate complete body; DOM/media must remain identical")
+        let (_,unsafeTime) = try await read("/unsafe-frame",.threadBody)
+        precondition(unsafeTime>=5,"an unknown script-capable iframe cannot be assumed unrelated to thread injection")
         let (late,lateTime) = try await read("/late",.threadBody)
         precondition(lateTime>=3 && late.contains("FINAL body") && late.contains("FINAL attachment") && late.contains("/net-image-late.gif"))
         let (empty,emptyTime) = try await read("/empty-late",.threadBody)
@@ -60,6 +62,8 @@ import WebKit
         leaving.cancel()
         do { _ = try await leaving.value; fatalError("visible cancellation not delivered") } catch is CancellationError {}
         _ = try await survivor.value
+        let redirected = try await network.data(url:URL(string:origin+"/redirect")!,referer:origin)
+        precondition(redirected==bytes)
         let retryURL=URL(string:origin+"/net-image-retry.gif")!
         do { _ = try await network.data(url:retryURL,referer:origin); fatalError("503 must fail") } catch {}
         _ = try await network.data(url:retryURL,referer:origin)

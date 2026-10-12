@@ -10,6 +10,12 @@ import Foundation
         let oldParseMS = (ProcessInfo.processInfo.systemUptime - oldStart) * 1000
         let prepared = try await PreparedThread.load(html: html, tid: 42, base: base, title: "", page: 1)
         precondition(!old.posts.isEmpty && prepared.detail.posts == old.posts)
+        precondition(prepared.firstScreenImages.map(\.lastPathComponent) == ["0.gif", "1.gif", "2.gif"])
+        for post in prepared.detail.posts {
+            precondition((prepared.blocks[post.id] ?? []).compactMap { fragment -> URL? in
+                if case .image(let url) = fragment { return url }; return nil
+            }.count == 24, "bounded warm-up must not truncate retained GIF document images")
+        }
         try await withThrowingTaskGroup(of: PreparedThread.self) { group in
             for _ in 0..<8 {
                 group.addTask { try await PreparedThread.load(html: html, tid: 42, base: base, title: "", page: 1) }

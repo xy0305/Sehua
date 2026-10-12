@@ -7,6 +7,8 @@ class Handler(BaseHTTPRequestHandler):
   path=self.path.split('?')[0]
   with lock: counts[path]=counts.get(path,0)+1; count=counts[path]
   status=200;typ='text/html; charset=utf-8'
+  if path=='/redirect':
+   self.send_response(302);self.send_header('Location','/net-image-redirect.gif');self.send_header('Content-Length','0');self.end_headers();return
   if path=='/stats':
    with lock: data=json.dumps(counts).encode()
    typ='application/json'
@@ -16,9 +18,11 @@ class Handler(BaseHTTPRequestHandler):
   elif path=='/slow-media':
    time.sleep(5);data=b'GIF89a-retained-original-bytes';typ='image/gif'
   else:
-   media="<img src='/slow-media'><iframe src='/slow-media'></iframe>"
+   media="<img src='/slow-media'><iframe sandbox='' src='/slow-media'></iframe>"
    message="<div class='message' id='m'>complete body<img src='/net-image-original.gif'></div>"
    script=''
+   if path=='/unsafe-frame':
+    media="<img src='/slow-media'><iframe src='/slow-media'></iframe>"
    if path=='/late':
     script="<script>setTimeout(()=>{document.querySelector('#m').innerHTML='FINAL body<img src=\"/net-image-late.gif\">'},1500);setTimeout(()=>{document.body.insertAdjacentHTML('beforeend','<a class=\"attachment\" href=\"/file.torrent\">FINAL attachment</a>')},2200)</script>"
    elif path=='/empty-late':
