@@ -24,6 +24,8 @@ final class WebSession: NSObject, ObservableObject {
     private var collectGen = 0
     private var commitSamplerGen: Int?
     private var fetchTimings: [UUID: DetailFetchTiming] = [:]
+    // Last numeric-only sample for read-only diagnostics and the production runner.
+    private(set) var lastFetchSample: (timing: DetailFetchTiming, end: TimeInterval)?
 
     var baseURL: URL { URL(string: "https://\(host)")! }
 
@@ -110,7 +112,9 @@ final class WebSession: NSObject, ObservableObject {
         if let timing = fetchTimings.removeValue(forKey: id) {
             let cancelled: Bool
             if case .failure(let error) = result { cancelled = error is CancellationError } else { cancelled = false }
-            DetailPerformance.logFetch(timing, end: ProcessInfo.processInfo.systemUptime, cancelled: cancelled)
+            let end = ProcessInfo.processInfo.systemUptime
+            lastFetchSample = (timing, end)
+            DetailPerformance.logFetch(timing, end: end, cancelled: cancelled)
         }
         queue.removeAll { $0.id == id }
         if activeID == id {
