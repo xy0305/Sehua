@@ -6,6 +6,8 @@ import Foundation
 struct PreparedThread: Sendable {
     let detail: ThreadDetail
     let blocks: [String: [HTML.Content]]
+    let groups: [String: [[HTML.Content]]]
+    static let lookAheadFragments = 3
     let inlineAttachmentIDs: Set<String>
     let nextPage: URL?
     let parseMilliseconds: Double
@@ -26,7 +28,16 @@ struct PreparedThread: Sendable {
         }
         let next = DiscuzParser.nextThreadPage(in: html, tid: tid, base: base, page: page)
         try Task.checkCancellation()
-        return PreparedThread(detail: detail, blocks: blocks, inlineAttachmentIDs: inline, nextPage: next,
+        var groups: [String: [[HTML.Content]]] = [:]
+        for (id, content) in blocks {
+            // Lazy rows eagerly instantiate a small, ordered look-ahead window.
+            // Images after the current text/image begin loading before scrolling
+            // within that row; nothing is removed, reordered or source-rewritten.
+            groups[id] = stride(from: 0, to: content.count, by: lookAheadFragments).map {
+                Array(content[$0..<min($0 + lookAheadFragments, content.count)])
+            }
+        }
+        return PreparedThread(detail: detail, blocks: blocks, groups: groups, inlineAttachmentIDs: inline, nextPage: next,
                               parseMilliseconds: (ProcessInfo.processInfo.systemUptime - start) * 1000)
     }
 

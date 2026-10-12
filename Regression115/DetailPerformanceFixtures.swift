@@ -10,6 +10,9 @@ import Foundation
         precondition(!old.posts.isEmpty && prepared.detail.posts == old.posts)
         for post in old.posts {
             precondition(prepared.blocks[post.id] == HTML.orderedContent(in: post.htmlBody, base: base))
+            let groups = prepared.groups[post.id] ?? []
+            precondition(groups.flatMap { $0 } == prepared.blocks[post.id])
+            precondition(groups.allSatisfy { !$0.isEmpty && $0.count <= PreparedThread.lookAheadFragments })
         }
         // Production value types must meet checked Sendable, not unchecked escapes.
         func sendable<T: Sendable>(_ value: T) {}

@@ -14,7 +14,7 @@ struct ThreadDetailView: View {
     @State private var requestGate = ThreadRequestGate()
     @State private var readTask: Task<Void, Never>?
     @State private var readOwner: UUID?
-    @State private var preparedBlocks: [String: [HTML.Content]] = [:]
+    @State private var preparedBlocks: [String: [[HTML.Content]]] = [:]
     @State private var inlineAttachmentIDs = Set<String>()
     @State private var copied = false
     @State private var playVideos: [SHT115Video] = []
@@ -283,38 +283,42 @@ struct ThreadDetailView: View {
                         if d.posts.first?.id != post.id {
                             authorBar(post, isOriginal: false)
                         }
-                        ForEach(Array((preparedBlocks[post.id] ?? []).enumerated()), id: \.offset) { _, fragment in
-                            switch fragment {
-                            case .richText(let runs):
-                                SelectableDetailText(text: attributedBody(runs), alignment: runs.first?.alignment == "center" ? .center : runs.first?.alignment == "right" ? .right : .left, onLink: openBodyLink)
-                                    .multilineTextAlignment(runs.first?.alignment == "center" ? .center : runs.first?.alignment == "right" ? .trailing : .leading)
-                                    .frame(maxWidth: .infinity, alignment: runs.first?.alignment == "center" ? .center : runs.first?.alignment == "right" ? .trailing : .leading)
-                                    .font(.body)
-                                    .foregroundStyle(ForumChrome.text)
-                                    .lineSpacing(6)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .textSelection(.enabled)
-                            case .text(let text):
-                                SelectableDetailText(text: NSAttributedString(string: text), onLink: openBodyLink)
-                                    .font(.body)
-                                    .foregroundStyle(ForumChrome.text)
-                                    .lineSpacing(6)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .textSelection(.enabled)
-                            case .attachment(let item):
-                                attachmentRow(ThreadAttachment(id: item.url.absoluteString, name: item.name, url: item.url, size: item.size, downloads: item.downloads))
-                            case .attachmentIcon(let url):
-                                SiteImage(url: url, contentMode: .fit) { Image(systemName: "doc") }
-                                    .frame(width: 28, height: 28)
-                                    .accessibilityLabel("附件图标（无可识别下载链接）")
-                            case .emoticon(let smiley):
-                                SiteImage(url: smiley.url, contentMode: .fit, preservesIntrinsicAspectRatio: false) {
-                                    Color.clear
+                        ForEach(Array((preparedBlocks[post.id] ?? []).enumerated()), id: \.offset) { _, group in
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(Array(group.enumerated()), id: \.offset) { _, fragment in
+                                    switch fragment {
+                                    case .richText(let runs):
+                                        SelectableDetailText(text: attributedBody(runs), alignment: runs.first?.alignment == "center" ? .center : runs.first?.alignment == "right" ? .right : .left, onLink: openBodyLink)
+                                            .multilineTextAlignment(runs.first?.alignment == "center" ? .center : runs.first?.alignment == "right" ? .trailing : .leading)
+                                            .frame(maxWidth: .infinity, alignment: runs.first?.alignment == "center" ? .center : runs.first?.alignment == "right" ? .trailing : .leading)
+                                            .font(.body)
+                                            .foregroundStyle(ForumChrome.text)
+                                            .lineSpacing(6)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                            .textSelection(.enabled)
+                                    case .text(let text):
+                                        SelectableDetailText(text: NSAttributedString(string: text), onLink: openBodyLink)
+                                            .font(.body)
+                                            .foregroundStyle(ForumChrome.text)
+                                            .lineSpacing(6)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                            .textSelection(.enabled)
+                                    case .attachment(let item):
+                                        attachmentRow(ThreadAttachment(id: item.url.absoluteString, name: item.name, url: item.url, size: item.size, downloads: item.downloads))
+                                    case .attachmentIcon(let url):
+                                        SiteImage(url: url, contentMode: .fit) { Image(systemName: "doc") }
+                                            .frame(width: 28, height: 28)
+                                            .accessibilityLabel("附件图标（无可识别下载链接）")
+                                    case .emoticon(let smiley):
+                                        SiteImage(url: smiley.url, contentMode: .fit, preservesIntrinsicAspectRatio: false) {
+                                            Color.clear
+                                        }
+                                        .frame(width: smiley.width, height: smiley.height)
+                                        .accessibilityLabel(smiley.alt)
+                                    case .image(let url):
+                                        imageStrip([url])
+                                    }
                                 }
-                                .frame(width: smiley.width, height: smiley.height)
-                                .accessibilityLabel(smiley.alt)
-                            case .image(let url):
-                                imageStrip([url])
                             }
                         }
                         if let ratings = post.ratings { ratingsCard(ratings) }
@@ -657,7 +661,7 @@ struct ThreadDetailView: View {
             var ids = Set(current.posts.map(\.id))
             let added = more.posts.filter { ids.insert($0.id).inserted }
             current.posts += added
-            for post in added { preparedBlocks[post.id] = prepared.blocks[post.id] }
+            for post in added { preparedBlocks[post.id] = prepared.groups[post.id] }
             inlineAttachmentIDs.formUnion(prepared.inlineAttachmentIDs)
             // Preserve page-one download/115 inputs: later replies are not the OP.
             detail = current
@@ -798,7 +802,7 @@ struct ThreadDetailView: View {
                 state = .failed("未取得可读正文，可能需登录或网页权限；请到「我的」检查网页")
                 return
             }
-            preparedBlocks = prepared.blocks
+            preparedBlocks = prepared.groups
             inlineAttachmentIDs = prepared.inlineAttachmentIDs
             detail = parsed
             loadedPage = page
