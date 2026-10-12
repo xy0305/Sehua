@@ -785,6 +785,7 @@ public actor SHT115Service {
                 }
                 let parts = link.components(separatedBy: "|")
                 guard parts.count >= 6, let size = Int64(parts[3]), size > 0,
+                      parts[2].range(of: "(?i)\\.part[0-9]+\\.rar$", options: .regularExpression) == nil,
                       ["zip", "7z", "rar", "tar", "gz", "bz2", "xz"].contains((parts[2] as NSString).pathExtension.lowercased()) else {
                     try update(.retained, "链接不是可独立识别的压缩包；分卷/未知类型保留")
                     continue
