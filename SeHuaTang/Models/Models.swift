@@ -31,7 +31,7 @@ struct ThreadListPage {
     var totalPages: Int? = nil
 }
 
-struct ThreadAttachment: Identifiable, Hashable {
+struct ThreadAttachment: Identifiable, Hashable, Sendable {
     let id: String
     let name: String
     let url: URL
@@ -41,7 +41,7 @@ struct ThreadAttachment: Identifiable, Hashable {
     var isED2K: Bool { url.scheme?.lowercased() == "ed2k" }
 }
 
-struct ThreadPost: Identifiable, Hashable {
+struct ThreadPost: Identifiable, Hashable, Sendable {
     let id: String
     var author: String
     var authorID: Int?
@@ -53,7 +53,7 @@ struct ThreadPost: Identifiable, Hashable {
     var ratings: PostRatings? = nil
 }
 
-struct ThreadDetail {
+struct ThreadDetail: Sendable {
     var purchaseState: ThreadPurchaseState = .unknown
     var tid: Int
     var title: String
@@ -127,7 +127,7 @@ enum LoadState: Equatable {
 }
 
 // Optional fields reflect only values exposed by the server, never inferred totals.
-struct RatingEntry: Identifiable, Hashable {
+struct RatingEntry: Identifiable, Hashable, Sendable {
     var id: Int
     var name: String
     var uid: Int?
@@ -135,7 +135,7 @@ struct RatingEntry: Identifiable, Hashable {
     var values: [String]
     var reason: String
 }
-struct PostRatings: Hashable {
+struct PostRatings: Hashable, Sendable {
     var participants: String?
     var totals: [String]
     var entries: [RatingEntry]
@@ -143,7 +143,7 @@ struct PostRatings: Hashable {
 
 
 // Response evidence, never board/title heuristics. Unknown is deliberately not free.
-enum ThreadPurchaseState: Equatable {
+enum ThreadPurchaseState: Equatable, Sendable {
     case unknown
     case free
     case required(price: String?, entry: URL?)

@@ -23,6 +23,7 @@ final class WebSession: NSObject, ObservableObject {
     private var ageGateRequestID: UUID?
     private var collectGen = 0
     private var commitSamplerGen: Int?
+    private var fetchTimings: [UUID: DetailFetchTiming] = [:]
 
     var baseURL: URL { URL(string: "https://\(host)")! }
 
@@ -57,6 +58,7 @@ final class WebSession: NSObject, ObservableObject {
                     return
                 }
                 waiters[id] = cont
+                fetchTimings[id] = DetailFetchTiming(enqueued: ProcessInfo.processInfo.systemUptime)
                 // The active request remains at the front; only waiting reads
                 // are reordered. No navigation, login, or write is preempted.
                 let start = activeID == nil ? 0 : 1
@@ -83,6 +85,7 @@ final class WebSession: NSObject, ObservableObject {
     private func pump() {
         guard activeID == nil, let next = queue.first else { return }
         activeID = next.id
+        fetchTimings[next.id]?.started = ProcessInfo.processInfo.systemUptime
         collectGen += 1
         guard let navigation = webView.load(URLRequest(url: next.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: next.timeout)) else {
             complete(id: next.id, result: .failure(URLError(.unknown)))
@@ -104,6 +107,11 @@ final class WebSession: NSObject, ObservableObject {
     private func complete(id: UUID, result: Result<String, Error>) {
         guard let continuation = waiters.removeValue(forKey: id) else { return }
         timeoutWork.removeValue(forKey: id)?.cancel()
+        if let timing = fetchTimings.removeValue(forKey: id) {
+            let cancelled: Bool
+            if case .failure(let error) = result { cancelled = error is CancellationError } else { cancelled = false }
+            DetailPerformance.logFetch(timing, end: ProcessInfo.processInfo.systemUptime, cancelled: cancelled)
+        }
         queue.removeAll { $0.id == id }
         if activeID == id {
             // Invalidate delayed collection and JS completions BEFORE starting another load.
@@ -201,6 +209,7 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
         let gen = collectGen
         clickAgeGateIfNeeded(id: id, gen: gen)
         commitSamplerGen = gen
+        fetchTimings[id]?.committed = ProcessInfo.processInfo.systemUptime
         collectHTML(attempt: 0, id: id, gen: gen)
     }
 
@@ -220,6 +229,7 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
         let delay: TimeInterval = attempt == 0 ? 0.4 : 0.7
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.activeID == id, gen == self.collectGen else { return }
+            self.fetchTimings[id]?.samples += 1
             self.webView.evaluateJavaScript("({html: document.contentType.includes('xml') ? new XMLSerializer().serializeToString(document) : document.documentElement.outerHTML, ready: document.readyState})") { [weak self] result, error in
                 let snapshot = result as? [String: Any]
                 let html = (snapshot?["html"] as? String) ?? ""

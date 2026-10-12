@@ -27,13 +27,13 @@ enum SiteConfig {
     }
 }
 
-struct ForumCategory: Identifiable, Hashable {
+struct ForumCategory: Identifiable, Hashable, Sendable {
     let id: String
     let name: String
     let boards: [ForumBoard]
 }
 
-struct ForumBoard: Identifiable, Hashable {
+struct ForumBoard: Identifiable, Hashable, Sendable {
     let id: Int
     let name: String
     var today: Int

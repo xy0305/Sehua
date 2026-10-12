@@ -67,6 +67,17 @@ enum SiteImageDecoder {
     }
 }
 
+/// One ImageIO job at a time across visible images. The actor never suspends
+/// during decode, so GIF budgets cannot multiply with an unbounded task burst.
+/// UIImage is constructed privately then handed off immutably to the main actor.
+private actor SiteImageDecodeQueue {
+    static let shared = SiteImageDecodeQueue()
+    func decode(_ data: Data, animationBudget: Int) -> UIImage? {
+        guard !Task.isCancelled else { return nil }
+        return SiteImageDecoder.decode(data, animationBudget: animationBudget)
+    }
+}
+
 struct SiteImage<Placeholder: View>: View {
     let url: URL?
     var referer: String = "https://www.sehuatang.org/"
@@ -114,7 +125,7 @@ struct SiteImage<Placeholder: View>: View {
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-                  let img = await Task.detached(priority: .utility, operation: { SiteImageDecoder.decode(data, animationBudget: animationBudget) }).value else { return }
+                  let img = await SiteImageDecodeQueue.shared.decode(data, animationBudget: animationBudget) else { return }
             try Task.checkCancellation()
             image = img
         } catch {

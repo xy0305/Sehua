@@ -12,6 +12,10 @@ struct ThreadDetailView: View {
     @State private var detail: ThreadDetail?
     @State private var state: LoadState = .idle
     @State private var requestGate = ThreadRequestGate()
+    @State private var readTask: Task<Void, Never>?
+    @State private var readOwner: UUID?
+    @State private var preparedBlocks: [String: [HTML.Content]] = [:]
+    @State private var inlineAttachmentIDs = Set<String>()
     @State private var copied = false
     @State private var playVideos: [SHT115Video] = []
     @State private var showPlayer = false
@@ -114,6 +118,11 @@ struct ThreadDetailView: View {
             if detail == nil || requestGate.source != postURL || requestGate.tid != tid { await load() }
         }
         .onDisappear {
+            // Generation guards alone discard results but leave WebSession occupied.
+            // Cancel our owned read, never unrelated login/write/115 tasks.
+            readTask?.cancel()
+            readTask = nil
+            readOwner = nil
             requestGate.invalidate()
             loadingReplies = false
             if state == .loading { state = .idle }
@@ -192,7 +201,7 @@ struct ThreadDetailView: View {
 
     private func content(_ d: ThreadDetail) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 if d.purchaseState == .unknown {
                     Text("购买状态未确认：可能需要登录、验证或回复/阅读权限。请在原帖确认；不代表免费，不会自动付款。")
                         .font(.footnote).foregroundStyle(ForumChrome.secondary).padding(12)
@@ -270,11 +279,11 @@ struct ThreadDetailView: View {
                 }
 
                 ForEach(d.posts) { post in
-                    VStack(alignment: .leading, spacing: 10) {
+                    LazyVStack(alignment: .leading, spacing: 10) {
                         if d.posts.first?.id != post.id {
                             authorBar(post, isOriginal: false)
                         }
-                        ForEach(Array(bodyBlocks(post.htmlBody).enumerated()), id: \.offset) { _, fragment in
+                        ForEach(Array((preparedBlocks[post.id] ?? []).enumerated()), id: \.offset) { _, fragment in
                             switch fragment {
                             case .richText(let runs):
                                 SelectableDetailText(text: attributedBody(runs), alignment: runs.first?.alignment == "center" ? .center : runs.first?.alignment == "right" ? .right : .left, onLink: openBodyLink)
@@ -304,8 +313,8 @@ struct ThreadDetailView: View {
                                 }
                                 .frame(width: smiley.width, height: smiley.height)
                                 .accessibilityLabel(smiley.alt)
-                            case .images(let urls):
-                                imageStrip(urls)
+                            case .image(let url):
+                                imageStrip([url])
                             }
                         }
                         if let ratings = post.ratings { ratingsCard(ratings) }
@@ -434,35 +443,8 @@ struct ThreadDetailView: View {
         .clipShape(Circle())
     }
 
-    // Coalesce only adjacent image fragments; text always stays at its original position.
-    private enum BodyBlock {
-        case richText([HTML.Inline])
-        case text(String)
-        case images([URL])
-        case emoticon(HTML.Emoticon)
-        case attachment(HTML.Attachment)
-        case attachmentIcon(URL)
-    }
-
-    private func bodyBlocks(_ html: String) -> [BodyBlock] {
-        var result: [BodyBlock] = []
-        for fragment in HTML.orderedContent(in: html, base: postURL) {
-            switch fragment {
-            case .richText(let runs): result.append(.richText(runs))
-            case .text(let text): result.append(.text(text))
-            case .attachment(let item): result.append(.attachment(item))
-            case .attachmentIcon(let url): result.append(.attachmentIcon(url))
-            case .emoticon(let smiley): result.append(.emoticon(smiley))
-            case .image(let url):
-                result.append(.images([url]))
-            }
-        }
-        return result
-    }
-
     private func remainingAttachments(_ detail: ThreadDetail) -> [ThreadAttachment] {
-        let inlineIDs = Set(detail.posts.flatMap { HTML.attachmentMarkup(in: $0.htmlBody, base: postURL).files.map { $0.url.absoluteString } })
-        return detail.attachments.filter { !inlineIDs.contains($0.id) }
+        detail.attachments.filter { !inlineAttachmentIDs.contains($0.id) }
     }
 
     private func attachmentRow(_ item: ThreadAttachment) -> some View {
@@ -639,6 +621,10 @@ struct ThreadDetailView: View {
     }
 
     @MainActor private func loadMoreReplies() async {
+        await ownedRead(replies: true)
+    }
+
+    @MainActor private func performLoadMoreReplies() async {
         let origin = postURL
         let requestedTID = tid
         guard !loadingReplies, state != .loading, let url = nextPageURL,
@@ -660,17 +646,23 @@ struct ThreadDetailView: View {
             let page = HTML.queryInt("page", in: url.absoluteString)
                 ?? HTML.firstMatch(#"thread-\d+-(\d+)-\d+\.html"#, in: url.absoluteString).flatMap(Int.init)
                 ?? (loadedPage + 1)
-            let more = DiscuzParser.parseThreadDetail(html, tid: tid, base: url, fallbackTitle: title)
+            let prepared = try await PreparedThread.load(html: html, tid: requestedTID, base: url, title: title, page: page)
+            try Task.checkCancellation()
+            guard requestGate.accepts(token, tid: tid, source: postURL) else { return }
+            let more = prepared.detail
             guard !more.posts.isEmpty, var current = detail else {
                 replyLoadError = "未取得下一页回复，请检查网页权限后重试"
                 return
             }
             var ids = Set(current.posts.map(\.id))
-            current.posts += more.posts.filter { ids.insert($0.id).inserted }
+            let added = more.posts.filter { ids.insert($0.id).inserted }
+            current.posts += added
+            for post in added { preparedBlocks[post.id] = prepared.blocks[post.id] }
+            inlineAttachmentIDs.formUnion(prepared.inlineAttachmentIDs)
             // Preserve page-one download/115 inputs: later replies are not the OP.
             detail = current
             loadedPage = page
-            nextPageURL = DiscuzParser.nextThreadPage(in: html, tid: tid, base: url, page: page)
+            nextPageURL = prepared.nextPage
         } catch {
             guard requestGate.accepts(token, tid: tid, source: postURL) else { return }
             if !(error is CancellationError) { replyLoadError = error.localizedDescription }
@@ -766,7 +758,22 @@ struct ThreadDetailView: View {
         }
     }
 
-    @MainActor private func load() async {
+    @MainActor private func load() async { await ownedRead(replies: false) }
+
+    @MainActor private func ownedRead(replies: Bool) async {
+        guard readTask == nil, !Task.isCancelled else { return }
+        let owner = UUID()
+        readOwner = owner
+        let task = Task { @MainActor in
+            if replies { await performLoadMoreReplies() } else { await performLoad() }
+        }
+        readTask = task
+        await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
+        // A disappearing view may already have started a new read on reappearance.
+        if readOwner == owner { readTask = nil; readOwner = nil }
+    }
+
+    @MainActor private func performLoad() async {
         let requestedURL = postURL
         let requestedTID = tid
         guard !loadingReplies, state != .loading, !Task.isCancelled,
@@ -782,14 +789,21 @@ struct ThreadDetailView: View {
                 state = .failed("需要过验证，到「我的」里打开网页")
                 return
             }
-            let parsed = DiscuzParser.parseThreadDetail(html, tid: tid, base: postURL, fallbackTitle: title)
+            let page = HTML.queryInt("page", in: requestedURL.absoluteString) ?? Int(HTML.firstMatch(#"thread-\d+-(\d+)-"#, in: requestedURL.path) ?? "1") ?? 1
+            let prepared = try await PreparedThread.load(html: html, tid: requestedTID, base: requestedURL, title: title, page: page)
+            try Task.checkCancellation()
+            guard requestGate.accepts(token, tid: tid, source: postURL) else { return }
+            let parsed = prepared.detail
             guard !parsed.posts.isEmpty else {
                 state = .failed("未取得可读正文，可能需登录或网页权限；请到「我的」检查网页")
                 return
             }
+            preparedBlocks = prepared.blocks
+            inlineAttachmentIDs = prepared.inlineAttachmentIDs
             detail = parsed
-            loadedPage = HTML.queryInt("page", in: postURL.absoluteString) ?? Int(HTML.firstMatch(#"thread-\d+-(\d+)-"#, in: postURL.path) ?? "1") ?? 1
-            nextPageURL = DiscuzParser.nextThreadPage(in: html, tid: tid, base: postURL, page: loadedPage)
+            loadedPage = page
+            nextPageURL = prepared.nextPage
+            DetailPerformance.logPreparation(milliseconds: prepared.parseMilliseconds)
             replyLoadError = nil
             library.record(readingItem)
             state = .idle

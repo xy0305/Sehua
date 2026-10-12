@@ -180,6 +180,20 @@ jobs:
           xcrun swiftc -parse-as-library SeHuaTang/Models/PresentationTiming.swift Regression115/PresentationTimingFixtures.swift -o /tmp/presentation-fixtures
           /tmp/presentation-fixtures
 
+      - name: Detail preparation performance and cancellation regression
+        run: |
+          xcrun swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/PreparedThread.swift SeHuaTang/Models/DetailPerformance.swift Regression115/DetailPerformanceFixtures.swift -o /tmp/detail-performance-fixtures
+          /tmp/detail-performance-fixtures
+
+      - name: Production WKWebView queue cancellation isolation
+        run: |
+          python3 Regression115/DetailHTTPFixture.py > /tmp/detail-http.log 2>&1 &
+          FIXTURE_PID=$!
+          trap 'cat /tmp/detail-http.log; kill "$FIXTURE_PID"' EXIT
+          curl --noproxy '*' --retry 3 --retry-connrefused --max-time 10 -f http://127.0.0.1:18764/ready > /dev/null
+          xcrun swiftc -parse-as-library SeHuaTang/Network/WebSession.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/PresentationTiming.swift SeHuaTang/Models/DetailPerformance.swift Regression115/DetailWebSessionFixtures.swift -o /tmp/detail-web-fixtures
+          /tmp/detail-web-fixtures
+
       - name: Build unsigned (iphoneos)
         run: |
           set -euo pipefail

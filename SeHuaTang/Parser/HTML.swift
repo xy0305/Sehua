@@ -165,7 +165,7 @@ enum HTML {
         }.joined(separator: "\n").replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    struct Inline: Hashable {
+    struct Inline: Hashable, Sendable {
         var text: String
         var href: String?
         var url: URL?
@@ -174,7 +174,7 @@ enum HTML {
         var bold: Bool = false
     }
 
-    enum Content: Hashable {
+    enum Content: Hashable, Sendable {
         case richText([Inline])
         case text(String)
         case image(URL)
@@ -184,7 +184,7 @@ enum HTML {
     }
 
     /// Semantic Discuz smileys only; query strings and unrelated static assets are not evidence.
-    struct Emoticon: Hashable {
+    struct Emoticon: Hashable, Sendable {
         let url: URL
         let width: Double
         let height: Double
@@ -209,7 +209,7 @@ enum HTML {
         return Emoticon(url: url, width: width * scale, height: height * scale, alt: attribute("alt", in: tag) ?? "表情")
     }
 
-    struct Attachment: Hashable {
+    struct Attachment: Hashable, Sendable {
         let url: URL
         let name: String
         var size: String? = nil
