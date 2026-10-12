@@ -41,7 +41,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
                 return "{\"state\":true}"
             }
             if query("ac") == "task_lists" {
-                let fid = mode == "noFileID" ? "" : ",\"file_id\":21"
+                let fid = mode == "noFileID" ? "" : (mode == "targetCIDFileID" ? ",\"file_id\":20" : ",\"file_id\":21")
                 let taskHash = mode == "taskHashMismatch" ? String(repeating: "e", count: 32) : hash
                 return "{\"state\":true,\"page_count\":1,\"tasks\":[{\"info_hash\":\"\(taskHash)\",\"wp_path_id\":20,\"status\":2,\"percentDone\":100\(fid)}]}"
             }
@@ -93,9 +93,9 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         try await restored.runExtractionQueue(settings: input, now: now.addingTimeInterval(301))
         let again = try SHT115Service(storeURL: store, session: session)
         try await again.runExtractionQueue(settings: input, now: now.addingTimeInterval(602))
-        let shouldExtract = ["complete", "noOutputHash", "deleteTimeout", "outputHashMismatch"].contains(mode)
+        let shouldExtract = ["complete", "noFileID", "noOutputHash", "deleteTimeout", "outputHashMismatch", "targetCIDFileID"].contains(mode)
         precondition(parses == (shouldExtract ? 1 : 0), mode + " parse")
-        precondition(deletes == (["complete", "deleteTimeout"].contains(mode) ? 1 : 0), mode + " recycle")
+        precondition(deletes == (["complete", "noFileID", "targetCIDFileID", "deleteTimeout"].contains(mode) ? 1 : 0), mode + " recycle")
         // A future launch only reads/marks exhausted; no unbounded retry or replay.
         try await again.runExtractionQueue(settings: input, now: now.addingTimeInterval(90_000))
         precondition(deletes <= 1)
@@ -106,12 +106,12 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
             let afterCancel = await again.resources()
             precondition(afterCancel[0].extractionQueue?.first?.state == .recycled)
         }
-        if ["noFileID", "existingSource", "outputHashMismatch", "taskHashMismatch"].contains(mode) {
+        if ["existingSource", "outputHashMismatch", "taskHashMismatch"].contains(mode) {
             precondition(final[0].extractionQueue?.first?.state == .exhausted)
         }
         print("PASS queue: " + mode)
     }
     static func main() async throws {
-        for mode in ["complete", "noFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline", "taskHashMismatch"] { try await run(mode) }
+        for mode in ["complete", "noFileID", "targetCIDFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline", "taskHashMismatch"] { try await run(mode) }
     }
 }

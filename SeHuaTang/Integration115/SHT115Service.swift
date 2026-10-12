@@ -343,7 +343,7 @@ public actor SHT115Service {
         // Reuse the existing path read; never add foreground pagination to push.
         // Larger/unknown-count directories are deliberately not enrolled.
         var priorIDs: [String]? = nil
-        if autoExtraction, links.count == 1, submissionPage.total == submissionPage.entries.count,
+        if autoExtraction, submissionPage.total == submissionPage.entries.count,
            Set(submissionPage.entries.map(\.id)).count == submissionPage.entries.count {
             priorIDs = submissionPage.entries.map(\.id)
         }
@@ -381,8 +381,10 @@ public actor SHT115Service {
         if records[i].tasks[t].state == .rejected { throw SHT115Diagnostic(stage: "submit", outcome: "API明确拒绝", code: apiCode) }
         if let priorIDs, records[i].tasks[t].state == .accepted {
             if records[i].extractionQueue == nil { records[i].extractionQueue = [] }
-            let queueItem = SHT115QueueItem(id: UUID(), taskID: records[i].tasks[t].id, createdAt: Date(), priorIDs: priorIDs)
-            records[i].extractionQueue?.append(queueItem)
+            for link in links {
+                let queueItem = SHT115QueueItem(id: UUID(), taskID: records[i].tasks[t].id, createdAt: Date(), priorIDs: priorIDs, url: link)
+                records[i].extractionQueue?.append(queueItem)
+            }
             try save()
         }
         return records[i]
@@ -578,33 +580,19 @@ public actor SHT115Service {
         guard SHT115HTTP.string(status["unzip_status"]) == "4", (Double(SHT115HTTP.string(status["progress"])) ?? 0) >= 100 else {
             return SHT115ExtractionResult(state: .parsing, message: "压缩包解析中；前台刷新继续查询，不重发解析请求")
         }
-        let info = try await http.json("https://webapi.115.com/files/extract_info?" + SHT115HTTP.form([("pick_code", pick), ("file_name", ""), ("paths", "文件"), ("page_count", "999"), ("next_marker", "")]), settings: settings)
-        let contents = info["data"] as? [String: Any] ?? [:]
-        guard SHT115HTTP.success(info), let marker = contents["next_marker"] as? String, marker.isEmpty,
-              let entries = contents["list"] as? [[String: Any]], !entries.isEmpty, entries.count < 999 else { throw SHT115Error.unsafeListing }
-        if contents["count"] != nil {
-            guard Int(SHT115HTTP.string(contents["count"])) == entries.count else { throw SHT115Error.unsafeListing }
-        }
+        var manifestBudget = 2_000
+        let outputs = try await archiveManifest(pick: pick, path: [], settings: settings, budget: &manifestBudget)
         var fields = [("pick_code", pick), ("to_pid", target), ("paths", "文件")]
-        var names = Set<String>()
-        var outputs: [SHT115ExtractionOutput] = []
-        for entry in entries {
-            let name = SHT115HTTP.string(entry["file_name"] ?? entry["name"] ?? entry["n"])
-            guard !name.isEmpty, !name.hasPrefix("."), !(name as NSString).deletingPathExtension.isEmpty,
-                  (name as NSString).deletingPathExtension.count <= 75, (name as NSString).pathExtension.utf8.count <= 254,
-                  !name.contains(where: { "<>\"".contains($0) }), name != ".", name != "..", !name.contains("/"), !name.contains("\\"), !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }), names.insert(name.precomposedStringWithCanonicalMapping.lowercased()).inserted else { throw SHT115Error.unsafeListing }
-            let directory = SHT115HTTP.string(entry["size"]) == "0" && SHT115HTTP.string(entry["ico"]).isEmpty
-            outputs.append(SHT115ExtractionOutput(name: name, directory: directory, size: Int64(SHT115HTTP.string(entry["size"])) ?? -1, sha1: SHT115HTTP.string(entry["sha1"] ?? entry["sha"])))
-            fields.append((directory ? "extract_dir[]" : "extract_file[]", name))
+        let names = Set(outputs.map { $0.name.precomposedStringWithCanonicalMapping.lowercased() })
+        for output in outputs {
+            fields.append((output.directory ? "extract_dir[]" : "extract_file[]", output.name))
         }
         // Revalidate destination immediately before the only extraction write.
         try await http.verify(cid: target, parent: records[i].parentCID, settings: settings)
         let before = try await http.allEntries(cid: target, settings: settings, maximumEntries: 2_000)
-        guard outputs.allSatisfy({ !$0.directory && $0.size > 0 && $0.size <= 1_073_741_824 }),
-              outputs.reduce(Int64(0), { $0 + $1.size }) <= 2_147_483_648,
-              !before.contains(where: { names.contains($0.name.precomposedStringWithCanonicalMapping.lowercased()) }) else {
+        guard !before.contains(where: { names.contains($0.name.precomposedStringWithCanonicalMapping.lowercased()) }) else {
             try persist(.unsupported)
-            return SHT115ExtractionResult(state: .unsupported, message: "仅支持无重名的平铺非空文件（单文件≤1GiB，总计≤2GiB）；保留原包")
+            return SHT115ExtractionResult(state: .unsupported, message: "目标存在同名输出；不覆盖、不解压，保留原包")
         }
         try Task.checkCancellation()
         try persist(.submitting)
@@ -625,6 +613,36 @@ public actor SHT115Service {
             else { try persist(.unknown) }
         } catch { try persist(.unknown); throw SHT115Error.uncertainWrite }
         return SHT115ExtractionResult(state: records[i].extractions?[key] ?? .unknown, message: "已记录云解压结果；接受不代表完成；确认释放完成且新输出存在后，原包移入回收站")
+    }
+
+    /// Script protocol: directory iff numeric size == 0 and ico is absent/empty.
+    /// Read every descendant before submission; never infer completeness from a nonempty folder.
+    private func archiveManifest(pick: String, path: [String], settings: SHT115Settings, budget: inout Int) async throws -> [SHT115ExtractionOutput] {
+        guard path.count <= 5, budget >= 20 else { throw SHT115Error.unsafeListing }
+        budget -= 20 // bounds directory requests as well as entries (at most 100 reads)
+        let fields = [("pick_code", pick), ("file_name", path.last ?? ""),
+                      ("paths", (["文件"] + path).joined(separator: "/")), ("page_count", "999")]
+        let info = try await http.json("https://webapi.115.com/files/extract_info?" + SHT115HTTP.form(fields), settings: settings)
+        let data = info["data"] as? [String: Any] ?? [:]
+        guard SHT115HTTP.success(info), let list = data["list"] as? [[String: Any]], list.count < 999,
+              data["next_marker"] == nil || SHT115HTTP.string(data["next_marker"]).isEmpty,
+              data["count"] == nil || Int(SHT115HTTP.string(data["count"])) == list.count,
+              budget >= list.count, !path.isEmpty || !list.isEmpty else { throw SHT115Error.unsafeListing }
+        budget -= list.count
+        var names = Set<String>(), result: [SHT115ExtractionOutput] = []
+        for entry in list {
+            let name = SHT115HTTP.string(entry["file_name"] ?? entry["name"] ?? entry["n"])
+            guard !name.isEmpty, name != ".", name != "..", name.utf8.count <= 255,
+                  !name.contains("/"), !name.contains("\\"),
+                  !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+                  names.insert(name.precomposedStringWithCanonicalMapping.lowercased()).inserted,
+                  let size = Int64(SHT115HTTP.string(entry["size"])), size >= 0 else { throw SHT115Error.unsafeListing }
+            let directory = size == 0 && SHT115HTTP.string(entry["ico"]).isEmpty
+            let children = directory ? try await archiveManifest(pick: pick, path: path + [name], settings: settings, budget: &budget) : nil
+            result.append(SHT115ExtractionOutput(name: name, directory: directory, size: size,
+                sha1: SHT115HTTP.string(entry["sha1"] ?? entry["sha"]), children: children))
+        }
+        return result
     }
 
     // Only accepted jobs with their own persisted manifest may reach a single-file recycle write.
@@ -650,21 +668,11 @@ public actor SHT115Service {
         try await http.verify(cid: job.targetCID, parent: records[i].parentCID, settings: settings)
         let targetEntries = try await http.allEntries(cid: job.targetCID, settings: settings, maximumEntries: 2_000)
         guard !job.outputs.isEmpty else { return result("输出清单为空，保留原包") }
-        for output in job.outputs {
-            // A nonempty folder or equal byte count is NOT archive integrity evidence.
-            guard !output.directory, SHT115ExtractionPolicy.sha1(output.sha1) else {
-                return result("输出缺少完整性哈希，保留原包")
-            }
-            let matches = targetEntries.filter { $0.name == output.name && $0.isDirectory == output.directory }
-            guard matches.count == 1, let entry = matches.first, entry.id != job.source.id,
-                  !job.priorIDs.contains(entry.id) else { return result("新输出无法唯一验证，保留原包") }
-            if output.directory {
-                guard try await verifiedNonemptyOutput(cid: entry.id, parent: job.targetCID, settings: settings, depth: 0) else {
-                    return result("输出目录尚未验证到文件，保留原包")
-                }
-            } else {
-                guard output.size > 0, entry.size == output.size, entry.sha1?.lowercased() == output.sha1?.lowercased() else { return result("输出大小无法验证，保留原包") }
-            }
+        var verificationBudget = 2_000
+        guard try await verifyOutputs(job.outputs, entries: targetEntries, cid: job.targetCID,
+                                      priorIDs: Set(job.priorIDs), sourceID: job.source.id,
+                                      settings: settings, depth: 0, budget: &verificationBudget) else {
+            return result("新输出清单/身份/大小/哈希未完整核验，保留原包")
         }
         // Refresh exact source parent and identity immediately before deletion; no wildcard, CID or batch.
         guard job.source.directoryCID == job.targetCID else { return result("原包不是本任务目标目录直属文件，保留") }
@@ -693,22 +701,29 @@ public actor SHT115Service {
         return result(job.cleanup == .recycled ? "解压完成且新输出已验证；本任务原压缩包已移入115回收站" :
             "原包清理：" + job.cleanup.rawValue + "；未确认删除，不自动重发，请到115核对")
     }
-    private func verifiedNonemptyOutput(cid: String, parent: String, settings: SHT115Settings, depth: Int) async throws -> Bool {
-        guard depth < 5 else { return false }
-        try await http.verify(cid: cid, parent: parent, settings: settings)
-        let entries = try await http.allEntries(cid: cid, settings: settings)
-        guard !entries.isEmpty, entries.count < 1000 else { return false }
-        var foundFile = false
-        for entry in entries {
-            if entry.isDirectory {
-                guard try await verifiedNonemptyOutput(cid: entry.id, parent: cid, settings: settings, depth: depth + 1) else { return false }
-                foundFile = true
+    private func verifyOutputs(_ outputs: [SHT115ExtractionOutput], entries: [SHT115Entry], cid: String,
+                               priorIDs: Set<String>, sourceID: String, settings: SHT115Settings,
+                               depth: Int, budget: inout Int) async throws -> Bool {
+        guard depth <= 5, budget >= outputs.count + 20 else { return false }
+        budget -= outputs.count + 20
+        // Inside a newly created directory, extra/missing entries also invalidate completeness.
+        if depth > 0 && entries.count != outputs.count { return false }
+        for output in outputs {
+            let matches = entries.filter { $0.name == output.name && $0.isDirectory == output.directory }
+            guard matches.count == 1, let entry = matches.first, entry.id != sourceID,
+                  !priorIDs.contains(entry.id), SHT115Settings.isCID(entry.id), entry.id != "0" else { return false }
+            if output.directory {
+                guard let children = output.children else { return false }
+                let page = try await http.verifiedPage(cid: entry.id, parent: cid, settings: settings)
+                let descendants = try await http.allEntries(cid: entry.id, settings: settings, firstPage: page, maximumEntries: 2_000)
+                guard try await verifyOutputs(children, entries: descendants, cid: entry.id,
+                    priorIDs: priorIDs, sourceID: sourceID, settings: settings, depth: depth + 1, budget: &budget) else { return false }
             } else {
-                guard entry.size > 0 else { return false }
-                foundFile = true
+                guard output.size >= 0, SHT115ExtractionPolicy.sha1(output.sha1), entry.size == output.size,
+                      entry.sha1?.lowercased() == output.sha1?.lowercased() else { return false }
             }
         }
-        return foundFile
+        return true
     }
     /// Explicit cancellation is durable; it never sends a remote write.
     public func cancelExtractionQueue(resourceID: String, queueID: UUID, settings: SHT115Settings) async throws {
@@ -759,34 +774,44 @@ public actor SHT115Service {
             try save()
             do {
                 guard let task = records[i].tasks.first(where: { $0.id == item.taskID }), task.state == .accepted,
-                      task.urls.count == 1, task.urls[0].lowercased().hasPrefix("ed2k://|file|") else {
-                    try update(.retained, "首版仅自动处理本App新提交的单个ed2k压缩包；其他任务保留")
+                      let link = item.url ?? (task.urls.count == 1 ? task.urls.first : nil), task.urls.contains(link),
+                      link.lowercased().hasPrefix("ed2k://|file|") else {
+                    try update(.retained, "仅处理本App已受理且可逐项证明来源的ed2k压缩包；其他链接保留")
                     continue
                 }
-                let parts = task.urls[0].components(separatedBy: "|")
-                guard parts.count >= 6, let size = Int64(parts[3]), size > 0, size <= 1_073_741_824,
-                      ["zip", "7z", "rar"].contains((parts[2] as NSString).pathExtension.lowercased()) else {
-                    try update(.retained, "只支持≤1GiB的zip/7z/rar单包；保留其他资源")
+                let parts = link.components(separatedBy: "|")
+                guard parts.count >= 6, let size = Int64(parts[3]), size > 0,
+                      ["zip", "7z", "rar", "tar", "gz", "bz2", "xz"].contains((parts[2] as NSString).pathExtension.lowercased()) else {
+                    try update(.retained, "链接不是可独立识别的压缩包；分卷/未知类型保留")
+                    continue
+                }
+                // Distinct links with the same name/size cannot be attributed by a directory snapshot.
+                let competing = records[i].tasks.filter { $0.state != .rejected }.flatMap { $0.urls }.filter {
+                    let candidate = $0.components(separatedBy: "|")
+                    return candidate.count >= 6 && candidate[2] == parts[2] && Int64(candidate[3]) == size
+                }
+                guard Set(competing).count == 1 else {
+                    try update(.retained, "多链接同名同大小，无法逐项归属；保留")
                     continue
                 }
                 let inspection = try await inspect(resourceID: resourceID, settings: settings, background: true, includeFiles: false)
                 guard !inspection.taskPagesTruncated,
                       let freshTask = inspection.resource.tasks.first(where: { $0.id == item.taskID }),
-                      freshTask.progress.count == 1, let progress = freshTask.progress.first,
+                      let progress = freshTask.progress.first(where: { $0.url == link }),
                       progress.status == 2, progress.percent == 100,
-                      progress.infoHash.lowercased() == Self.infoHash(task.urls[0]),
-                      let fid = progress.fileID, SHT115Settings.isCID(fid), fid != "0",
-                      !item.priorIDs.contains(fid) else {
-                    try update(.waiting, "离线完成/文件ID/来源证据尚不完整；只读等待，未解压未删除")
+                      progress.infoHash.lowercased() == Self.infoHash(link) else {
+                    try update(.waiting, "离线任务精确hash+目标CID完成证据不足；只读等待，未解压未删除")
                     continue
                 }
-                // Exact target only. No recursive discovery and no unrelated archive candidates.
+                // task.file_id may be the target CID, NOT a file entity ID. Source proof uses
+                // the complete pre-submit snapshot + unique new name/size + SHA1/pick_code.
                 guard let target = inspection.resource.directoryCID else { throw SHT115Error.invalidInput }
                 let entries = try await http.allEntries(cid: target, settings: settings, maximumEntries: 2_000)
-                guard let entry = entries.first(where: { $0.id == fid && !$0.isDirectory }),
-                      entry.name == parts[2], entry.size == size, SHT115ExtractionPolicy.sha1(entry.sha1),
-                      !entry.pickCode.isEmpty else {
-                    try update(.retained, "源文件ID/名称/大小/哈希不能证明同一新产物；保留")
+                let matching = entries.filter { !$0.isDirectory && $0.name == parts[2] && $0.size == size }
+                guard matching.count == 1, let entry = matching.first, !item.priorIDs.contains(entry.id),
+                      entry.id != target, SHT115Settings.isCID(entry.id), entry.id != "0",
+                      SHT115ExtractionPolicy.sha1(entry.sha1), !entry.pickCode.isEmpty else {
+                    try update(.waiting, "目录快照新产物的唯一名称/大小/哈希尚不足；保留并只读等待")
                     continue
                 }
                 let archive = SHT115Archive(id: entry.id, name: entry.name, directoryCID: target,
@@ -805,7 +830,7 @@ public actor SHT115Service {
                     try update(.retained, "解压未获安全证明；保留原包，不重发未知写入")
                 } else if let job = records[i].extractionJobs?[archive.id], job.cleanup != .waiting {
                     try update(.retained, "回收状态：" + job.cleanup.rawValue + "；不重发")
-                } else if let job = records[i].extractionJobs?[archive.id], job.outputs.contains(where: { $0.directory || !SHT115ExtractionPolicy.sha1($0.sha1) }) {
+                } else if let job = records[i].extractionJobs?[archive.id], job.outputs.contains(where: { !$0.hasCompleteIdentity }) {
                     try update(.retained, "输出缺少完整性哈希；解压后保留原包，不自动回收")
                 } else {
                     try update(.processing, result.message)

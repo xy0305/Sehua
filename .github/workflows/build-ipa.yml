@@ -40,6 +40,11 @@ jobs:
           sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
 
+      - name: Uploaded 115 extraction protocol and recursive identity regression
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/ExtractReferenceFixtures.swift -o /tmp/extract-reference-fixtures
+          /tmp/extract-reference-fixtures
+
       - name: Bounded extraction queue and source provenance regression
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/QueueFixtures.swift -o /tmp/queue-fixtures
