@@ -32,6 +32,27 @@ struct ThreadRequestGate {
 }
 
 enum HTML {
+    /// Compilation dominated the controlled detail fixture (the same selectors
+    /// are called once per tag). Keep a bounded cache local to the current OS
+    /// thread: sync parsing never suspends, so no mutable cache crosses executors.
+    /// Expressions contain patterns only, never HTML, accounts or cookie values.
+    private static func expression(_ pattern: String, options: NSRegularExpression.Options) -> NSRegularExpression? {
+        let dictionary = Thread.current.threadDictionary
+        let name = "SeHuaTang.HTML.regex.v1"
+        let cache: NSCache<NSString, NSRegularExpression>
+        if let existing = dictionary[name] as? NSCache<NSString, NSRegularExpression> { cache = existing }
+        else {
+            cache = NSCache<NSString, NSRegularExpression>()
+            cache.countLimit = 128
+            dictionary[name] = cache
+        }
+        let key = "\(options.rawValue):\(pattern)" as NSString
+        if let compiled = cache.object(forKey: key) { return compiled }
+        guard let compiled = try? NSRegularExpression(pattern: pattern, options: options) else { return nil }
+        cache.setObject(compiled, forKey: key)
+        return compiled
+    }
+
     static func unescape(_ s: String) -> String {
         let decoded = s.replacingOccurrences(of: "&amp;", with: "&")
             .replacingOccurrences(of: "&nbsp;", with: " ")
@@ -42,7 +63,7 @@ enum HTML {
             .replacingOccurrences(of: "<br>", with: "\n")
             .replacingOccurrences(of: "<br/>", with: "\n")
             .replacingOccurrences(of: "<br />", with: "\n")
-        guard let regex = try? NSRegularExpression(pattern: #"&#(x[0-9a-f]+|[0-9]+);"#, options: [.caseInsensitive]) else { return decoded }
+        guard let regex = expression(#"&#(x[0-9a-f]+|[0-9]+);"#, options: [.caseInsensitive]) else { return decoded }
         var result = decoded
         for match in regex.matches(in: decoded, range: NSRange(decoded.startIndex..., in: decoded)).reversed() {
             guard let range = Range(match.range, in: result), let valueRange = Range(match.range(at: 1), in: decoded) else { continue }
@@ -64,7 +85,7 @@ enum HTML {
     }
 
     static func firstMatch(_ pattern: String, in text: String, group: Int = 1) -> String? {
-        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return nil }
+        guard let re = expression(pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return nil }
         let range = NSRange(text.startIndex..., in: text)
         guard let m = re.firstMatch(in: text, options: [], range: range), m.numberOfRanges > group else { return nil }
         guard let r = Range(m.range(at: group), in: text) else { return nil }
@@ -72,7 +93,7 @@ enum HTML {
     }
 
     static func allMatches(_ pattern: String, in text: String, group: Int = 1) -> [String] {
-        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return [] }
+        guard let re = expression(pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return [] }
         let range = NSRange(text.startIndex..., in: text)
         return re.matches(in: text, options: [], range: range).compactMap { m in
             guard m.numberOfRanges > group, let r = Range(m.range(at: group), in: text) else { return nil }
@@ -97,7 +118,7 @@ enum HTML {
         // Comments and raw-text elements are consumed as one token, so apparent tags
         // in JavaScript, CSS or comments cannot close a message container.
         let pattern = #"<!--[\s\S]*?-->|<(script|style)\b[^>]*>[\s\S]*?</\1\s*>|</?[A-Za-z][A-Za-z0-9:_-]*(?:\s+(?:[^>\"']|\"[^\"]*\"|'[^']*')*)?\s*/?>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
+        guard let regex = expression(pattern, options: [.caseInsensitive]) else { return [] }
         return regex.matches(in: html, range: NSRange(html.startIndex..., in: html)).compactMap { match in
             guard let range = Range(match.range, in: html) else { return nil }
             let raw = String(html[range])

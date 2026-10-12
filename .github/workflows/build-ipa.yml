@@ -42,7 +42,8 @@ jobs:
 
       - name: Detail preparation performance and cancellation regression
         run: |
-          xcrun swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/PreparedThread.swift SeHuaTang/Models/DetailPerformance.swift Regression115/DetailPerformanceFixtures.swift -o /tmp/detail-performance-fixtures
+          python3 Regression115/DetailBaseline.py
+          xcrun swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors /tmp/detail-baseline70/HTML.swift /tmp/detail-baseline70/DiscuzParser.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/PreparedThread.swift SeHuaTang/Models/DetailPerformance.swift Regression115/DetailPerformanceFixtures.swift -o /tmp/detail-performance-fixtures
           /tmp/detail-performance-fixtures
 
       - name: Production WKWebView queue cancellation isolation

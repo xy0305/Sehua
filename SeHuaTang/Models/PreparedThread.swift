@@ -2,7 +2,7 @@ import Foundation
 
 /// Immutable, response-scoped presentation. No cookies, shared cache, UIKit or
 /// WebKit crosses the worker boundary. HTML/DiscuzParser have no mutable statics;
-/// every regex and intermediate buffer is local to the call.
+/// compiled regex caches are bounded and thread-local; all content buffers are local.
 struct PreparedThread: Sendable {
     let detail: ThreadDetail
     let blocks: [String: [HTML.Content]]
