@@ -44,6 +44,11 @@ import WebKit
         try await Task.sleep(nanoseconds: 6_100_000_000)
         let next = try await session.fetchHTML(origin + "/next?mod=viewthread", interactive: true)
         precondition(next.contains("FAST complete body"))
+        let resourceStart = ProcessInfo.processInfo.systemUptime
+        let resources = try await session.fetchHTML(origin + "/resources?mod=viewthread", interactive: true)
+        let resourceElapsed = ProcessInfo.processInfo.systemUptime - resourceStart
+        precondition(resourceElapsed >= 4 && resources.contains("src=\"/image\""), "must retain images and complete-document readiness")
+        print("CONTROLLED slow-image complete-document wait_s=\(resourceElapsed); image source retained, not removed for speed")
         print("CONTROLLED production WKWebView queue: build70_missing_owner_cancel_to_body_s=\(baselineElapsed) new_owner_cancel_to_body_s=\(elapsed); normal .4/.7 complete+stable DOM gates unchanged")
         print("PASS actual production WebSession active/queued cancellation, next read, stale delegate/JS isolation")
         window.close()

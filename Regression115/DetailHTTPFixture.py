@@ -10,7 +10,8 @@ class Handler(BaseHTTPRequestHandler):
    data=b'x'
   else:
    tag='SLOW' if self.path.startswith('/slow') else 'FAST'
-   data=("<html><body><div class='message'>"+tag+" complete body</div></body></html>").encode()
+   media="<img src='/image'>" if self.path.startswith('/resources') else ''
+   data=("<html><body><div class='message'>"+tag+" complete body"+media+"</div></body></html>").encode()
   try:
    self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
   except (BrokenPipeError, ConnectionResetError): pass
