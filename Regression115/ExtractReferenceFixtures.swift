@@ -79,7 +79,13 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
                 if mode == "unsafeName" { entry["file_name"] = "../movie.mp4" }
                 precondition(query("paths") == "文件")
                 if nested && query("file_name").isEmpty { entry = ["file_name": "wrapper", "size": "0", "file_category": 0] }
-                if nested && !query("file_name").isEmpty { precondition(query("file_name") == "wrapper") }
+                if nested && !query("file_name").isEmpty {
+                    if mode == "nestedTwoLevels" && query("file_name") == "wrapper" {
+                        entry = ["file_name": "inner", "size": 0, "file_category": 0]
+                    } else {
+                        precondition(query("file_name") == (mode == "nestedTwoLevels" ? "wrapper/inner" : "wrapper"))
+                    }
+                }
                 var data: [String: Any] = ["list": [entry]] // script requires neither count nor marker
                 if mode == "truncatedManifest" { data["next_marker"] = "more" }
                 if mode == "badManifestCount" { data["count"] = 2 }
@@ -105,7 +111,11 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
             }
             precondition(path == "/files", "unexpected read " + path)
             var entries: [[String: Any]] = []
-            if query("cid") == "23" {
+            if mode == "nestedTwoLevels" && query("cid") == "23" {
+                entries.append(["cid": "24", "n": "inner"])
+            } else if mode == "nestedTwoLevels" && query("cid") == "24" {
+                entries.append(["fid": "25", "n": "movie.mp4", "s": outputSize, "pc": "outputPC", "sha": outputSHA])
+            } else if query("cid") == "23" {
                 if mode != "nestedMissing" {
                     entries.append(["fid": "24", "n": "movie.mp4", "s": outputSize, "pc": "outputPC", "sha": mode == "nestedHashMismatch" ? sha : outputSHA])
                 }
@@ -120,7 +130,8 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
                 }
             }
             var pathItems: [[String: String]] = [["cid": "0"], ["cid": "10"], ["cid": "20"]]
-            if query("cid") == "23" { pathItems.append(["cid": "23"]) }
+            if query("cid") == "23" || query("cid") == "24" { pathItems.append(["cid": "23"]) }
+            if query("cid") == "24" { pathItems.append(["cid": "24"]) }
             let response: [String: Any] = ["state": true, "count": entries.count, "data": entries,
                 "path": pathItems, "offset": Int(query("offset")) ?? 0, "limit": 100,
                 "order": "file_name", "is_asc": 1, "fc_mix": 1]
@@ -136,7 +147,7 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
         for n in 1...3 { try await resumed.runExtractionQueue(settings: settings, now: now.addingTimeInterval(Double(n * 301))) }
         let shouldParse = !["wrongTarget", "noSourceHash", "duplicateSource", "batchAmbiguous"].contains(mode)
         let shouldRelease = shouldParse && !["parseTimeout", "unsafeName", "truncatedManifest", "badManifestCount", "duplicateManifest", "targetCollision", "deepManifest"].contains(mode)
-        let shouldDelete = ["largeFlat", "categoryEmptyFile", "nestedComplete", "batchPartial"].contains(mode)
+        let shouldDelete = ["largeFlat", "categoryEmptyFile", "nestedComplete", "nestedTwoLevels", "batchPartial"].contains(mode)
         precondition(parses == (shouldParse ? 1 : 0), mode + " parse count \(parses)")
         precondition(releases == (shouldRelease ? 1 : 0), mode + " release count \(releases)")
         precondition(deletes == (shouldDelete ? 1 : 0), mode + " recycle count \(deletes)")
@@ -149,6 +160,6 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
         print("PASS uploaded-reference production protocol: " + mode)
     }
     static func main() async throws {
-        for mode in ["largeFlat", "categoryEmptyFile", "deepManifest", "nestedComplete", "nestedMissing", "nestedExtra", "nestedHashMismatch", "nestedNoHash", "noOutputHash", "wrongTarget", "noSourceHash", "duplicateSource", "batchPartial", "batchAmbiguous", "parseTimeout", "releaseTimeout", "releasePending", "unsafeName", "truncatedManifest", "badManifestCount", "duplicateManifest", "targetCollision"] { try await run(mode) }
+        for mode in ["largeFlat", "categoryEmptyFile", "deepManifest", "nestedComplete", "nestedTwoLevels", "nestedMissing", "nestedExtra", "nestedHashMismatch", "nestedNoHash", "noOutputHash", "wrongTarget", "noSourceHash", "duplicateSource", "batchPartial", "batchAmbiguous", "parseTimeout", "releaseTimeout", "releasePending", "unsafeName", "truncatedManifest", "badManifestCount", "duplicateManifest", "targetCollision"] { try await run(mode) }
     }
 }
