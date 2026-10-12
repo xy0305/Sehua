@@ -1,0 +1,16 @@
+name: Extraction iphoneos independent validation
+on:
+  push:
+    branches: [ validation/extract-iphoneos ]
+jobs:
+  iphoneos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select verified Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+          xcodebuild -version
+      - name: Build unsigned iphoneos without publishing
+        run: |
+          xcodebuild -project SeHuaTang.xcodeproj -scheme SeHuaTang -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES=YES build
