@@ -433,7 +433,7 @@ private enum ThreadDOMReadiness {
         && !placeholder && !restricted && !pendingScript && !unknownModule && !unsafeFrame && !mediaCallback && !s.loadHandlers
         && !window.onload && !window.onmessage && !document.querySelector('[onload],[onerror]') && !s.io && !s.timers.size && !s.intervals.size
         && performance.now()-s.last>=900);
-      const settled=!!(s && !s.failed && !s.io && !s.timers.size && performance.now()-s.last>=900);
+      const settled=!!(s && !s.failed && !s.io && !s.timers.size && !s.intervals.size && performance.now()-s.last>=900);
       return {html,ready:document.readyState,signature,safe,settled};
     })();
     """#

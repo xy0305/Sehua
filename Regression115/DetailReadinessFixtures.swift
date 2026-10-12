@@ -24,6 +24,8 @@ import WebKit
         precondition(oldTime>=5 && newTime<4 && old==new, "slow unrelated resources must not gate complete body; DOM/media must remain identical")
         let (_,unsafeTime) = try await read("/unsafe-frame",.threadBody)
         precondition(unsafeTime>=5,"an unknown script-capable iframe cannot be assumed unrelated to thread injection")
+        let (interval,intervalTime) = try await read("/interval-late",.threadBody)
+        precondition(intervalTime>=7 && DiscuzParser.messageBodies(in:interval).joined().contains("FINAL interval body"))
         let (streamed,streamedTime) = try await read("/streamed",.threadBody)
         precondition(streamedTime>=3 && DiscuzParser.messageBodies(in:streamed).joined().contains("FINAL streamed body"))
         let (late,lateTime) = try await read("/late",.threadBody)

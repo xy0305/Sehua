@@ -28,6 +28,8 @@ class Handler(BaseHTTPRequestHandler):
    script=''
    if path=='/unsafe-frame':
     media="<img src='/slow-media'><iframe src='/slow-media'></iframe>"
+   if path=='/interval-late':
+    script="<script>const id=setInterval(()=>{clearInterval(id);document.querySelector('#m').textContent='FINAL interval body'},6200)</script>"
    if path=='/streamed':
     script="<script>fetch('/stream-data').then(r=>r.text()).then(t=>{document.querySelector('#m').textContent=t})</script>"
    if path=='/late':
