@@ -47,10 +47,16 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
             precondition(request.value(forHTTPHeaderField: "Cookie") == settings.cookie)
             var obj: [String: Any]
             if request.httpMethod == "POST" {
-                precondition(url.path == "/web/lixian/") // never create folders, extract, delete or play
+                precondition(url.absoluteString == "https://115.com/web/lixian/?ct=lixian&ac=add_task_urls") // never create folders, extract, delete or play
                 writes += 1
                 let payload = body(request)
                 precondition(payload.contains("wp_path_id=" + cid))
+                let fields = Dictionary(uniqueKeysWithValues: payload.split(separator: "&").map { part -> (String, String) in
+                    let pair = part.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                    return (String(pair[0]).removingPercentEncoding!, String(pair[1]).removingPercentEncoding!)
+                })
+                precondition(fields["uid"] == "123" && fields["sign"] == "fake-sign")
+                precondition(fields["url[0]"] == ed && fields["url[1]"] == magnet && fields["urls[0]"] == nil)
                 precondition(!payload.contains("cname="))
                 // Journal must already be durable before transport starts.
                 let saved = try JSONDecoder().decode([SHT115Resource].self, from: Data(contentsOf: store))
@@ -110,6 +116,13 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
             try JSONEncoder().encode([saved, post]).write(to: store, options: .atomic)
             let mixed = try SHT115Service(storeURL: store, session: session)
             do { _ = try await mixed.submit(urls: [ed], resourceID: post.id, settings: settings); preconditionFailure("post bypass") } catch {}
+            precondition(writes == 1)
+            // Original post locks survive entering a fresh manual record.
+            post.tasks = saved.tasks
+            saved.tasks = []; saved.extractionQueue = []
+            try JSONEncoder().encode([saved, post]).write(to: store, options: .atomic)
+            let originalLocked = try SHT115Service(storeURL: store, session: session)
+            do { _ = try await originalLocked.submit(urls: [ed], resourceID: saved.id, settings: settings); preconditionFailure("manual bypass of original post") } catch {}
             precondition(writes == 1)
         }
         precondition(reads >= 3)
