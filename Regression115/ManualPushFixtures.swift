@@ -88,7 +88,7 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
         precondition(again.id == resource.id)
         let otherSettings = SHT115Settings(cookie: settings.cookie, parentCID: "99")
         do { _ = try await service.submit(urls: [ed], resourceID: resource.id, settings: otherSettings); preconditionFailure("path changed") } catch {}
-        for invalid in [[], ["https://example.invalid/password"], ["magnet:?xt=invalid"]] {
+        for invalid in [[], ["https://example.invalid/password"], ["magnet:?xt=invalid"], [magnet.replacingOccurrences(of: "magnet:", with: "https://example.invalid/")], [ed.replacingOccurrences(of: "|/", with: "|bad|/")]] {
             do { _ = try await service.submit(urls: invalid, resourceID: resource.id, settings: settings); preconditionFailure("invalid") } catch {}
         }
         precondition(writes == 0)

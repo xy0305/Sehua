@@ -357,7 +357,10 @@ public actor SHT115Service {
         }), let cid = records[i].directoryCID, !records[i].directoryWritePending else { throw SHT115Error.invalidInput }
         if records[i].manualInput == true {
             guard links.allSatisfy({ link in
-                if link.lowercased().hasPrefix("ed2k://|file|") { return true }
+                if link.lowercased().hasPrefix("ed2k://|file|") {
+                    return link.range(of: #"(?i)^ed2k://\|file\|[^|<>\r\n]+\|[0-9]+\|[a-f0-9]{32}(?:\|h=[a-z2-7]{3,64})?\|/$"#, options: .regularExpression) != nil
+                }
+                guard URLComponents(string: link)?.scheme?.lowercased() == "magnet" else { return false }
                 return link.range(of: #"(?i)[?&]xt=urn:(?:btih:(?:[a-f0-9]{40}|[a-z2-7]{32})|btmh:1220[a-f0-9]{64})(?=&|$)"#, options: .regularExpression) != nil
             }) else { throw SHT115Error.invalidInput }
         }
