@@ -9,25 +9,64 @@ final class PushLatencyProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var postResponse = "{\"state\":true}"
     nonisolated(unsafe) static var parentCount = 0
     nonisolated(unsafe) static var journalURL: URL? = nil
+    nonisolated(unsafe) static var folderName = ""
+    nonisolated(unsafe) static var mkdirResponse = "{\"state\":true,\"cid\":\"20\"}"
+    nonisolated(unsafe) static var wrongFolderName = false
+    static func fields(_ request: URLRequest) -> [String: String] {
+        var data = request.httpBody ?? Data()
+        if data.isEmpty, let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let n = stream.read(&buffer, maxLength: buffer.count)
+                if n <= 0 { break }; data.append(contentsOf: buffer.prefix(n))
+            }
+        }
+        return Dictionary(uniqueKeysWithValues: String(decoding: data, as: UTF8.self).split(separator: "&").map {
+            let pair = $0.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            return (String(pair[0]).removingPercentEncoding!, String(pair[1]).removingPercentEncoding!)
+        })
+    }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         let url = request.url!
         let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let isSnapshot = q.contains { $0.name == "o" }
-        let route = q.contains { $0.name == "ac" && $0.value == "task_lists" } ? "taskGET" : request.httpMethod == "POST" ? "POST" : url.path == "/files" ? (isSnapshot ? "snapshot" : "identity") : "signature"
+        let route = q.contains { $0.name == "ac" && $0.value == "task_lists" } ? "taskGET" : url.path == "/files/add" ? "mkdir" : request.httpMethod == "POST" ? "POST" : url.path == "/files" ? (isSnapshot ? "snapshot" : "identity") : "signature"
         Self.routes.append(route); Self.starts.append(Date())
         if route == "taskGET" || (isSnapshot && Self.slowSnapshot) { return } // indefinitely pending read
         let text: String
-        if route == "POST" {
+        if route == "mkdir" {
+            let fields = Self.fields(request)
+            Self.folderName = fields["cname"]!
+            precondition(fields["pid"] == "10")
+            if let store = Self.journalURL {
+                let saved = try! JSONDecoder().decode([SHT115Resource].self, from: Data(contentsOf: store))
+                precondition(saved.contains { $0.directoryWritePending && $0.directoryJournal?.last?.state == .submitting }, "durable mkdir intent before POST")
+            }
+            if Self.mkdirResponse == "timeout" { client?.urlProtocol(self, didFailWithError: URLError(.timedOut)); return }
+            text = Self.mkdirResponse
+        }
+        else if route == "POST" {
             if let store = Self.journalURL {
                 let saved = try! JSONDecoder().decode([SHT115Resource].self, from: Data(contentsOf: store))
                 precondition(saved.contains { $0.tasks.contains { $0.state == .submitting } }, "durable journal before POST")
+                precondition(Self.fields(request)["wp_path_id"] == "20", "offline POST must target new post CID, never parent")
             }
             text = Self.postResponse
         }
         else if route == "signature" { text = "{\"state\":true,\"sign\":\"fixture\",\"time\":1}" }
-        else { text = "{\"state\":true,\"count\":\(Self.parentCount),\"data\":[],\"path\":[{\"cid\":\"0\"},{\"cid\":\"10\"}],\"offset\":0,\"limit\":100,\"order\":\"file_name\",\"is_asc\":1,\"fc_mix\":1}" }
+        else {
+            let cid = q.first { $0.name == "cid" }?.value ?? "10"
+            if cid == "20", let store = Self.journalURL {
+                let saved = try! JSONDecoder().decode([SHT115Resource].self, from: Data(contentsOf: store))
+                precondition(saved.contains { $0.directoryCID == "20" && $0.directoryJournal?.last?.state == .accepted }, "accepted mkdir CID must be durable before fresh verification")
+            }
+            let leaf = cid == "20" ? ",\"name\":\"\(Self.wrongFolderName ? "wrong" : Self.folderName)\"" : ""
+            let path = cid == "20" ? "[{\"cid\":\"0\"},{\"cid\":\"10\"},{\"cid\":\"20\"\(leaf)}]" : "[{\"cid\":\"0\"},{\"cid\":\"10\"}]"
+            text = "{\"state\":true,\"count\":\(cid == "20" ? 0 : Self.parentCount),\"data\":[],\"path\":\(path),\"offset\":0,\"limit\":100,\"order\":\"file_name\",\"is_asc\":1,\"fc_mix\":1}"
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + (route == "signature" ? Self.signatureDelay : 0.05)) { [self] in
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: Data(text.utf8)); client?.urlProtocolDidFinishLoading(self)
@@ -120,22 +159,26 @@ actor GrantLog {
         precondition(PushLatencyProtocol.routes == ["identity"], "target mismatch must stop before signature/write")
         let directStore = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directStore) }
+        var historicalDirect = SHT115Resource(id: "old-direct", account: settings.account, tid: "1278", directoryName: "legacy parent", parentCID: "10", directoryCID: "10", directoryWritePending: false, tasks: [])
+        historicalDirect.directInput = true
+        try JSONEncoder().encode([historicalDirect]).write(to: directStore)
         let directService = try SHT115Service(storeURL: directStore, session: session)
         PushLatencyProtocol.parentCount = 1278
         PushLatencyProtocol.journalURL = directStore
         PushLatencyProtocol.routes = []; PushLatencyProtocol.starts = []
         let directStart = Date()
-        let direct = try await directService.createAndSubmitResource(urls: [link], tid: "1278", title: "direct", settings: settings, autoExtraction: true)
-        precondition(direct.directInput == true && direct.tid == "1278" && direct.directoryCID == "10")
+        let direct = try await directService.createAndSubmitResource(urls: [link], tid: "1278", title: "post", settings: settings, autoExtraction: false)
+        precondition(direct.directInput != true && direct.tid == "1278" && direct.directoryCID == "20" && direct.directoryName == "post_tid-1278")
         precondition(direct.extractionQueue?.isEmpty != false)
-        precondition(PushLatencyProtocol.routes == ["identity", "signature", "POST"], "no enumeration/mkdir/task preflight/snapshot")
-        print("PASS direct production routes=\(PushLatencyProtocol.routes) seconds=\(Date().timeIntervalSince(directStart))")
+        precondition(PushLatencyProtocol.routes == ["identity", "mkdir", "identity", "signature", "POST"], "0 parent enumeration, 0 task preflight, mkdir exactly once")
+        print("PASS post-folder 1278-parent controlled production routes=\(PushLatencyProtocol.routes) seconds=\(Date().timeIntervalSince(directStart))")
         for pair in zip(PushLatencyProtocol.starts, PushLatencyProtocol.starts.dropFirst()) {
             precondition(pair.1.timeIntervalSince(pair.0) >= 1.08)
         }
         PushLatencyProtocol.routes = []
-        let listing = try await directService.listVideos(resourceID: direct.id, settings: settings)
-        precondition(listing.videos.isEmpty && PushLatencyProtocol.routes.isEmpty, "shared directory must not attribute unrelated videos")
+        let reused = try await directService.createOrReuseResource(tid: "1278", title: "post", settings: settings)
+        precondition(reused.directoryCID == "20" && PushLatencyProtocol.routes == ["identity"], "existing proven CID reused with fresh name/parent path, no mkdir")
+        PushLatencyProtocol.routes = []
         do { _ = try await directService.createAndSubmitResource(urls: [link + "&dn=renamed"], tid: "1279", title: "other", settings: settings); preconditionFailure("cross-post hash lock") } catch {}
         precondition(PushLatencyProtocol.routes.isEmpty, "local hash lock must precede any requests")
         PushLatencyProtocol.postResponse = "{\"state\":true,\"result\":[{\"state\":true},{\"state\":false}]}"
@@ -143,7 +186,7 @@ actor GrantLog {
         let c = "magnet:?xt=urn:btih:" + String(repeating: "c", count: 40)
         PushLatencyProtocol.routes = []
         do { _ = try await directService.createAndSubmitResource(urls: [b, c], tid: "1280", title: "partial", settings: settings); preconditionFailure("partial acceptance is unknown") } catch {}
-        precondition(PushLatencyProtocol.routes == ["identity", "signature", "POST"])
+        precondition(PushLatencyProtocol.routes == ["identity", "mkdir", "identity", "signature", "POST"])
         PushLatencyProtocol.routes = []
         let restarted = try SHT115Service(storeURL: directStore, session: session)
         do { _ = try await restarted.createAndSubmitResource(urls: [b], tid: "1281", title: "cross post", settings: settings); preconditionFailure("unknown replay after restart") } catch {}
@@ -157,10 +200,49 @@ actor GrantLog {
         precondition(PushLatencyProtocol.routes.isEmpty)
         let retained = await legacyService.resources().first { $0.id == "legacy" }
         precondition(retained?.directoryCID == "99" && retained?.directoryWritePending == true && retained?.tasks.first?.state == .unknown)
+        let pendingStore = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: pendingStore) }
+        let pendingDirectory = SHT115Resource(id: "old-unknown", account: settings.account, tid: "950", directoryName: "old_tid-950", parentCID: "10", directoryCID: nil, directoryWritePending: true, tasks: [])
+        try JSONEncoder().encode([pendingDirectory]).write(to: pendingStore)
+        let pendingService = try SHT115Service(storeURL: pendingStore, session: session)
+        PushLatencyProtocol.routes = []
+        do { _ = try await pendingService.createAndSubmitResource(urls: [c], tid: "950", title: "changed", settings: settings); preconditionFailure("old directory unknown bypass") } catch {}
+        precondition(PushLatencyProtocol.routes.isEmpty, "old directory unknown must not trigger reads, mkdir, sign or offline write")
+        PushLatencyProtocol.postResponse = "{\"state\":true}"
+        for response in ["{\"state\":false,\"errno\":20004}", "timeout"] {
+            let failureStore = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: failureStore) }
+            PushLatencyProtocol.journalURL = failureStore; PushLatencyProtocol.mkdirResponse = response
+            PushLatencyProtocol.routes = []
+            let failed = try SHT115Service(storeURL: failureStore, session: session)
+            do { _ = try await failed.createAndSubmitResource(urls: [c], tid: "900", title: "conflict", settings: settings); preconditionFailure("mkdir failure") } catch {}
+            precondition(PushLatencyProtocol.routes == ["identity", "mkdir"], "mkdir conflict/timeout must stop before sign/offline POST")
+            PushLatencyProtocol.routes = []
+            let recovered = try SHT115Service(storeURL: failureStore, session: session)
+            do { _ = try await recovered.createAndSubmitResource(urls: [c], tid: "900", title: "renamed", settings: settings); preconditionFailure("mkdir replay") } catch {}
+            precondition(PushLatencyProtocol.routes.isEmpty, "conflict and timeout survive restart and changed title without retry")
+        }
+        PushLatencyProtocol.mkdirResponse = "{\"state\":true,\"cid\":\"20\"}"
+        let acceptedStore = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: acceptedStore) }
+        PushLatencyProtocol.journalURL = acceptedStore; PushLatencyProtocol.wrongFolderName = true; PushLatencyProtocol.routes = []
+        let acceptedService = try SHT115Service(storeURL: acceptedStore, session: session)
+        do { _ = try await acceptedService.createAndSubmitResource(urls: [c], tid: "901", title: "accepted", settings: settings); preconditionFailure("wrong mkdir path name") } catch {}
+        precondition(PushLatencyProtocol.routes == ["identity", "mkdir", "identity"])
+        let acknowledged = await acceptedService.resources()
+        precondition(acknowledged[0].directoryCID == "20" && acknowledged[0].directoryJournal?.last?.state == .accepted && acknowledged[0].directoryWritePending)
+        PushLatencyProtocol.routes = []
+        let wrongAccount = SHT115Settings(cookie: "UID=456_A; CID=fixture; SEID=fixture", parentCID: "10")
+        do { _ = try await acceptedService.submit(urls: [c], resourceID: acknowledged[0].id, settings: wrongAccount); preconditionFailure("account mismatch") } catch {}
+        precondition(PushLatencyProtocol.routes.isEmpty)
+        PushLatencyProtocol.wrongFolderName = false
+        let acceptedRestart = try SHT115Service(storeURL: acceptedStore, session: session)
+        _ = try await acceptedRestart.createAndSubmitResource(urls: [c], tid: "901", title: "accepted", settings: settings)
+        precondition(PushLatencyProtocol.routes == ["identity", "signature", "POST"], "acknowledged creation resumes with fresh path, no second mkdir")
         PushLatencyProtocol.postResponse = "{\"state\":true}"
         PushLatencyProtocol.journalURL = nil
         PushLatencyProtocol.parentCount = 0
-        print("PASS direct 1278-item identity-only target, durable pre-POST journal, partial batch unknown, cross-post restart/legacy locks and shared-video isolation")
+        print("PASS post-folder 1278-parent: 0 parent pages/0 task preflight, single durable mkdir, POST to new CID, fresh reuse; conflict/timeout/accepted-read-failure restart and account/hash/partial/legacy locks")
         print("PASS account/target isolation: no cross-account proof cache; wrong target denied before POST")
         print("PASS production pending snapshot/task GET: accepted feedback preceded never-ending reads; no post-submit snapshot authorization, no extraction queue; duplicate blocked; FIFO priority/fairness/cancellation passed")
     }

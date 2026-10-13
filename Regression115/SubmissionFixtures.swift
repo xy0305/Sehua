@@ -75,7 +75,7 @@ final class Mock115Protocol: URLProtocol, @unchecked Sendable {
                     verified += 1; calls.append("verify")
                     if brokenPath && verified == 2 { return "{\"state\":true,\"data\":[],\"path\":[{\"cid\":0},{\"cid\":99},{\"cid\":20}]}" }
                 }
-                return "{\"state\":true,\"count\":0,\"data\":[],\"path\":[{\"cid\":0},{\"cid\":10}" + (cid == "20" ? ",{\"cid\":20}" : "") + "]}"
+                return "{\"state\":true,\"count\":0,\"data\":[],\"path\":[{\"cid\":0},{\"cid\":10}" + (cid == "20" ? ",{\"cid\":20,\"name\":\"fixture_tid-3803873\"}" : "") + "]}"
             }
             if url.path == "/" {
                 calls.append("sign")

@@ -241,7 +241,7 @@ struct ThreadDetailView: View {
                     }
                     .buttonStyle(.plain).disabled(panOperating)
                     Button { Task { await play115(d, playback: true) } } label: {
-                        panActionLabel("推送到所选目录 / 播放", "play.rectangle.fill", "直接推送；按资源身份核对播放")
+                        panActionLabel("推送到帖子目录 / 播放", "play.rectangle.fill", "父目录 / 帖子标题_tid目录；来源核验后播放")
                     }
                     .buttonStyle(.plain).disabled(panOperating)
                     NavigationLink {
@@ -692,7 +692,7 @@ struct ThreadDetailView: View {
             let settings = SHT115Settings.load()
             try settings.validate()
             let service = try Pan115UIService.get()
-            let existing = await service.resources().first { $0.account == settings.account && $0.tid == String(d.tid) && $0.parentCID == settings.parentCID && $0.directoryCID != nil && $0.directInput == true }
+            let existing = await service.resources().first { $0.account == settings.account && $0.tid == String(d.tid) && $0.parentCID == settings.parentCID && $0.directoryCID != nil && $0.directInput != true && $0.manualInput != true }
             var resource = existing
             if let existing, existing.tasks.contains(where: { $0.state == .unknown || $0.state == .submitting }) {
                 panStatus = "历史提交未知：正在只读核验，不重发"
@@ -707,7 +707,7 @@ struct ThreadDetailView: View {
             if existing?.tasks.contains(where: { $0.state == .accepted }) != true {
                 panStatus = "提取中"
                 let result = try await ResourceLinkExtractor.extractResult(detail: d, base: postURL)
-                panStatus = "推送到所选目录"
+                panStatus = "核验或创建帖子目录后提交"
                 resource = try await service.createAndSubmitResource(urls: result.links, tid: String(d.tid), title: d.title.isEmpty ? title : d.title, settings: settings)
 
             }

@@ -198,35 +198,32 @@ public actor SHT115Service {
         if acquirePermit { try await begin() }; defer { if acquirePermit { end() } }
         try settings.validate()
         let name = try Self.directoryName(tid: tid, title: title)
-        // Reuse this account's historical tid record, including incorrectly named folders.
-        // Never rename/delete it or create a second folder merely because title parsing changed.
-        let id = records.first(where: { $0.account == settings.account && $0.parentCID == settings.parentCID && $0.tid == tid })?.id
+        guard !records.contains(where: {
+            $0.account == settings.account && $0.parentCID == settings.parentCID && $0.tid == tid &&
+            $0.directoryWritePending && ($0.directoryCID == nil || $0.directInput == true ||
+                ($0.directoryJournal ?? []).contains(where: { $0.state == .unknown || $0.state == .submitting }))
+        }) else {
+            throw SHT115Diagnostic(stage: "directory-reconcile", outcome: "同账户同帖存在旧目录unknown记录；保留锁，禁止自动重复创建", code: "")
+        }
+        // Direct-mode records remain readable, but their parent CID is never a post folder.
+        let id = records.first(where: { $0.account == settings.account && $0.parentCID == settings.parentCID && $0.tid == tid && $0.directInput != true && $0.manualInput != true })?.id
             ?? SHT115Digest(settings.account + ":" + settings.parentCID + ":" + name)
         if !records.contains(where: { $0.id == id }) {
             records.append(SHT115Resource(id: id, account: settings.account, tid: tid, directoryName: name, parentCID: settings.parentCID, directoryCID: nil, directoryWritePending: false, tasks: [])); try save()
         }
         let i = try index(id, settings)
         if let cid = records[i].directoryCID {
-            if records[i].directoryRecoveryOnly == true {
-                let page = try await http.verifiedPage(cid: cid, parent: records[i].verificationParentCID, settings: settings)
-                guard SHT115HTTP.string(page.path.last?["name"] ?? page.path.last?["n"]) == records[i].directoryName else { throw SHT115Error.unsafeListing }
-            } else { try await http.verify(cid: cid, parent: records[i].verificationParentCID, settings: settings) }
+            guard cid != settings.parentCID, cid != "0" else { throw SHT115Error.unsafeListing }
+            let path = try await http.freshPath(cid: cid, parent: records[i].verificationParentCID, settings: settings)
+            guard SHT115HTTP.string(path.last?["name"] ?? path.last?["n"]) == records[i].directoryName else { throw SHT115Error.unsafeListing }
             markDirectoryPathVerified(i); records[i].directoryWritePending = false; try save(); return records[i]
         }
-        if records[i].directoryWritePending && !records[i].directoryName.hasSuffix("_tid-" + records[i].tid) {
-            throw SHT115Diagnostic(stage: "directory-reconcile", outcome: "目录创建待核验：旧名称缺少tid身份证据；保留锁，禁止新建", code: "")
+        // Never turn a historical unknown/rejection into another mkdir. Recovery is
+        // explicit and read-only; a same-name server item is not ownership evidence.
+        guard !records[i].directoryWritePending, (records[i].directoryJournal ?? []).isEmpty else {
+            throw SHT115Diagnostic(stage: "directory-reconcile", outcome: "目录创建已有历史：保留锁，请使用只读目录核验；禁止自动重复创建", code: "")
         }
-        let parentPage = try await http.verifiedPage(cid: settings.parentCID, parent: nil, settings: settings)
-        let children = try await http.matchingDirectories(name: records[i].directoryName, parentCID: settings.parentCID, parentPage: parentPage, settings: settings)
-        let matches = children.filter { $0.isDirectory && $0.name == records[i].directoryName }
-        guard matches.count <= 1 else { throw SHT115Error.ambiguousDirectory }
-        if let existing = matches.first {
-            try await http.verify(cid: existing.id, parent: settings.parentCID, settings: settings)
-            records[i].directoryCID = existing.id; markDirectoryPathVerified(i); records[i].directoryWritePending = false; try save(); return records[i]
-        }
-        guard !records[i].directoryWritePending else {
-            throw SHT115Diagnostic(stage: "directory-reconcile", outcome: "目录创建待核验：只读未找到可确证的同tid目录；保留锁，禁止新建；本次未发送离线任务", code: "")
-        }
+        _ = try await http.freshPath(cid: settings.parentCID, parent: nil, settings: settings)
         return try await createDirectory(i: i, settings: settings, authorization: UUID(), manualRecovery: false)
     }
     private func createDirectory(i: Int, settings: SHT115Settings, authorization: UUID, manualRecovery: Bool) async throws -> SHT115Resource {
@@ -262,10 +259,8 @@ public actor SHT115Service {
             records[i].directoryJournal?[attempt].evidence?.failurePhase = nil
             if manualRecovery { records[i].directoryRecoveryOnly = true }
             try save()
-            if manualRecovery {
-                let verified = try await http.freshPath(cid: cid, parent: settings.parentCID, settings: settings)
-                guard SHT115HTTP.string(verified.last?["name"] ?? verified.last?["n"]) == records[i].directoryName else { throw SHT115Error.uncertainWrite }
-            } else { try await http.verify(cid: cid, parent: settings.parentCID, settings: settings) }
+            let verified = try await http.freshPath(cid: cid, parent: settings.parentCID, settings: settings)
+            guard SHT115HTTP.string(verified.last?["name"] ?? verified.last?["n"]) == records[i].directoryName else { throw SHT115Error.uncertainWrite }
             records[i].directoryJournal?[attempt].state = .accepted
             records[i].directoryJournal?[attempt].evidence?.path = "verified"
             markDirectoryPathVerified(i); records[i].directoryWritePending = false; try save(); return records[i]
@@ -418,17 +413,22 @@ public actor SHT115Service {
         return try await SHT115RequestContext.$interactive.withValue(true) {
             try settings.validate()
             _ = try Self.directoryName(tid: tid, title: title)
-            let target = settings.parentCID
-            let id = "direct-" + SHT115Digest(settings.account + ":" + target + ":" + tid)
-            // Separate mode identity: never mutate an old per-post folder or its locks.
-            if !records.contains(where: { $0.id == id }) {
-                var record = SHT115Resource(id: id, account: settings.account, tid: tid, directoryName: "推送到所选目录 · CID " + target, parentCID: target, directoryCID: target, directoryWritePending: false, tasks: [])
-                record.directInput = true
-                records.append(record); try save()
+            // Check same-account identity locks BEFORE mkdir, including direct/manual/legacy.
+            let related = records.filter { $0.account == settings.account }
+            let links = Self.uniqueResources(urls)
+            func conflict(_ lhs: String, _ rhs: String) -> Bool {
+                lhs == rhs || !Self.replayIdentities(lhs).isDisjoint(with: Self.replayIdentities(rhs))
             }
-            // submitInteractive performs the single fresh target/account verification.
-            // No listing, mkdir, remote task preflight or source snapshot.
-            return try await submitInteractive(urls: urls, resourceID: id, settings: settings, autoExtraction: false, acquirePermit: false)
+            let blocked = related.flatMap { $0.tasks }.filter { task in
+                task.state != .rejected && task.urls.contains { old in links.contains { conflict(old, $0) } }
+            }
+            if blocked.contains(where: { $0.state == .unknown || $0.state == .submitting }) {
+                throw SHT115Diagnostic(stage: "offline-reconcile", outcome: "历史离线任务待核验：保留同账户链接锁，未创建目录或重发任务", code: "")
+            }
+            guard blocked.isEmpty else { throw SHT115Error.alreadySubmitted }
+            guard !related.contains(where: { $0.parentCID == settings.parentCID && $0.tid == tid && $0.directInput == true && $0.directoryWritePending }) else { throw SHT115Error.uncertainWrite }
+            let prepared = try await createOrReuseResourceInteractive(tid: tid, title: title, settings: settings, acquirePermit: false)
+            return try await submitInteractive(urls: urls, resourceID: prepared.id, settings: settings, autoExtraction: autoExtraction, verifiedTarget: prepared.directoryCID, acquirePermit: false)
         }
     }
     private func submitInteractive(urls: [String], resourceID: String, settings: SHT115Settings, autoExtraction: Bool = false, verifiedTarget: String? = nil, acquirePermit: Bool = true) async throws -> SHT115Resource {
@@ -457,13 +457,11 @@ public actor SHT115Service {
                 return link.range(of: #"(?i)[?&]xt=urn:(?:btih:(?:[a-f0-9]{40}|[a-z2-7]{32})|btmh:1220[a-f0-9]{64})(?=&|$)"#, options: .regularExpression) != nil
             }) else { throw SHT115Error.invalidInput }
         }
-        // A new manual record must never bypass a post's unknown submission, or vice versa.
-        let related = records.filter { other in
-            other.id == records[i].id || (other.account == settings.account &&
-                (records[i].manualInput == true || other.manualInput == true || records[i].directInput == true || other.directInput == true))
-        }
+        // Replay identity is account-scoped across post/manual/direct/legacy modes.
+        // Switching target or mode cannot bypass an unknown write.
+        let related = records.filter { $0.account == settings.account }
         let prior = related.flatMap { $0.tasks }.flatMap { $0.state == .rejected ? [] : $0.urls }
-        let useIdentity = related.contains { $0.manualInput == true || $0.directInput == true }
+        let useIdentity = true
         func conflicts(_ lhs: String, _ rhs: String) -> Bool {
             lhs == rhs || (useIdentity && !Self.replayIdentities(lhs).isDisjoint(with: Self.replayIdentities(rhs)))
         }
