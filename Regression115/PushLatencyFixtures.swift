@@ -99,6 +99,17 @@ actor GrantLog {
         try await Task.sleep(nanoseconds: 2_700_000_000)
         precondition(PushLatencyProtocol.routes.contains("taskGET"), "slow task GET must really start after acceptance")
         readOnly.cancel()
+        _ = await readOnly.value
+        PushLatencyProtocol.slowSnapshot = false; PushLatencyProtocol.signatureDelay = 0.05
+        PushLatencyProtocol.routes = []
+        let other = SHT115Settings(cookie: "UID=456_A; CID=fixture; SEID=fixture", parentCID: "10")
+        let foreign = try await service.prepareAndSubmitManual(urls: [link], settings: other, targetCID: "10")
+        precondition(foreign.account != result.account && foreign.id != result.id)
+        precondition(PushLatencyProtocol.routes == ["identity", "signature", "POST"], "account change must obtain new identity/signature")
+        PushLatencyProtocol.routes = []
+        do { _ = try await service.prepareAndSubmitManual(urls: [link], settings: settings, targetCID: "20"); preconditionFailure("mismatched target accepted") } catch {}
+        precondition(PushLatencyProtocol.routes == ["identity"], "target mismatch must stop before signature/write")
+        print("PASS account/target isolation: no cross-account proof cache; wrong target denied before POST")
         print("PASS production pending snapshot/task GET: accepted feedback preceded never-ending reads; no post-submit snapshot authorization, no extraction queue; duplicate blocked; FIFO priority/fairness/cancellation passed")
     }
 }
