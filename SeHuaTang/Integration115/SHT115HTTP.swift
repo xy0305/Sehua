@@ -162,7 +162,7 @@ extension SHT115HTTP {
     func freshPath(cid: String, parent: String?, settings: SHT115Settings) async throws -> [[String: Any]] {
         let query = Self.form([("aid", "1"), ("cid", cid), ("offset", "0"), ("limit", "1"), ("show_dir", "1"), ("format", "json")])
         let obj = try await json("https://webapi.115.com/files?" + query, settings: settings)
-        guard Self.success(obj) else { throw SHT115Diagnostic(stage: "directory-path", outcome: "目录读取被API拒绝；未发送", code: Self.apiCode(obj)) }
+        guard Self.success(obj) else { throw SHT115Diagnostic(stage: "directory-path", outcome: "目录读取被API拒绝；未发送", code: SHT115Diagnostic.apiCode(obj)) }
         let nested = obj["data"] as? [String: Any] ?? [:]
         let path = (obj["path"] as? [[String: Any]]) ?? (nested["path"] as? [[String: Any]]) ?? []
         try Self.verifiedPath(path, cid: cid, parent: parent)
