@@ -159,7 +159,47 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
         }
         precondition(reads >= 3)
     }
+    static func targetAndFolder() async throws {
+        let cfg = URLSessionConfiguration.ephemeral; cfg.protocolClasses = [ManualProtocol.self]
+        let session = URLSession(configuration: cfg); defer { session.invalidateAndCancel() }
+        let store = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: store) }
+        let settings = SHT115Settings(cookie: "UID=123_A; CID=fake; SEID=fake", parentCID: "10")
+        let service = try SHT115Service(storeURL: store, session: session)
+        var posts = 0
+        ManualProtocol.handler = { req in
+            let u = req.url!
+            let q = URLComponents(url: u, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let cid = q.first { $0.name == "cid" }?.value ?? ""
+            var obj: [String: Any]
+            if req.httpMethod == "POST" {
+                precondition(u.path == "/files/add")
+                posts += 1
+                precondition(body(req).contains("pid=20") && body(req).contains("cname=Archive"))
+                let saved = try JSONDecoder().decode([SHT115Resource].self, from: Data(contentsOf: store))
+                precondition(saved.last?.directoryJournal?.last?.state == .submitting)
+                obj = ["state": true, "cid": "30"]
+            } else {
+                var path: [[String: Any]] = [["cid": "0", "name": "root"], ["cid": "20", "name": "mine"]]
+                if cid == "30" { path.append(["cid": "30", "name": "Archive"]) }
+                obj = ["state": true, "path": path, "data": [["cid": "30", "n": "Archive"]], "count": 1, "offset": 0, "limit": 100, "order": "file_name", "is_asc": 1]
+            }
+            return try JSONSerialization.data(withJSONObject: obj)
+        }
+        let selected = try await service.prepareManualResource(settings: settings, targetCID: "20")
+        precondition(selected.directoryCID == "20" && selected.parentCID == "10" && selected.manualActualParentCID == "0")
+        precondition(settings.parentCID == "10" && posts == 0)
+        let page = try await service.browseFolders(cid: "20", settings: settings)
+        precondition(page.entries.first?.isDirectory == true && page.entries.first?.id == "30")
+        let authorization = UUID()
+        let folder = try await service.createManualFolder(name: "Archive", parentCID: "20", authorization: authorization, settings: settings)
+        precondition(folder.directoryCID == "30" && !folder.directoryWritePending && posts == 1)
+        _ = try await service.createManualFolder(name: "Archive", parentCID: "20", authorization: authorization, settings: settings)
+        precondition(posts == 1, "same authorization may only reverify, never replay creation")
+        print("PASS independent manual target, paged existing folders, explicit single creation journal + fresh name/parent proof; global parent unchanged")
+    }
     static func main() async throws {
+        try await targetAndFolder()
         precondition(ResourceLinkExtractor.links(in: "").isEmpty)
         precondition(ResourceLinkExtractor.links(in: "https://example.invalid password magnet:?xt=bad").isEmpty)
         let links = ResourceLinkExtractor.links(in: "mixed\n" + ed + "\n" + magnet + "\n" + ed)

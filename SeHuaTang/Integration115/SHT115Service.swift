@@ -137,7 +137,7 @@ public actor SHT115Service {
     }
 
     /// Paged browser: only the requested directory; never recursively scan the account.
-    public func browseFolders(cid: String, offset: Int = 0, settings: SHT115Settings) async throws -> SHT115Page {
+    func browseFolders(cid: String, offset: Int = 0, settings: SHT115Settings) async throws -> SHT115Page {
         try await begin(); defer { end() }
         try settings.validate()
         guard SHT115Settings.isCID(cid), offset >= 0 else { throw SHT115Error.invalidInput }
