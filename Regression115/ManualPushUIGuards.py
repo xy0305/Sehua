@@ -2,7 +2,9 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 view = (root / 'SeHuaTang/Views/Pan115ManualPushView.swift').read_text()
 assert 'PasteButton(payloadType: String.self)' in view
-assert 'UIPasteboard' not in view and '.onAppear' not in view and '.task' not in view.split('struct Pan115FolderBrowser')[0]
+import re
+assert 'UIPasteboard' not in view and '.onAppear' not in view
+assert not re.search(r'\.task\s*(?:\(|\{)', view.split('struct Pan115FolderBrowser')[0])
 assert 'Button("清空输入", role: .destructive) { input = "" }' in view
 assert 'Button("取消", role: .cancel) { authorization = nil }' in view
 assert 'Approval(settings: settings, links: links, targetCID: targetCID)' in view

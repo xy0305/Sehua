@@ -30,7 +30,7 @@ struct SHT115HTTP {
             request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
             request.httpBody = Data(Self.form(fields).utf8)
         }
-        try await SHT115RequestPacer.shared.wait(interactive: fields != nil || SHT115RequestContext.interactive)
+        try await SHT115RequestPacer.shared.wait(interactive: fields != nil || SHT115RequestContext.interactive, opportunistic: SHT115RequestContext.opportunistic)
         try Task.checkCancellation()
         let (data, response): (Data, URLResponse)
         do { (data, response) = try await session.data(for: request) }
@@ -245,17 +245,18 @@ extension SHT115HTTP {
 /// No automatic retry, especially no retry of an ambiguous POST.
 enum SHT115RequestContext {
     @TaskLocal static var interactive = false
+    @TaskLocal static var opportunistic = false
 }
 
 actor SHT115RequestPacer {
     static let shared = SHT115RequestPacer()
     private var lastStart: UInt64 = 0
-    private struct Waiter { let id: UUID; let interactive: Bool }
+    private struct Waiter { let id: UUID; let interactive: Bool; let opportunistic: Bool }
     private var waiters: [Waiter] = []
     private var interactiveRun = 0
-    func wait(interactive: Bool = false) async throws {
+    func wait(interactive: Bool = false, opportunistic: Bool = false) async throws {
         let id = UUID()
-        waiters.append(Waiter(id: id, interactive: interactive))
+        waiters.append(Waiter(id: id, interactive: interactive, opportunistic: opportunistic))
         defer { waiters.removeAll { $0.id == id } }
         while true {
             try Task.checkCancellation()
@@ -264,8 +265,10 @@ actor SHT115RequestPacer {
             // FIFO within each class. After three interactive grants, one waiting
             // background read gets a turn. No in-flight request is interrupted.
             let foreground = waiters.first { $0.interactive }
-            let background = waiters.first { !$0.interactive }
-            let selected = (interactiveRun >= 3 ? background : nil) ?? foreground ?? background
+            let background = waiters.first { !$0.interactive && !$0.opportunistic }
+            // Best-effort snapshots have no fairness entitlement: discardable
+            // provenance reads must never take a slot from a queued signature/POST.
+            let selected = (interactiveRun >= 3 ? background : nil) ?? foreground ?? background ?? waiters.first { $0.opportunistic }
             if selected?.id == id && now >= earliest {
                 lastStart = now
                 interactiveRun = interactive ? interactiveRun + 1 : 0

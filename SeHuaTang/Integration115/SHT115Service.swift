@@ -119,8 +119,8 @@ public actor SHT115Service {
             try await prepareManualResourceInteractive(settings: settings, targetCID: targetCID)
         }
     }
-    private func prepareManualResourceInteractive(settings: SHT115Settings, targetCID: String? = nil) async throws -> SHT115Resource {
-        try await begin(); defer { end() }
+    private func prepareManualResourceInteractive(settings: SHT115Settings, targetCID: String? = nil, acquirePermit: Bool = true) async throws -> SHT115Resource {
+        if acquirePermit { try await begin() }; defer { if acquirePermit { end() } }
         try settings.validate()
         let target = targetCID ?? settings.parentCID
         guard SHT115Settings.isCID(target) else { throw SHT115Error.invalidInput }
@@ -131,6 +131,7 @@ public actor SHT115Service {
         if let resource = records.first(where: { $0.id == id }) {
             guard resource.manualInput == true, resource.tid.isEmpty,
                   resource.directoryCID == target else { throw SHT115Error.invalidInput }
+            try SHT115HTTP.verifiedPath(path, cid: target, parent: resource.verificationParentCID)
             return resource
         }
         var resource = SHT115Resource(id: id, account: settings.account, tid: "", directoryName: displayPath.isEmpty ? "CID " + target : displayPath, parentCID: settings.parentCID, directoryCID: target, directoryWritePending: false, tasks: [])
@@ -193,8 +194,8 @@ public actor SHT115Service {
             try await createOrReuseResourceInteractive(tid: tid, title: title, settings: settings)
         }
     }
-    private func createOrReuseResourceInteractive(tid: String, title: String, settings: SHT115Settings) async throws -> SHT115Resource {
-        try await begin(); defer { end() }
+    private func createOrReuseResourceInteractive(tid: String, title: String, settings: SHT115Settings, acquirePermit: Bool = true) async throws -> SHT115Resource {
+        if acquirePermit { try await begin() }; defer { if acquirePermit { end() } }
         try settings.validate()
         let name = try Self.directoryName(tid: tid, title: title)
         // Reuse this account's historical tid record, including incorrectly named folders.
@@ -406,19 +407,21 @@ public actor SHT115Service {
     }
     /// Proof is local to this user operation, never a service/global TTL cache.
     public func prepareAndSubmitManual(urls: [String], settings: SHT115Settings, targetCID: String, autoExtraction: Bool = false) async throws -> SHT115Resource {
-        try await SHT115RequestContext.$interactive.withValue(true) {
-            let prepared = try await prepareManualResourceInteractive(settings: settings, targetCID: targetCID)
-            return try await submitInteractive(urls: urls, resourceID: prepared.id, settings: settings, autoExtraction: autoExtraction, verifiedTarget: prepared.directoryCID)
+        try await begin(); defer { end() }
+        return try await SHT115RequestContext.$interactive.withValue(true) {
+            let prepared = try await prepareManualResourceInteractive(settings: settings, targetCID: targetCID, acquirePermit: false)
+            return try await submitInteractive(urls: urls, resourceID: prepared.id, settings: settings, autoExtraction: autoExtraction, verifiedTarget: prepared.directoryCID, acquirePermit: false)
         }
     }
     public func createAndSubmitResource(urls: [String], tid: String, title: String, settings: SHT115Settings, autoExtraction: Bool = false) async throws -> SHT115Resource {
-        try await SHT115RequestContext.$interactive.withValue(true) {
-            let prepared = try await createOrReuseResourceInteractive(tid: tid, title: title, settings: settings)
-            return try await submitInteractive(urls: urls, resourceID: prepared.id, settings: settings, autoExtraction: autoExtraction, verifiedTarget: prepared.directoryCID)
+        try await begin(); defer { end() }
+        return try await SHT115RequestContext.$interactive.withValue(true) {
+            let prepared = try await createOrReuseResourceInteractive(tid: tid, title: title, settings: settings, acquirePermit: false)
+            return try await submitInteractive(urls: urls, resourceID: prepared.id, settings: settings, autoExtraction: autoExtraction, verifiedTarget: prepared.directoryCID, acquirePermit: false)
         }
     }
-    private func submitInteractive(urls: [String], resourceID: String, settings: SHT115Settings, autoExtraction: Bool = false, verifiedTarget: String? = nil) async throws -> SHT115Resource {
-        try await begin(); defer { end() }
+    private func submitInteractive(urls: [String], resourceID: String, settings: SHT115Settings, autoExtraction: Bool = false, verifiedTarget: String? = nil, acquirePermit: Bool = true) async throws -> SHT115Resource {
+        if acquirePermit { try await begin() }; defer { if acquirePermit { end() } }
         let i = try index(resourceID, settings)
         var links = Array(Set(urls.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })).sorted()
         if records[i].manualInput == true { links = Self.uniqueResources(links) }
@@ -469,7 +472,9 @@ public actor SHT115Service {
         let parent = records[i].verificationParentCID
         let snapshotTask = autoExtraction ? Task { [http] in
             if let page = try? await SHT115RequestContext.$interactive.withValue(false, operation: {
-                try await http.verifiedPage(cid: cid, parent: parent, settings: settings)
+                try await SHT115RequestContext.$opportunistic.withValue(true) {
+                    try await http.verifiedPage(cid: cid, parent: parent, settings: settings)
+                }
             }),
                page.total == page.entries.count, Set(page.entries.map(\.id)).count == page.entries.count {
                 await snapshot.set(page.entries.map(\.id))

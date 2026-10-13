@@ -5,20 +5,21 @@ final class PushLatencyProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var routes: [String] = []
     nonisolated(unsafe) static var starts: [Date] = []
     nonisolated(unsafe) static var slowSnapshot = false
+    nonisolated(unsafe) static var signatureDelay = 0.05
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         let url = request.url!
         let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let isSnapshot = q.contains { $0.name == "o" }
-        let route = request.httpMethod == "POST" ? "POST" : url.path == "/files" ? (isSnapshot ? "snapshot" : "identity") : "signature"
+        let route = q.contains { $0.name == "ac" && $0.value == "task_lists" } ? "taskGET" : request.httpMethod == "POST" ? "POST" : url.path == "/files" ? (isSnapshot ? "snapshot" : "identity") : "signature"
         Self.routes.append(route); Self.starts.append(Date())
-        if isSnapshot && Self.slowSnapshot { return } // indefinitely pending read
+        if route == "taskGET" || (isSnapshot && Self.slowSnapshot) { return } // indefinitely pending read
         let text: String
         if route == "POST" { text = "{\"state\":true}" }
         else if route == "signature" { text = "{\"state\":true,\"sign\":\"fixture\",\"time\":1}" }
         else { text = "{\"state\":true,\"count\":0,\"data\":[],\"path\":[{\"cid\":\"0\"},{\"cid\":\"10\"}],\"offset\":0,\"limit\":100,\"order\":\"file_name\",\"is_asc\":1,\"fc_mix\":1}" }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { [self] in
+        DispatchQueue.global().asyncAfter(deadline: .now() + (route == "signature" ? Self.signatureDelay : 0.05)) { [self] in
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: Data(text.utf8)); client?.urlProtocolDidFinishLoading(self)
         }
@@ -80,6 +81,7 @@ actor GrantLog {
         }
         precondition(elapsed[0] - elapsed[1] > 0.7)
         PushLatencyProtocol.slowSnapshot = true
+        PushLatencyProtocol.signatureDelay = 1.3
         let store = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: store) }
         let service = try SHT115Service(storeURL: store, session: session)
@@ -88,10 +90,15 @@ actor GrantLog {
         let result = try await service.prepareAndSubmitManual(urls: [link], settings: settings, targetCID: "10", autoExtraction: true)
         precondition(result.tasks.first?.state == .accepted && (result.extractionQueue ?? []).isEmpty)
         precondition(Date().timeIntervalSince(start) < 6, "pending snapshot must not block accepted feedback")
+        precondition(PushLatencyProtocol.routes.contains("snapshot"), "slow snapshot must really have started before POST")
         precondition(!PushLatencyProtocol.routes.contains("taskGET"))
         let writes = PushLatencyProtocol.routes.filter { $0 == "POST" }.count
         do { _ = try await service.submit(urls: [link], resourceID: result.id, settings: settings); preconditionFailure("duplicate") } catch {}
         precondition(PushLatencyProtocol.routes.filter { $0 == "POST" }.count == writes)
-        print("PASS production pending snapshot: feedback returned; no post-submit snapshot authorization, no extraction queue; duplicate blocked; FIFO priority/fairness/cancellation passed")
+        let readOnly = Task { try? await service.inspect(resourceID: result.id, settings: settings, includeFiles: false) }
+        try await Task.sleep(nanoseconds: 2_700_000_000)
+        precondition(PushLatencyProtocol.routes.contains("taskGET"), "slow task GET must really start after acceptance")
+        readOnly.cancel()
+        print("PASS production pending snapshot/task GET: accepted feedback preceded never-ending reads; no post-submit snapshot authorization, no extraction queue; duplicate blocked; FIFO priority/fairness/cancellation passed")
     }
 }
