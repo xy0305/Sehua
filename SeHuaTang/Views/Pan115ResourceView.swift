@@ -103,7 +103,7 @@ struct Pan115ResourceView: View {
                         .font(.footnote).foregroundStyle(.orange)
                     Link("在115核对", destination: URL(string: "https://115.com/")!)
                 }
-                Text("仅新受理且来源确证的单个 ed2k 压缩包进入安全队列；完整核验后仅原包移115回收站。未知不重发，失败不删。iOS后台尽力执行，不保证时机；重开后恢复。")
+                Text("直接推送不会自动按帖归档或搬移已有文件。保留独立解压开关，但本模式不采集提交前快照；缺少来源证据，不授权自动回收原包。未知不重发。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }

@@ -214,7 +214,8 @@ extension SHT115Resource {
         (directoryJournal ?? []).contains { $0.manualRecovery && [.unknown, .submitting].contains($0.state) }
     }
     public var directoryStatusText: String {
-        directoryCreatedAwaitingPath ? "目录已创建，待路径核验（不重建）" : (directoryWritePending ? "目录写入结果未知，保留锁（不重发）" : (directoryCID == nil ? "目录尚未确认创建" : "目录路径已核验"))
+        if directInput == true { return "直接目标为所选目录；每次写前fresh验证，不创建帖子目录" }
+        return directoryCreatedAwaitingPath ? "目录已创建，待路径核验（不重建）" : (directoryWritePending ? "目录写入结果未知，保留锁（不重发）" : (directoryCID == nil ? "目录尚未确认创建" : "目录路径已核验"))
     }
 }
 
