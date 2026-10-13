@@ -85,6 +85,10 @@ public actor SHT115Service {
         try settings.validate()
         guard let i = records.firstIndex(where: { $0.id == id }) else { throw SHT115Error.invalidInput }
         guard records[i].account == settings.account else { throw SHT115Error.accountMismatch }
+        if records[i].manualInput == true {
+            guard records[i].parentCID == settings.parentCID, records[i].directoryCID == settings.parentCID,
+                  records[i].tid.isEmpty else { throw SHT115Error.accountMismatch }
+        }
         return i
     }
     private func sign(_ settings: SHT115Settings) async throws -> [(String, String)] {
@@ -102,6 +106,24 @@ public actor SHT115Service {
         try await http.verify(cid: settings.parentCID, parent: nil, settings: settings)
         _ = try await sign(settings)
     }
+    /// Read-only preparation; a stable independent record preserves unknown locks across visits.
+    /// No network writes or directory creation. UI calls only after explicit confirmation.
+    public func prepareManualResource(settings: SHT115Settings) async throws -> SHT115Resource {
+        try await begin(); defer { end() }
+        try settings.validate()
+        try await http.verify(cid: settings.parentCID, parent: nil, settings: settings)
+        let id = "manual-" + SHT115Digest(settings.account + ":" + settings.parentCID)
+        if let resource = records.first(where: { $0.id == id }) {
+            guard resource.manualInput == true, resource.tid.isEmpty,
+                  resource.directoryCID == settings.parentCID else { throw SHT115Error.invalidInput }
+            return resource
+        }
+        var resource = SHT115Resource(id: id, account: settings.account, tid: "", directoryName: "手动推送 · CID " + settings.parentCID, parentCID: settings.parentCID, directoryCID: settings.parentCID, directoryWritePending: false, tasks: [])
+        resource.manualInput = true
+        records.append(resource); try save()
+        return resource
+    }
+
     public static func directoryName(tid: String, title: String) throws -> String {
         guard !tid.isEmpty, tid.count <= 64, tid.utf8.allSatisfy({ (48...57).contains($0) }) else { throw SHT115Error.invalidInput }
         let normalized = title.precomposedStringWithCanonicalMapping
@@ -124,9 +146,9 @@ public actor SHT115Service {
         let i = try index(id, settings)
         if let cid = records[i].directoryCID {
             if records[i].directoryRecoveryOnly == true {
-                let page = try await http.verifiedPage(cid: cid, parent: records[i].parentCID, settings: settings)
+                let page = try await http.verifiedPage(cid: cid, parent: records[i].verificationParentCID, settings: settings)
                 guard SHT115HTTP.string(page.path.last?["name"] ?? page.path.last?["n"]) == records[i].directoryName else { throw SHT115Error.unsafeListing }
-            } else { try await http.verify(cid: cid, parent: records[i].parentCID, settings: settings) }
+            } else { try await http.verify(cid: cid, parent: records[i].verificationParentCID, settings: settings) }
             markDirectoryPathVerified(i); records[i].directoryWritePending = false; try save(); return records[i]
         }
         if records[i].directoryWritePending && !records[i].directoryName.hasSuffix("_tid-" + records[i].tid) {
@@ -254,9 +276,9 @@ public actor SHT115Service {
         let i = try index(resourceID, settings)
         if let cid = records[i].directoryCID {
             if records[i].directoryRecoveryOnly == true {
-                let page = try await http.verifiedPage(cid: cid, parent: records[i].parentCID, settings: settings)
+                let page = try await http.verifiedPage(cid: cid, parent: records[i].verificationParentCID, settings: settings)
                 guard SHT115HTTP.string(page.path.last?["name"] ?? page.path.last?["n"]) == records[i].directoryName else { throw SHT115Error.unsafeListing }
-            } else { try await http.verify(cid: cid, parent: records[i].parentCID, settings: settings) }
+            } else { try await http.verify(cid: cid, parent: records[i].verificationParentCID, settings: settings) }
         } else {
             // An old title alone is not identity evidence. Require the persisted
             // tid suffix and freshly verified ancestry plus exact leaf name.
@@ -319,7 +341,8 @@ public actor SHT115Service {
     public func submit(urls: [String], resourceID: String, settings: SHT115Settings, autoExtraction: Bool = false) async throws -> SHT115Resource {
         try await begin(); defer { end() }
         let i = try index(resourceID, settings)
-        let links = Array(Set(urls.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })).sorted()
+        var links = Array(Set(urls.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })).sorted()
+        if records[i].manualInput == true { links = Self.uniqueResources(links) }
         guard !links.isEmpty, links.count <= 50, links.allSatisfy({ link in
             guard !link.contains("\n"), !link.contains("\r") else { return false }
             // Raw ed2k pipes/spaces are valid payload, not an HTTP URL to navigate.
@@ -332,13 +355,30 @@ public actor SHT115Service {
             guard let url = URL(string: link), let scheme = url.scheme else { return false }
             return ["magnet", "http", "https"].contains(scheme.lowercased())
         }), let cid = records[i].directoryCID, !records[i].directoryWritePending else { throw SHT115Error.invalidInput }
-        let prior = records[i].tasks.flatMap { $0.state == .rejected ? [] : $0.urls }
-        guard links.allSatisfy({ !prior.contains($0) }) else {
-            if records[i].tasks.contains(where: { ($0.state == .unknown || $0.state == .submitting) && !$0.urls.filter(links.contains).isEmpty }) { throw SHT115Diagnostic(stage: "offline-reconcile", outcome: "历史离线任务待核验：unknown/submitting命中本次链接；保留任务锁，本次未重发", code: "") }
+        if records[i].manualInput == true {
+            guard links.allSatisfy({ link in
+                if link.lowercased().hasPrefix("ed2k://|file|") { return true }
+                return link.range(of: #"(?i)[?&]xt=urn:(?:btih:(?:[a-f0-9]{40}|[a-z2-7]{32})|btmh:1220[a-f0-9]{64})(?=&|$)"#, options: .regularExpression) != nil
+            }) else { throw SHT115Error.invalidInput }
+        }
+        // A new manual record must never bypass a post's unknown submission, or vice versa.
+        let related = records.filter { other in
+            other.id == records[i].id || (other.account == settings.account &&
+                (records[i].manualInput == true || other.manualInput == true))
+        }
+        let prior = related.flatMap { $0.tasks }.flatMap { $0.state == .rejected ? [] : $0.urls }
+        let useIdentity = related.contains { $0.manualInput == true }
+        func conflicts(_ lhs: String, _ rhs: String) -> Bool {
+            lhs == rhs || (useIdentity && !Self.replayIdentities(lhs).isDisjoint(with: Self.replayIdentities(rhs)))
+        }
+        guard links.allSatisfy({ link in !prior.contains(where: { conflicts(link, $0) }) }) else {
+            if related.flatMap({ $0.tasks }).contains(where: { task in
+                (task.state == .unknown || task.state == .submitting) && task.urls.contains(where: { old in links.contains(where: { conflicts(old, $0) }) })
+            }) { throw SHT115Diagnostic(stage: "offline-reconcile", outcome: "历史离线任务待核验：unknown/submitting命中本次链接；保留任务锁，本次未重发", code: "") }
             throw SHT115Error.alreadySubmitted
         }
         let submissionPage: SHT115Page
-        do { submissionPage = try await http.verifiedPage(cid: cid, parent: records[i].parentCID, settings: settings) }
+        do { submissionPage = try await http.verifiedPage(cid: cid, parent: records[i].verificationParentCID, settings: settings) }
         catch { throw SHT115Diagnostic(stage: "verify-before-submit", outcome: "未提交：目标路径无法验证", code: "") }
         // Reuse the existing path read; never add foreground pagination to push.
         // Larger/unknown-count directories are deliberately not enrolled.
@@ -396,9 +436,10 @@ public actor SHT115Service {
     private func scan(resourceID: String, settings: SHT115Settings, maxDepth: Int) async throws -> SHT115VideoListing {
         let i = try index(resourceID, settings)
         guard let root = records[i].directoryCID else { throw SHT115Error.invalidInput }
-        try await http.verify(cid: root, parent: records[i].parentCID, settings: settings)
+        try await http.verify(cid: root, parent: records[i].verificationParentCID, settings: settings)
         let depthLimit = max(0, min(5, maxDepth))
-        var queue = [(root, 0, records[i].parentCID)], visited = Set<String>(), videos: [SHT115Video] = [], archives: [SHT115Archive] = []
+        var queue: [(String, Int, String?)] = [(root, 0, records[i].verificationParentCID)]
+        var visited = Set<String>(), videos: [SHT115Video] = [], archives: [SHT115Archive] = []
         var truncated = false
         let videoExtensions = Set(["mp4", "m4v", "mov", "mkv", "avi", "wmv", "ts", "m2ts", "webm", "flv", "mpg", "mpeg"])
         let archiveExtensions = Set(["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "001"])
@@ -451,7 +492,7 @@ public actor SHT115Service {
         if includeFiles {
             listing = try await scan(resourceID: resourceID, settings: settings, maxDepth: 3)
         } else {
-            try await http.verify(cid: target, parent: records[i].parentCID, settings: settings)
+            try await http.verify(cid: target, parent: records[i].verificationParentCID, settings: settings)
             listing = SHT115VideoListing(videos: [], archives: [], truncated: false)
         }
         var remote: [[String: Any]] = [], truncated = false
@@ -504,6 +545,69 @@ public actor SHT115Service {
         try save()
         return SHT115Inspection(resource: records[i], listing: listing, taskPagesTruncated: truncated, verificationSummary: "目标目录已证实\(targetCount)项（完成\(completedCount)项）；其他目录\(otherCount)项；未证实\(unverifiedCount)项" + (truncated ? "；分页未完整，未证实不等于不存在" : ""))
     }
+    /// Conservative replay key only; never substitutes for exact returned URL acceptance evidence.
+    /// Names/trackers cannot turn an unknown download into a new authorized task.
+    static func replayIdentities(_ link: String) -> Set<String> {
+        func hex(_ value: String, count: Int) -> Bool {
+            value.count == count && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+        }
+        if link.lowercased().hasPrefix("ed2k://|file|") {
+            let parts = link.components(separatedBy: "|")
+            if parts.count > 4, hex(parts[4].lowercased(), count: 32) {
+                return ["ed2k:" + parts[4].lowercased()]
+            }
+        }
+        var identities = Set<String>()
+        if URLComponents(string: link)?.scheme?.lowercased() == "magnet",
+           let query = URLComponents(string: link)?.queryItems {
+            for item in query where item.name.lowercased() == "xt" {
+                guard let value = item.value?.lowercased() else { continue }
+                if value.hasPrefix("urn:btmh:1220"), hex(String(value.dropFirst(13)), count: 64) {
+                    identities.insert("magnet:" + value)
+                }
+                if value.hasPrefix("urn:btih:") {
+                    let raw = String(value.dropFirst(9))
+                    if hex(raw, count: 40) { identities.insert("magnet:btih:" + raw) }
+                    if raw.count == 32, raw.utf8.allSatisfy({ (97...122).contains($0) || (50...55).contains($0) }) {
+                        let alphabet = Array("abcdefghijklmnopqrstuvwxyz234567".utf8)
+                        var accumulator: UInt32 = 0, bits = 0, bytes = [UInt8]()
+                        for character in raw.utf8 {
+                            guard let index = alphabet.firstIndex(of: character) else { continue }
+                            accumulator = (accumulator << 5) | UInt32(index); bits += 5
+                            if bits >= 8 { bits -= 8; bytes.append(UInt8((accumulator >> bits) & 255)) }
+                            accumulator &= bits == 0 ? 0 : (1 << bits) - 1
+                        }
+                        identities.insert("magnet:btih:" + bytes.map { String(format: "%02x", $0) }.joined())
+                    }
+                }
+            }
+        }
+        return identities.isEmpty ? ["text:" + link] : identities
+    }
+
+    /// Stable preview and submission deduplication, including renamed ed2k and tracker variants.
+    static func uniqueResources(_ links: [String]) -> [String] {
+        // Build identity components first so hybrid magnets also join aliases encountered earlier.
+        var groups = [Set<String>]()
+        var output = [String]()
+        for link in links {
+            let keys = replayIdentities(link)
+            let matches = groups.indices.filter { !groups[$0].isDisjoint(with: keys) }
+            if let first = matches.first {
+                let merged = matches.reduce(keys) { $0.union(groups[$1]) }
+                // Never discard a hash alias unless the retained URL carries every alias.
+                if matches.count == 1, groups[first].isSuperset(of: keys) { continue }
+                if keys.isSuperset(of: merged) {
+                    groups[first] = merged; output[first] = link
+                    for index in matches.dropFirst().reversed() { groups.remove(at: index); output.remove(at: index) }
+                } else if !groups[first].isSuperset(of: merged) {
+                    groups.append(keys); output.append(link)
+                }
+            } else { groups.append(keys); output.append(link) }
+        }
+        return output
+    }
+
     static func infoHash(_ link: String) -> String {
         if link.lowercased().hasPrefix("ed2k://|file|") {
             let parts = link.components(separatedBy: "|")
@@ -544,7 +648,7 @@ public actor SHT115Service {
             return SHT115ExtractionResult(state: .unsupported, message: "旧包或未明确登记的离线产物不会自动解压/回收")
         }
         guard archive.directoryCID == target else { throw SHT115Error.unsafeListing }
-        let sourcePage = try await http.verifiedPage(cid: target, parent: records[i].parentCID, settings: settings)
+        let sourcePage = try await http.verifiedPage(cid: target, parent: records[i].verificationParentCID, settings: settings)
         let sourceEntries = try await http.allEntries(cid: target, settings: settings, firstPage: sourcePage, maximumEntries: 2_000)
         guard let source = sourceEntries.first(where: { $0.id == archive.id && !$0.isDirectory }) else { throw SHT115Error.unsafeListing }
         let current = SHT115Archive(id: source.id, name: source.name, directoryCID: target, pickCode: source.pickCode, size: source.size, sha1: source.sha1)
@@ -588,7 +692,7 @@ public actor SHT115Service {
             fields.append((output.directory ? "extract_dir[]" : "extract_file[]", output.name))
         }
         // Revalidate destination immediately before the only extraction write.
-        try await http.verify(cid: target, parent: records[i].parentCID, settings: settings)
+        try await http.verify(cid: target, parent: records[i].verificationParentCID, settings: settings)
         let before = try await http.allEntries(cid: target, settings: settings, maximumEntries: 2_000)
         guard !before.contains(where: { names.contains($0.name.precomposedStringWithCanonicalMapping.lowercased()) }) else {
             try persist(.unsupported)
@@ -669,7 +773,7 @@ public actor SHT115Service {
         guard SHT115HTTP.success(response), SHT115HTTP.string(data["percent"]) == "100" else {
             return result("解压释放未明确完成，保留原包")
         }
-        try await http.verify(cid: job.targetCID, parent: records[i].parentCID, settings: settings)
+        try await http.verify(cid: job.targetCID, parent: records[i].verificationParentCID, settings: settings)
         let targetEntries = try await http.allEntries(cid: job.targetCID, settings: settings, maximumEntries: 2_000)
         guard !job.outputs.isEmpty else { return result("输出清单为空，保留原包") }
         var verificationBudget = 2_000
@@ -680,7 +784,7 @@ public actor SHT115Service {
         }
         // Refresh exact source parent and identity immediately before deletion; no wildcard, CID or batch.
         guard job.source.directoryCID == job.targetCID else { return result("原包不是本任务目标目录直属文件，保留") }
-        let sourcePage = try await http.verifiedPage(cid: job.source.directoryCID, parent: records[i].parentCID, settings: settings)
+        let sourcePage = try await http.verifiedPage(cid: job.source.directoryCID, parent: records[i].verificationParentCID, settings: settings)
         let freshSource = try await http.allEntries(cid: job.source.directoryCID, settings: settings, firstPage: sourcePage, maximumEntries: 2_000)
         guard freshSource.contains(where: {
             !$0.isDirectory && $0.id == job.source.id && $0.name == job.source.name && $0.pickCode == job.source.pickCode && $0.size == sourceSize && $0.sha1?.lowercased() == job.source.sha1?.lowercased()
@@ -791,7 +895,7 @@ public actor SHT115Service {
                     continue
                 }
                 // Distinct links with the same name/size cannot be attributed by a directory snapshot.
-                let competing = records[i].tasks.filter { $0.state != .rejected }.flatMap { $0.urls }.filter {
+                let competing = records.filter { $0.account == settings.account && $0.directoryCID == records[i].directoryCID }.flatMap { $0.tasks }.filter { $0.state != .rejected }.flatMap { $0.urls }.filter {
                     let candidate = $0.components(separatedBy: "|")
                     return candidate.count >= 6 && candidate[2] == parts[2] && Int64(candidate[3]) == size
                 }

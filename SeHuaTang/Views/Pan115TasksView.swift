@@ -7,6 +7,7 @@ struct Pan115TasksView: View {
     var body: some View {
         List {
             Section {
+                NavigationLink("手动推送 ed2k / 磁力", destination: Pan115ManualPushView())
                 NavigationLink("115 设置", destination: Pan115SettingsView())
                 Text("仅显示当前账户及父目录的本机记录。安全队列独立处理；未知写入不重发。")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -20,7 +21,7 @@ struct Pan115TasksView: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(resource.directoryName)
-                            Text("tid \(resource.tid) · \(resource.tasks.count) 次提交")
+                            Text(resource.manualInput == true ? "独立手动记录 · \(resource.tasks.count) 次提交" : "tid \(resource.tid) · \(resource.tasks.count) 次提交")
                                 .font(.caption).foregroundStyle(.secondary)
                             if resource.directoryWritePending {
                                 Text(resource.directoryStatusText)
@@ -58,9 +59,9 @@ struct Pan115TaskDetailView: View {
 
     var body: some View {
         List {
-            Section("独立归档目录") {
+            Section(resource.manualInput == true ? "手动目标目录（不关联帖子）" : "独立归档目录") {
                 Text(resource.directoryName)
-                LabeledContent("帖子 tid", value: String(resource.tid))
+                LabeledContent("来源", value: resource.manualInput == true ? "手动输入 · 无帖子tid" : "帖子 tid " + resource.tid)
                 LabeledContent("目录 CID", value: resource.directoryCID ?? "未确认")
                 if resource.directoryWritePending {
                     Text(resource.directoryStatusText + "；本页面不会自动重发。")

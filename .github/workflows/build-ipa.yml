@@ -63,6 +63,12 @@ jobs:
           xcrun swiftc -parse-as-library SeHuaTang/Network/WebSession.swift SeHuaTang/Network/SiteImageNetwork.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/PresentationTiming.swift SeHuaTang/Models/DetailPerformance.swift Regression115/DetailReadinessFixtures.swift -o /tmp/detail-readiness-fixtures
           /tmp/detail-readiness-fixtures
 
+      - name: Native manual push extraction and production request safety
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift SeHuaTang/Models/Models.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Integration115/ResourceLinkExtractor.swift SeHuaTang/Integration115/SmallArchiveReader.swift Regression115/ManualPushFixtures.swift -o /tmp/manual-push-fixtures
+          /tmp/manual-push-fixtures
+          python3 Regression115/ManualPushUIGuards.py
+
       - name: Uploaded 115 extraction protocol and recursive identity regression
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/ExtractReferenceFixtures.swift -o /tmp/extract-reference-fixtures
