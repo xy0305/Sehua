@@ -7,8 +7,15 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         do {
             let text = try Self.handler(request)
-            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: Data(text.utf8)); client?.urlProtocolDidFinishLoading(self)
+            // URLProtocol callbacks share a serial loading queue. Delay delivery, not
+            // startLoading itself, so the opportunistic snapshot can finish first.
+            let deliver = { [self] in
+                client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: Data(text.utf8)); client?.urlProtocolDidFinishLoading(self)
+            }
+            if request.url?.absoluteString.contains("ac=space") == true {
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.5, execute: DispatchWorkItem(block: deliver))
+            } else { deliver() }
         } catch { client?.urlProtocol(self, didFailWithError: error) }
     }
     override func stopLoading() {}
@@ -50,7 +57,7 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
             func query(_ key: String) -> String { q.first(where: { $0.name == key })?.value ?? "" }
             let bodyFields = fields(request)
             func form(_ key: String) -> String { bodyFields.first(where: { $0.name == key })?.value ?? "" }
-            if query("ac") == "space" { Thread.sleep(forTimeInterval: 0.15); return "{\"sign\":\"fake\",\"time\":1}" }
+            if query("ac") == "space" { return "{\"sign\":\"fake\",\"time\":1}" }
             if ["add_task_url", "add_task_urls"].contains(query("ac")) {
                 submitted = true
                 let rows: [[String: Any]] = links.map { ["state": true, "url": $0] }

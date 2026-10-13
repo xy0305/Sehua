@@ -7,9 +7,15 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         do {
             let text = try Self.handler(request)
-            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: Data(text.utf8))
-            client?.urlProtocolDidFinishLoading(self)
+            let deliver = { [self] in
+                client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: Data(text.utf8))
+                client?.urlProtocolDidFinishLoading(self)
+            }
+            // Do not block URLProtocol's serial loading queue while snapshot runs.
+            if request.url?.absoluteString.contains("ac=space") == true {
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.5, execute: DispatchWorkItem(block: deliver))
+            } else { deliver() }
         } catch { client?.urlProtocol(self, didFailWithError: error) }
     }
     override func stopLoading() {}
@@ -34,7 +40,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
             let url = request.url!, path = url.path
             let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
             func query(_ key: String) -> String { q.first(where: { $0.name == key })?.value ?? "" }
-            if query("ac") == "space" { Thread.sleep(forTimeInterval: 0.15); return "{\"sign\":\"fake\",\"time\":1}" }
+            if query("ac") == "space" { return "{\"sign\":\"fake\",\"time\":1}" }
             if query("ac") == "add_task_url" {
                 submitted = true
                 if mode == "unknownSubmission" { throw URLError(.timedOut) }
