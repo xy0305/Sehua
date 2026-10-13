@@ -4,7 +4,9 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> Data)?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    nonisolated(unsafe) static var neverFinishSnapshot = false
     override func startLoading() {
+        if Self.neverFinishSnapshot, URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "limit" && $0.value == "100" }) == true { return }
         do {
             let data = try Self.handler!(request)
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
@@ -32,6 +34,8 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
         return String(data: data, encoding: .utf8)!
     }
     static func run(mode: String) async throws {
+        ManualProtocol.neverFinishSnapshot = mode == "pending-snapshot"
+        defer { ManualProtocol.neverFinishSnapshot = false }
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [ManualProtocol.self]
         let session = URLSession(configuration: config)
@@ -64,7 +68,7 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
                 if mode == "transport" { throw URLError(.timedOut) }
                 if mode == "partial" { obj = ["state": true, "data": [["state": true, "url": ed]]] }
                 else if mode == "wrong-identity" { obj = ["state": true, "data": [["state": true, "url": ed], ["state": true, "url": "magnet:?xt=urn:btih:" + String(repeating: "f", count: 40)]]] }
-                else if ["accepted", "bad-snapshot"].contains(mode) { obj = ["state": true, "data": [["state": true, "url": ed], ["state": true, "url": magnet]]] }
+                else if ["accepted", "bad-snapshot", "pending-snapshot"].contains(mode) { obj = ["state": true, "data": [["state": true, "url": ed], ["state": true, "url": magnet]]] }
                 else { obj = ["state": false, "errno": 10008] }
             } else if url.path == "/" {
                 obj = ["state": true, "sign": "fake-sign", "time": "1"]
@@ -101,11 +105,13 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
         await cancelled.value
         let afterCancel = await service.resources()
         precondition(writes == 0 && afterCancel.first!.tasks.isEmpty)
+        let start = Date()
         do { _ = try await service.submit(urls: [ed, ed, magnet], resourceID: resource.id, settings: settings, autoExtraction: true) }
         catch { precondition(mode != "accepted") }
+        if mode == "pending-snapshot" { precondition(Date().timeIntervalSince(start) < 8, "unfinished snapshot must not block POST") }
         var saved = await service.resources().first!
         precondition(writes == 1 && saved.tasks.count == 1 && saved.tasks[0].urls.count == 2)
-        precondition(saved.tasks[0].state == (["accepted", "bad-snapshot"].contains(mode) ? .accepted : mode == "rejected" ? .rejected : .unknown))
+        precondition(saved.tasks[0].state == (["accepted", "bad-snapshot", "pending-snapshot"].contains(mode) ? .accepted : mode == "rejected" ? .rejected : .unknown))
         precondition((saved.extractionQueue ?? []).count == (mode == "accepted" ? 2 : 0))
         if mode != "rejected" {
             do { _ = try await service.submit(urls: [ed], resourceID: resource.id, settings: settings); preconditionFailure("repeated") } catch {}
@@ -125,7 +131,7 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
             // Read-only reconciliation does not clear unknown task locks.
             _ = try await restarted.reconcileDirectory(resourceID: restored.id, settings: settings)
             saved = await restarted.resources().first!
-            precondition(saved.tasks[0].state == (["accepted", "bad-snapshot"].contains(mode) ? .accepted : .unknown))
+            precondition(saved.tasks[0].state == (["accepted", "bad-snapshot", "pending-snapshot"].contains(mode) ? .accepted : .unknown))
             // A post record cannot bypass a manual unknown/accepted task lock either.
             var post = SHT115Resource(id: "post", account: settings.account, tid: "123", directoryName: "test_tid-123", parentCID: cid, directoryCID: "77", directoryWritePending: false, tasks: [])
             post.directoryJournal = []
@@ -224,7 +230,7 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
         precondition(ResourceLinkExtractor.links(in: draft).count == 2)
         draft = ""
         precondition(ResourceLinkExtractor.links(in: draft).isEmpty)
-        for mode in ["accepted", "bad-snapshot", "partial", "wrong-identity", "transport", "rejected", "bad-path"] { try await run(mode: mode) }
+        for mode in ["accepted", "bad-snapshot", "pending-snapshot", "partial", "wrong-identity", "transport", "rejected", "bad-path"] { try await run(mode: mode) }
         print("manual input extraction / durable journal / request identity / unknown / restart / parent CID fixtures passed")
     }
 }

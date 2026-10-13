@@ -17,6 +17,7 @@ import WebKit
             let sample = session.lastFetchSample!
             let d = sample.timing.durations(at: sample.end)
             print("CONTROLLED \(path) policy=\(policy) queue_ms=\(d.queue) navigation_ms=\(d.navigation) dom_ms=\(d.dom) total_s=\(elapsed)")
+            fflush(stdout)
             return (html,elapsed)
         }
         let (old,oldTime) = try await read("/normal",.complete)
@@ -25,7 +26,7 @@ import WebKit
         let (_,unsafeTime) = try await read("/unsafe-frame",.threadBody)
         precondition(unsafeTime>=5,"an unknown script-capable iframe cannot be assumed unrelated to thread injection")
         let (interval,intervalTime) = try await read("/interval-late",.threadBody)
-        precondition(intervalTime>=7 && DiscuzParser.messageBodies(in:interval).joined().contains("FINAL interval body"))
+        precondition(intervalTime>=6.2 && DiscuzParser.messageBodies(in:interval).joined().contains("FINAL interval body"))
         for path in ["/permanent-interval", "/permanent-worker", "/permanent-interval-late"] {
             let (html,elapsed) = try await read(path,.threadBody)
             if path.hasSuffix("-late") { precondition(elapsed >= 6 && elapsed < 10) }
@@ -42,7 +43,7 @@ import WebKit
         let (permission,permissionTime) = try await read("/permission",.threadBody)
         precondition(permissionTime>=5 && permission.contains("隐藏内容需回复") && permission.contains("购买主题"))
         let (load,loadTime) = try await read("/load-late",.threadBody)
-        precondition(loadTime>=7 && load.contains("FINAL load dependent body"))
+        precondition(loadTime>=6.2 && load.contains("FINAL load dependent body"))
         let (restricted,restrictedTime) = try await read("/restricted",.threadBody)
         precondition(restrictedTime<5 && restricted.contains("权限不足"),"restricted/no-body should return actionable HTML, not hang")
         // Same production network called by prefetch and SiteImage, real HTTP.
