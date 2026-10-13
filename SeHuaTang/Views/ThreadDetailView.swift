@@ -722,11 +722,13 @@ struct ThreadDetailView: View {
             }
             guard playback else {
                 panStatus = "115已受理；正在只读核验hash + CID，不重发"
-                do {
-                    let inspection = try await service.inspect(resourceID: resource.id, settings: settings, includeFiles: false)
-                    panStatus = "115已受理；" + inspection.verificationSummary + "；受理/100%不证明实体文件可读，未取播放URL。"
-                } catch {
-                    panStatus = "115已受理；只读核验失败，不重发：" + SHT115Settings.safeMessage(error)
+                Task { @MainActor in
+                    do {
+                        let inspection = try await service.inspect(resourceID: resource.id, settings: settings, includeFiles: false)
+                        panStatus = "115已受理；" + inspection.verificationSummary + "；受理/100%不证明实体文件可读，未取播放URL。"
+                    } catch {
+                        panStatus = "115已受理；只读核验失败，不重发：" + SHT115Settings.safeMessage(error)
+                    }
                 }
                 return
             }

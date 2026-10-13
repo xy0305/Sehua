@@ -6,6 +6,9 @@ final class PushLatencyProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var starts: [Date] = []
     nonisolated(unsafe) static var slowSnapshot = false
     nonisolated(unsafe) static var signatureDelay = 0.05
+    nonisolated(unsafe) static var postResponse = "{\"state\":true}"
+    nonisolated(unsafe) static var parentCount = 0
+    nonisolated(unsafe) static var journalURL: URL? = nil
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -16,9 +19,15 @@ final class PushLatencyProtocol: URLProtocol, @unchecked Sendable {
         Self.routes.append(route); Self.starts.append(Date())
         if route == "taskGET" || (isSnapshot && Self.slowSnapshot) { return } // indefinitely pending read
         let text: String
-        if route == "POST" { text = "{\"state\":true}" }
+        if route == "POST" {
+            if let store = Self.journalURL {
+                let saved = try! JSONDecoder().decode([SHT115Resource].self, from: Data(contentsOf: store))
+                precondition(saved.contains { $0.tasks.contains { $0.state == .submitting } }, "durable journal before POST")
+            }
+            text = Self.postResponse
+        }
         else if route == "signature" { text = "{\"state\":true,\"sign\":\"fixture\",\"time\":1}" }
-        else { text = "{\"state\":true,\"count\":0,\"data\":[],\"path\":[{\"cid\":\"0\"},{\"cid\":\"10\"}],\"offset\":0,\"limit\":100,\"order\":\"file_name\",\"is_asc\":1,\"fc_mix\":1}" }
+        else { text = "{\"state\":true,\"count\":\(Self.parentCount),\"data\":[],\"path\":[{\"cid\":\"0\"},{\"cid\":\"10\"}],\"offset\":0,\"limit\":100,\"order\":\"file_name\",\"is_asc\":1,\"fc_mix\":1}" }
         DispatchQueue.global().asyncAfter(deadline: .now() + (route == "signature" ? Self.signatureDelay : 0.05)) { [self] in
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: Data(text.utf8)); client?.urlProtocolDidFinishLoading(self)
@@ -112,6 +121,8 @@ actor GrantLog {
         let directStore = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directStore) }
         let directService = try SHT115Service(storeURL: directStore, session: session)
+        PushLatencyProtocol.parentCount = 1278
+        PushLatencyProtocol.journalURL = directStore
         PushLatencyProtocol.routes = []; PushLatencyProtocol.starts = []
         let directStart = Date()
         let direct = try await directService.createAndSubmitResource(urls: [link], tid: "1278", title: "direct", settings: settings, autoExtraction: true)
@@ -127,6 +138,29 @@ actor GrantLog {
         precondition(listing.videos.isEmpty && PushLatencyProtocol.routes.isEmpty, "shared directory must not attribute unrelated videos")
         do { _ = try await directService.createAndSubmitResource(urls: [link + "&dn=renamed"], tid: "1279", title: "other", settings: settings); preconditionFailure("cross-post hash lock") } catch {}
         precondition(PushLatencyProtocol.routes.isEmpty, "local hash lock must precede any requests")
+        PushLatencyProtocol.postResponse = "{\"state\":true,\"result\":[{\"state\":true},{\"state\":false}]}"
+        let b = "magnet:?xt=urn:btih:" + String(repeating: "b", count: 40)
+        let c = "magnet:?xt=urn:btih:" + String(repeating: "c", count: 40)
+        PushLatencyProtocol.routes = []
+        do { _ = try await directService.createAndSubmitResource(urls: [b, c], tid: "1280", title: "partial", settings: settings); preconditionFailure("partial acceptance is unknown") } catch {}
+        precondition(PushLatencyProtocol.routes == ["identity", "signature", "POST"])
+        PushLatencyProtocol.routes = []
+        let restarted = try SHT115Service(storeURL: directStore, session: session)
+        do { _ = try await restarted.createAndSubmitResource(urls: [b], tid: "1281", title: "cross post", settings: settings); preconditionFailure("unknown replay after restart") } catch {}
+        precondition(PushLatencyProtocol.routes.isEmpty)
+        let oldStore = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: oldStore) }
+        let legacy = SHT115Resource(id: "legacy", account: settings.account, tid: "77", directoryName: "old_tid-77", parentCID: "10", directoryCID: "99", directoryWritePending: true, tasks: [SHT115Task(id: UUID(), urls: [b], state: .unknown, progress: [], updatedAt: Date())])
+        try JSONEncoder().encode([legacy]).write(to: oldStore)
+        let legacyService = try SHT115Service(storeURL: oldStore, session: session)
+        do { _ = try await legacyService.createAndSubmitResource(urls: [b], tid: "78", title: "legacy lock", settings: settings); preconditionFailure("legacy unknown bypass") } catch {}
+        precondition(PushLatencyProtocol.routes.isEmpty)
+        let retained = await legacyService.resources().first { $0.id == "legacy" }
+        precondition(retained?.directoryCID == "99" && retained?.directoryWritePending == true && retained?.tasks.first?.state == .unknown)
+        PushLatencyProtocol.postResponse = "{\"state\":true}"
+        PushLatencyProtocol.journalURL = nil
+        PushLatencyProtocol.parentCount = 0
+        print("PASS direct 1278-item identity-only target, durable pre-POST journal, partial batch unknown, cross-post restart/legacy locks and shared-video isolation")
         print("PASS account/target isolation: no cross-account proof cache; wrong target denied before POST")
         print("PASS production pending snapshot/task GET: accepted feedback preceded never-ending reads; no post-submit snapshot authorization, no extraction queue; duplicate blocked; FIFO priority/fairness/cancellation passed")
     }
