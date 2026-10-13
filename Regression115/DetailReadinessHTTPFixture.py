@@ -54,7 +54,13 @@ class Handler(BaseHTTPRequestHandler):
     message='<div id="messagetext">请先登录，权限不足</div>';media=''
    elif path=='/ready':
     message='ready';media=''
-   data=('<html><body>'+message+media+script+'</body></html>').encode()
+   # Content readiness is explicit; unrelated recurring timers must not gate it.
+   delayed=path in ['/interval-late','/permanent-interval-late','/streamed','/late','/empty-late','/permission','/load-late']
+   if delayed:
+    message=message.replace("id='m'", "id='m' aria-busy='true'")
+    script=script.replace(".textContent=", ".removeAttribute('aria-busy');document.querySelector('#m').textContent=")
+    script=script.replace(".innerHTML=", ".removeAttribute('aria-busy');document.querySelector('#m').innerHTML=")
+   data=('<html><body><div class="display pi" id="pid1">'+message+'</div>'+media+script+'</body></html>').encode()
   try:
    self.send_response(status);self.send_header('Content-Type',typ);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
   except (BrokenPipeError,ConnectionResetError):pass

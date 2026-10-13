@@ -28,7 +28,8 @@ import WebKit
         precondition(intervalTime>=7 && DiscuzParser.messageBodies(in:interval).joined().contains("FINAL interval body"))
         for path in ["/permanent-interval", "/permanent-worker", "/permanent-interval-late"] {
             let (html,elapsed) = try await read(path,.threadBody)
-            precondition(elapsed>=8 && elapsed<15,"permanent unknown activity must use bounded complete fallback, never early delivery or timeout")
+            if path.hasSuffix("-late") { precondition(elapsed >= 6 && elapsed < 10) }
+            else { precondition(elapsed < 4, "unrelated permanent activity must not add eight seconds") }
             let expected = path.hasSuffix("-late") ? "FINAL permanent activity body" : "complete body"
             precondition(DiscuzParser.messageBodies(in:html).joined().contains(expected),"complete fallback must retain delayed body")
         }

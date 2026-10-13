@@ -94,9 +94,6 @@ final class WebSession: NSObject, ObservableObject {
         collectGen += 1
         let scripts = webView.configuration.userContentController
         scripts.removeAllUserScripts()
-        if readiness[next.id] == .threadBody {
-            scripts.addUserScript(WKUserScript(source: ThreadDOMReadiness.install, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        }
         guard let navigation = webView.load(URLRequest(url: next.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: next.timeout)) else {
             complete(id: next.id, result: .failure(URLError(.unknown)))
             return
@@ -247,7 +244,7 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
                 let snapshot = result as? [String: Any]
                 let html = (snapshot?["html"] as? String) ?? ""
                 let documentReady = (snapshot?["ready"] as? String) == "complete"
-                    && (self?.readiness[id] != .threadBody || (snapshot?["settled"] as? Bool) == true)
+
                 Task { @MainActor in
                     guard let self, self.activeID == id, gen == self.collectGen else { return }
                     if let error {
@@ -284,19 +281,21 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
                         let body = DiscuzParser.messageBodies(in: html).joined(separator: "\n")
                         let signature = self.readiness[id] == .threadBody ? ((snapshot?["signature"] as? String) ?? body) : body
                         let stable = signature == previousBody
-                        let safeEarly = self.readiness[id] == .threadBody
+                        let trusted = self.webView.url?.host.map { SiteConfig.mirrors.contains($0) || $0 == "127.0.0.1" } ?? false
+                        let pending = (snapshot?["pending"] as? Bool) == true
+                        let safeEarly = self.readiness[id] == .threadBody && trusted
                             && (snapshot?["safe"] as? Bool) == true && !body.isEmpty && stable
                         if safeEarly {
                             self.finish(html, id: id, gen: gen)
                             return
                         }
-                        // Unknown asynchronous work, loading/permission placeholders and
-                        // unstable attachment/pagination DOM always retain complete fallback.
-                        if (!documentReady || !stable) && attempt < 24 {
+                        // Completed documents use the original .4/.7 stability sampling.
+                        // Explicit body loading remains pending; ads/timers are not a gate.
+                        if (!documentReady || !stable || (self.readiness[id] == .threadBody && pending)) && attempt < 24 {
                             self.collectHTML(attempt: attempt + 1, id: id, gen: gen, previousBody: signature)
                             return
                         }
-                        if documentReady || (self.readiness[id] != .threadBody && !body.isEmpty) {
+                        if (documentReady && (self.readiness[id] != .threadBody || (!pending && stable))) || (self.readiness[id] != .threadBody && !body.isEmpty) {
                             self.finish(html, id: id, gen: gen)
                             return
                         }
@@ -355,93 +354,31 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
     }
 }
 
-// Fail-closed document-start instrumentation: arbitrary deferred work is not
-// assumed to be advertising. If it cannot be proven idle, use complete mode.
+// Observe content, never monkey-patch timers, events, workers or network APIs.
+// This is a bounded DOM readiness contract, not a promise about future async work.
 private enum ThreadDOMReadiness {
-    static let install = #"""
-    (() => {
-      const s = window.__shtReadiness = {timers:new Set(), intervals:new Set(), io:0,
-        last:performance.now(), loaded:new WeakSet(), loadHandlers:false, failed:false};
-      try {
-        const timeout=window.setTimeout, clear=window.clearTimeout;
-        window.setTimeout=function(fn, delay, ...args) {
-          let id=timeout.call(window, function(){s.timers.delete(id); s.last=performance.now();
-            if(typeof fn==='function') fn.apply(window,args); else (0,eval)(fn);}, delay);
-          s.timers.add(id); return id;
-        };
-        window.clearTimeout=function(id){s.timers.delete(id);s.intervals.delete(id);return clear.call(window,id);};
-        const interval=window.setInterval, cancel=window.clearInterval;
-        window.setInterval=function(...args){const id=interval.apply(window,args);s.intervals.add(id);return id;};
-        window.clearInterval=function(id){s.intervals.delete(id);s.timers.delete(id);return cancel.call(window,id);};
-        for(const [schedule,cancelName] of [['requestAnimationFrame','cancelAnimationFrame'],['requestIdleCallback','cancelIdleCallback']]) {
-          if(!window[schedule])continue;
-          const original=window[schedule], cancelOriginal=window[cancelName];
-          window[schedule]=function(fn,...args){let token={};s.timers.add(token);
-            const id=original.call(window,(...values)=>{s.timers.delete(token);s.last=performance.now();fn(...values);},...args);
-            token.id=id;token.kind=schedule;return id;};
-          window[cancelName]=function(id){for(const token of s.timers){if(token.kind===schedule && token.id===id)s.timers.delete(token);}return cancelOriginal.call(window,id);};
-        }
-        for(const name of ['Worker','SharedWorker','WebSocket','EventSource']) {
-          if(!window[name])continue;const Original=window[name];
-          window[name]=new Proxy(Original,{construct(target,args){s.failed=true;return Reflect.construct(target,args);}});
-        }
-        const fetch=window.fetch;
-        window.fetch=function(...args){s.io++;return fetch.apply(this,args).finally(()=>{s.io--;s.last=performance.now();});};
-        // Fetch resolves at headers; body consumers can still inject content later.
-        for(const method of ['text','json','blob','arrayBuffer','formData']) {
-          const original=Response.prototype[method];if(!original)continue;
-          Response.prototype[method]=function(...args){s.io++;
-            try{return original.apply(this,args).finally(()=>{s.io--;s.last=performance.now();});}
-            catch(e){s.io--;throw e;}};
-        }
-        if(window.ReadableStreamDefaultReader){const read=ReadableStreamDefaultReader.prototype.read;
-          ReadableStreamDefaultReader.prototype.read=function(...args){s.io++;
-            return read.apply(this,args).finally(()=>{s.io--;s.last=performance.now();});};}
-        const send=XMLHttpRequest.prototype.send;
-        XMLHttpRequest.prototype.send=function(...args){s.io++;
-          this.addEventListener('loadend',()=>{s.io--;s.last=performance.now();},{once:true});
-          try{return send.apply(this,args);}catch(e){s.io--;throw e;}};
-        const add=EventTarget.prototype.addEventListener;
-        EventTarget.prototype.addEventListener=function(type,...args){
-          if(type==='load' || type==='error' || type==='message' || type.startsWith('animation') || type.startsWith('transition'))s.loadHandlers=true;
-          return add.call(this,type,...args);
-        };
-        add.call(document,'load',e=>{if(e.target.tagName==='SCRIPT')s.loaded.add(e.target);},true);
-        add.call(document,'error',e=>{if(e.target.tagName==='SCRIPT')s.failed=true;},true);
-        new MutationObserver(()=>{s.last=performance.now();}).observe(document,{subtree:true,childList:true,attributes:true,characterData:true});
-      } catch(e) {s.failed=true;}
-    })();
-    """#
     static let snapshot = #"""
     (() => {
-      const s=window.__shtReadiness, body=document.body;
+      const body=document.body;
       const html=document.contentType.includes('xml') ? new XMLSerializer().serializeToString(document) : document.documentElement.outerHTML;
-      // Include attachment galleries, permission/purchase evidence and page links,
-      // not only message text. Resource completion does not change this signature.
-      const signature=body ? body.innerHTML : '';
-      const text=body ? body.innerText : '';
-      const messages=[...document.querySelectorAll('.message, [id^="postmessage_"]')];
+      const messages=[...document.querySelectorAll('.message,[id^="postmessage_"]')];
+      const roots=[...new Set(messages.map(e=>e.closest('.display.pi[id^="pid"], [id^="post_"]') || e))];
       const populated=messages.length>0 && messages.every(e=>e.textContent.trim() || e.querySelector('img,a,video'));
-      const placeholder=document.querySelector('[aria-busy="true"],.loading,.loadmore.loading,.skeleton,[data-loading="true"],#messagetext,.alert_error,.locked,.pay,.showhide');
-      const restricted=/请先登录|登录后|无权|权限不足|购买主题|购买后|隐藏内容|回复后|满18岁|Just a moment|验证您|正在加载|加载中/.test(text);
-      const pendingScript=s && [...document.scripts].some(e=>e.src && !s.loaded.has(e));
-      const unknownModule=[...document.scripts].some(e=>e.type==='module' || /\bimport\s*\(/.test(e.textContent));
-      const unsafeFrame=[...document.querySelectorAll('iframe,object,embed')].some(e=>
-        e.tagName!=='IFRAME' || !e.hasAttribute('sandbox') || e.sandbox.contains('allow-scripts'));
-      const mediaCallback=[...document.querySelectorAll('img,iframe,link,video,audio')].some(e=>e.onload || e.onerror);
-      const safe=!!(s && !s.failed && document.readyState==='interactive' && populated
-        && !placeholder && !restricted && !pendingScript && !unknownModule && !unsafeFrame && !mediaCallback && !s.loadHandlers
-        && !window.onload && !window.onmessage && !document.querySelector('[onload],[onerror]') && !s.io && !s.timers.size && !s.intervals.size
-        && performance.now()-s.last>=900);
-      // Unknown permanent activity disables early delivery, not normal complete
-      // delivery forever. Give complete documents an additional bounded 8s grace;
-      // tracked finite timers/network still must drain and native sampling still
-      // requires a stable DOM. This is a compatibility fallback, not proof that
-      // arbitrary Worker/interval content has finished.
-      if(document.readyState==='complete' && s && !s.completeAt)s.completeAt=performance.now();
-      const completeFallback=!!(s && s.completeAt && performance.now()-s.completeAt>=8000 && !s.io && !s.timers.size);
-      const settled=!!(s && ((!s.failed && !s.io && !s.timers.size && !s.intervals.size && performance.now()-s.last>=900) || completeFallback));
-      return {html,ready:document.readyState,signature,safe,settled};
+      const busy='[aria-busy="true"],.loading,.skeleton,[data-loading="true"]';
+      const pending=messages.some(e=>!e.textContent.trim() && !e.querySelector('img,a,video')) || roots.some(e=>
+        e.matches(busy) || e.querySelector(busy) || /正在加载|加载中/.test(e.textContent));
+      const restriction=document.querySelector('#messagetext,.alert_error,.locked,.pay,.showhide');
+      const restricted=!!restriction || /请先登录|登录后|无权|权限不足|购买主题|购买后|隐藏内容|回复后|满18岁|Just a moment|验证您/.test(body ? body.innerText : '');
+      // Relevant HTML retains source URLs, GIFs, attachment order and access evidence.
+      // No whole-body comparison: live advertising/counters cannot starve a thread.
+      const evidence=[...document.querySelectorAll('.attachment,.pattl,.attnm,.pg,.pgs,.n5_htfy,#messagetext,.alert_error,.locked,.pay,.showhide')];
+      const signature=JSON.stringify([...messages,...evidence].map(e=>e.outerHTML));
+      const known=messages.every(e=>!!e.closest('.display.pi[id^="pid"], [id^="post_"]'));
+      // Only a known server-rendered container may bypass unfinished resources.
+      // Unknown frames/modules/load-dependent documents retain complete fallback.
+      const unknown=document.querySelector('iframe:not([sandbox]),object,embed,script[async],script[type="module"],[onload],[onerror]') || window.onload;
+      const safe=document.readyState==='interactive' && known && populated && !pending && !restricted && !unknown;
+      return {html,ready:document.readyState,signature,safe,pending};
     })();
     """#
 }
