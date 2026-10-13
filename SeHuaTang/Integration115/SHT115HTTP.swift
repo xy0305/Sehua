@@ -161,7 +161,12 @@ extension SHT115HTTP {
     /// no file scan; malformed listing metadata must not disable offline submission.
     func freshPath(cid: String, parent: String?, settings: SHT115Settings) async throws -> [[String: Any]] {
         let query = Self.form([("aid", "1"), ("cid", cid), ("offset", "0"), ("limit", "1"), ("show_dir", "1"), ("format", "json")])
-        let obj = try await json("https://webapi.115.com/files?" + query, settings: settings)
+        var obj: [String: Any]
+        do { obj = try await json("https://webapi.115.com/files?" + query, settings: settings) }
+        catch let error as SHT115Diagnostic {
+            guard error.stage == "http-read", Int(error.code).map({ $0 <= -1000 && $0 != -999 }) == true else { throw error }
+            obj = try await json("https://proapi.115.com/android/2.0/ufile/files?" + query, settings: settings)
+        }
         guard Self.success(obj) else { throw SHT115Diagnostic(stage: "directory-path", outcome: "目录读取被API拒绝；未发送", code: SHT115Diagnostic.apiCode(obj)) }
         let nested = obj["data"] as? [String: Any] ?? [:]
         let path = (obj["path"] as? [[String: Any]]) ?? (nested["path"] as? [[String: Any]]) ?? []

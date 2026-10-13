@@ -100,9 +100,13 @@ struct Pan115ManualPushView: View {
             message = "阶段2/3：验证签名、写前journal、单次提交；未知不重发"
             resource = try await service.submit(urls: approved, resourceID: prepared.id, settings: settings, autoExtraction: SHT115ExtractionPolicy.enabled())
             message = "阶段3/3：已受理，正在只读核验hash + CID"
-            _ = try? await service.inspect(resourceID: prepared.id, settings: settings, includeFiles: false)
+            do {
+                _ = try await service.inspect(resourceID: prepared.id, settings: settings, includeFiles: false)
+                message = "115已确认完整受理；hash + CID只读查询完成，详情见手动记录。受理或100%均不代表实体文件可读。"
+            } catch {
+                message = "115已确认受理；后续只读核验失败，不重发：" + SHT115Settings.safeMessage(error)
+            }
             input = ""
-            message = "115已确认完整受理；不代表下载完成，未自动播放。"
             ExtractBackground.kick()
         } catch {
             message = SHT115Settings.safeMessage(error)

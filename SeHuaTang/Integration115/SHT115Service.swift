@@ -1,5 +1,10 @@
 import Foundation
 
+private actor SHT115SubmissionSnapshot {
+    private(set) var ids: [String]?
+    func set(_ value: [String]) { ids = value }
+}
+
 public actor SHT115Service {
     private let http: SHT115HTTP
     private let storeURL: URL
@@ -428,16 +433,24 @@ public actor SHT115Service {
         }
         do { try await http.verify(cid: cid, parent: records[i].verificationParentCID, settings: settings) }
         catch { throw SHT115Diagnostic(stage: "verify-before-submit", outcome: "未发送：目标路径无法验证", code: "") }
-        // Snapshot failure is NOT submission failure. No complete snapshot => no extraction.
-        var priorIDs: [String]? = nil
-        if autoExtraction, let page = try? await http.verifiedPage(cid: cid, parent: records[i].verificationParentCID, settings: settings),
-           page.total == page.entries.count, Set(page.entries.map(\.id)).count == page.entries.count {
-            priorIDs = page.entries.map(\.id)
-        }
+        // Opportunistic one-page proof runs beside signing, never on the critical path.
+        // Capture only a completed pre-POST snapshot; a slow/failed read disables extraction.
+        let snapshot = SHT115SubmissionSnapshot()
+        let parent = records[i].verificationParentCID
+        let snapshotTask = autoExtraction ? Task { [http] in
+            if let page = try? await http.verifiedPage(cid: cid, parent: parent, settings: settings),
+               page.total == page.entries.count, Set(page.entries.map(\.id)).count == page.entries.count {
+                await snapshot.set(page.entries.map(\.id))
+            }
+        } : nil
+        defer { snapshotTask?.cancel() }
+        if autoExtraction { await Task.yield() }
         let signature: [(String, String)]
         do { signature = try await sign(settings) }
         catch let error as SHT115Diagnostic { throw error }
         catch { throw SHT115Diagnostic(stage: "signature", outcome: "未提交：签名请求失败", code: "") }
+        let priorIDs = await snapshot.ids
+        snapshotTask?.cancel()
         records[i].tasks.append(SHT115Task(id: UUID(), urls: links, state: .submitting, progress: [], updatedAt: Date(), writeEvidence: SHT115TaskWriteEvidence(request: links.count == 1 ? "single-offline-post" : "batch-offline-post"))); try save()
         let t = records[i].tasks.count - 1
         let fields = Self.submissionFields(links: links, cid: cid, uid: settings.uid, signature: signature)
