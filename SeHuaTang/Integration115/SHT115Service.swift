@@ -95,7 +95,7 @@ public actor SHT115Service {
         let timestamp = String(Int(Date().timeIntervalSince1970 * 1000))
         let obj = try await http.json("https://115.com/?ct=offline&ac=space&_=" + timestamp, settings: settings)
         let sign = SHT115HTTP.string(obj["sign"])
-        guard SHT115HTTP.success(obj) else { throw SHT115Diagnostic(stage: "signature", outcome: "未发送：115签名接口拒绝", code: SHT115Diagnostic.apiCode(obj)) }
+        guard !["0", "false"].contains(SHT115HTTP.string(obj["state"]).lowercased()) else { throw SHT115Diagnostic(stage: "signature", outcome: "未发送：115签名接口拒绝", code: SHT115Diagnostic.apiCode(obj)) }
         let returnedTime = SHT115HTTP.string(obj["time"])
         guard !sign.isEmpty else { throw SHT115Diagnostic(stage: "signature", outcome: "未提交：签名为空", code: SHT115Diagnostic.apiCode(obj)) }
         // Same fallback as tang115 and Pan115Client; keep server time when present.
