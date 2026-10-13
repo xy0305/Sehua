@@ -115,6 +115,11 @@ public actor SHT115Service {
     /// Read-only preparation; a stable independent record preserves unknown locks across visits.
     /// No network writes or directory creation. UI calls only after explicit confirmation.
     public func prepareManualResource(settings: SHT115Settings, targetCID: String? = nil) async throws -> SHT115Resource {
+        try await SHT115RequestContext.$interactive.withValue(true) {
+            try await prepareManualResourceInteractive(settings: settings, targetCID: targetCID)
+        }
+    }
+    private func prepareManualResourceInteractive(settings: SHT115Settings, targetCID: String? = nil) async throws -> SHT115Resource {
         try await begin(); defer { end() }
         try settings.validate()
         let target = targetCID ?? settings.parentCID
@@ -184,6 +189,11 @@ public actor SHT115Service {
         return (safe.isEmpty ? "资源" : safe) + "_tid-" + tid
     }
     public func createOrReuseResource(tid: String, title: String, settings: SHT115Settings) async throws -> SHT115Resource {
+        try await SHT115RequestContext.$interactive.withValue(true) {
+            try await createOrReuseResourceInteractive(tid: tid, title: title, settings: settings)
+        }
+    }
+    private func createOrReuseResourceInteractive(tid: String, title: String, settings: SHT115Settings) async throws -> SHT115Resource {
         try await begin(); defer { end() }
         try settings.validate()
         let name = try Self.directoryName(tid: tid, title: title)
@@ -390,6 +400,24 @@ public actor SHT115Service {
         return .unknown
     }
     public func submit(urls: [String], resourceID: String, settings: SHT115Settings, autoExtraction: Bool = false) async throws -> SHT115Resource {
+        try await SHT115RequestContext.$interactive.withValue(true) {
+            try await submitInteractive(urls: urls, resourceID: resourceID, settings: settings, autoExtraction: autoExtraction)
+        }
+    }
+    /// Proof is local to this user operation, never a service/global TTL cache.
+    public func prepareAndSubmitManual(urls: [String], settings: SHT115Settings, targetCID: String, autoExtraction: Bool = false) async throws -> SHT115Resource {
+        try await SHT115RequestContext.$interactive.withValue(true) {
+            let prepared = try await prepareManualResourceInteractive(settings: settings, targetCID: targetCID)
+            return try await submitInteractive(urls: urls, resourceID: prepared.id, settings: settings, autoExtraction: autoExtraction, verifiedTarget: prepared.directoryCID)
+        }
+    }
+    public func createAndSubmitResource(urls: [String], tid: String, title: String, settings: SHT115Settings, autoExtraction: Bool = false) async throws -> SHT115Resource {
+        try await SHT115RequestContext.$interactive.withValue(true) {
+            let prepared = try await createOrReuseResourceInteractive(tid: tid, title: title, settings: settings)
+            return try await submitInteractive(urls: urls, resourceID: prepared.id, settings: settings, autoExtraction: autoExtraction, verifiedTarget: prepared.directoryCID)
+        }
+    }
+    private func submitInteractive(urls: [String], resourceID: String, settings: SHT115Settings, autoExtraction: Bool = false, verifiedTarget: String? = nil) async throws -> SHT115Resource {
         try await begin(); defer { end() }
         let i = try index(resourceID, settings)
         var links = Array(Set(urls.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })).sorted()
@@ -431,14 +459,18 @@ public actor SHT115Service {
             }) { throw SHT115Diagnostic(stage: "offline-reconcile", outcome: "历史离线任务待核验：unknown/submitting命中本次链接；保留任务锁，本次未重发", code: "") }
             throw SHT115Error.alreadySubmitted
         }
-        do { try await http.verify(cid: cid, parent: records[i].verificationParentCID, settings: settings) }
-        catch { throw SHT115Diagnostic(stage: "verify-before-submit", outcome: "未发送：目标路径无法验证", code: "") }
+        if verifiedTarget != cid {
+            do { try await http.verify(cid: cid, parent: records[i].verificationParentCID, settings: settings) }
+            catch { throw SHT115Diagnostic(stage: "verify-before-submit", outcome: "未发送：目标路径无法验证", code: "") }
+        }
         // Opportunistic one-page proof runs beside signing, never on the critical path.
         // Capture only a completed pre-POST snapshot; a slow/failed read disables extraction.
         let snapshot = SHT115SubmissionSnapshot()
         let parent = records[i].verificationParentCID
         let snapshotTask = autoExtraction ? Task { [http] in
-            if let page = try? await http.verifiedPage(cid: cid, parent: parent, settings: settings),
+            if let page = try? await SHT115RequestContext.$interactive.withValue(false, operation: {
+                try await http.verifiedPage(cid: cid, parent: parent, settings: settings)
+            }),
                page.total == page.entries.count, Set(page.entries.map(\.id)).count == page.entries.count {
                 await snapshot.set(page.entries.map(\.id))
             }

@@ -257,13 +257,10 @@ struct Pan115ResourceView: View {
             let settings = SHT115Settings.load()
             try settings.validate()
             let service = try Pan115UIService.get()
-            stage = "目录创建 / 核验"
-            let created = try await service.createOrReuseResource(tid: String(detail.tid), title: detail.title, settings: settings)
-            resource = created
-            stage = "离线任务提交"
-            resource = try await service.submit(urls: urls, resourceID: created.id, settings: settings, autoExtraction: SHT115ExtractionPolicy.enabled())
+            stage = "目录核验、签名与离线任务提交"
+            resource = try await service.createAndSubmitResource(urls: urls, tid: String(detail.tid), title: detail.title, settings: settings, autoExtraction: SHT115ExtractionPolicy.enabled())
             ExtractBackground.kick()
-            message = "已记录提交结果；仅推送，不等待下载、不自动播放。符合安全条件的新压缩包由持久队列处理；受理不等于完成。"
+            message = "已推送115，下载状态稍后更新。受理不等于下载完成；仅推送，不自动播放。"
         } catch {
             // Derive locks from the durable journal, not from a broad catch:
             // a failed read/signature is not evidence that a write was sent.

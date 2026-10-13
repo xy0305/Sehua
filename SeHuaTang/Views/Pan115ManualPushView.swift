@@ -95,23 +95,20 @@ struct Pan115ManualPushView: View {
             let current = SHT115Settings.load()
             guard current.cookie == settings.cookie, current.parentCID == settings.parentCID else { throw SHT115Error.accountMismatch }
             let service = try Pan115UIService.get()
-            let prepared = try await service.prepareManualResource(settings: settings, targetCID: targetCID)
+            message = "目标核验、签名与单次提交；未知不重发"
+            let prepared = try await service.prepareAndSubmitManual(urls: approved, settings: settings, targetCID: targetCID, autoExtraction: SHT115ExtractionPolicy.enabled())
             resource = prepared
-            message = "阶段2/3：验证签名、写前journal、单次提交；未知不重发"
-            resource = try await service.submit(urls: approved, resourceID: prepared.id, settings: settings, autoExtraction: SHT115ExtractionPolicy.enabled())
-            message = "阶段3/3：已受理，正在只读核验hash + CID"
-            do {
-                _ = try await service.inspect(resourceID: prepared.id, settings: settings, includeFiles: false)
-                message = "115已确认完整受理；hash + CID只读查询完成，详情见手动记录。受理或100%均不代表实体文件可读。"
-            } catch {
-                message = "115已确认受理；后续只读核验失败，不重发：" + SHT115Settings.safeMessage(error)
+            message = "已推送115，下载状态稍后更新。受理不等于下载完成。"
+            // Read-only reconciliation must not hold the interaction busy state.
+            Task {
+                _ = try? await service.inspect(resourceID: prepared.id, settings: settings, includeFiles: false)
             }
             input = ""
             ExtractBackground.kick()
         } catch {
             message = SHT115Settings.safeMessage(error)
-            if let id = resource?.id, let service = try? Pan115UIService.get() {
-                resource = await service.resources().first { $0.id == id }
+            if let service = try? Pan115UIService.get() {
+                resource = await service.resources().first { $0.account == settings.account && $0.manualInput == true && $0.directoryCID == targetCID }
             }
         }
     }

@@ -40,6 +40,11 @@ jobs:
           sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
 
+      - name: Push critical path latency and pacer fairness
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/PushLatencyFixtures.swift -o /tmp/push-latency-fixtures
+          /tmp/push-latency-fixtures
+
       - name: Native manual push extraction and production request safety
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift SeHuaTang/Models/Models.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Integration115/ResourceLinkExtractor.swift SeHuaTang/Integration115/SmallArchiveReader.swift Regression115/ManualPushFixtures.swift -o /tmp/manual-push-fixtures

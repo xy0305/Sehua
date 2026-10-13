@@ -30,7 +30,7 @@ struct SHT115HTTP {
             request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
             request.httpBody = Data(Self.form(fields).utf8)
         }
-        try await SHT115RequestPacer.shared.wait()
+        try await SHT115RequestPacer.shared.wait(interactive: fields != nil || SHT115RequestContext.interactive)
         try Task.checkCancellation()
         let (data, response): (Data, URLResponse)
         do { (data, response) = try await session.data(for: request) }
@@ -243,20 +243,37 @@ extension SHT115HTTP {
 
 /// Reserve start slots across all service instances, like tang115 MIN_115_GAP_MS.
 /// No automatic retry, especially no retry of an ambiguous POST.
+enum SHT115RequestContext {
+    @TaskLocal static var interactive = false
+}
+
 actor SHT115RequestPacer {
     static let shared = SHT115RequestPacer()
     private var lastStart: UInt64 = 0
-    func wait() async throws {
-        // Recheck after suspension: delayed callers must not bunch into old slots.
+    private struct Waiter { let id: UUID; let interactive: Bool }
+    private var waiters: [Waiter] = []
+    private var interactiveRun = 0
+    func wait(interactive: Bool = false) async throws {
+        let id = UUID()
+        waiters.append(Waiter(id: id, interactive: interactive))
+        defer { waiters.removeAll { $0.id == id } }
         while true {
             try Task.checkCancellation()
             let now = DispatchTime.now().uptimeNanoseconds
             let earliest = lastStart + 1_100_000_000
-            if now >= earliest {
+            // FIFO within each class. After three interactive grants, one waiting
+            // background read gets a turn. No in-flight request is interrupted.
+            let foreground = waiters.first { $0.interactive }
+            let background = waiters.first { !$0.interactive }
+            let selected = (interactiveRun >= 3 ? background : nil) ?? foreground ?? background
+            if selected?.id == id && now >= earliest {
                 lastStart = now
+                interactiveRun = interactive ? interactiveRun + 1 : 0
                 return
             }
-            try await Task.sleep(nanoseconds: earliest - now)
+            // Short cancellable polling allows newly queued interactive work to
+            // overtake unstarted GETs without reserving stale pacing slots.
+            try await Task.sleep(nanoseconds: min(20_000_000, now < earliest ? earliest - now : 20_000_000))
         }
     }
 }
