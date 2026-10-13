@@ -14,7 +14,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
             }
             // Do not block URLProtocol's serial loading queue while snapshot runs.
             if request.url?.absoluteString.contains("ac=space") == true {
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.5, execute: DispatchWorkItem(block: deliver))
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2.5, execute: DispatchWorkItem(block: deliver))
             } else { deliver() }
         } catch { client?.urlProtocol(self, didFailWithError: error) }
     }
