@@ -30,6 +30,7 @@ struct Pan115ResourceView: View {
                 Text(detail.title)
                 Text("tid \(detail.tid) · 当前阶段：\(stage)")
                     .font(.caption).foregroundStyle(.secondary)
+                NavigationLink("独立手动推送 ed2k / 磁力（不关联此帖）", destination: Pan115ManualPushView())
                 NavigationLink("115 设置", destination: Pan115SettingsView())
                 if let resource {
                     NavigationLink {
