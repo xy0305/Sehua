@@ -416,8 +416,19 @@ public actor SHT115Service {
     public func createAndSubmitResource(urls: [String], tid: String, title: String, settings: SHT115Settings, autoExtraction: Bool = false) async throws -> SHT115Resource {
         try await begin(); defer { end() }
         return try await SHT115RequestContext.$interactive.withValue(true) {
-            let prepared = try await createOrReuseResourceInteractive(tid: tid, title: title, settings: settings, acquirePermit: false)
-            return try await submitInteractive(urls: urls, resourceID: prepared.id, settings: settings, autoExtraction: autoExtraction, verifiedTarget: prepared.directoryCID, acquirePermit: false)
+            try settings.validate()
+            _ = try Self.directoryName(tid: tid, title: title)
+            let target = settings.parentCID
+            let id = "direct-" + SHT115Digest(settings.account + ":" + target + ":" + tid)
+            // Separate mode identity: never mutate an old per-post folder or its locks.
+            if !records.contains(where: { $0.id == id }) {
+                var record = SHT115Resource(id: id, account: settings.account, tid: tid, directoryName: "推送到所选目录 · CID " + target, parentCID: target, directoryCID: target, directoryWritePending: false, tasks: [])
+                record.directInput = true
+                records.append(record); try save()
+            }
+            // submitInteractive performs the single fresh target/account verification.
+            // No listing, mkdir, remote task preflight or source snapshot.
+            return try await submitInteractive(urls: urls, resourceID: id, settings: settings, autoExtraction: false, acquirePermit: false)
         }
     }
     private func submitInteractive(urls: [String], resourceID: String, settings: SHT115Settings, autoExtraction: Bool = false, verifiedTarget: String? = nil, acquirePermit: Bool = true) async throws -> SHT115Resource {
@@ -449,10 +460,10 @@ public actor SHT115Service {
         // A new manual record must never bypass a post's unknown submission, or vice versa.
         let related = records.filter { other in
             other.id == records[i].id || (other.account == settings.account &&
-                (records[i].manualInput == true || other.manualInput == true))
+                (records[i].manualInput == true || other.manualInput == true || records[i].directInput == true || other.directInput == true))
         }
         let prior = related.flatMap { $0.tasks }.flatMap { $0.state == .rejected ? [] : $0.urls }
-        let useIdentity = related.contains { $0.manualInput == true }
+        let useIdentity = related.contains { $0.manualInput == true || $0.directInput == true }
         func conflicts(_ lhs: String, _ rhs: String) -> Bool {
             lhs == rhs || (useIdentity && !Self.replayIdentities(lhs).isDisjoint(with: Self.replayIdentities(rhs)))
         }
@@ -532,6 +543,9 @@ public actor SHT115Service {
     }
     private func scan(resourceID: String, settings: SHT115Settings, maxDepth: Int) async throws -> SHT115VideoListing {
         let i = try index(resourceID, settings)
+        guard records[i].directInput != true else {
+            return SHT115VideoListing(videos: [], archives: [], truncated: false)
+        }
         guard let root = records[i].directoryCID else { throw SHT115Error.invalidInput }
         try await http.verify(cid: root, parent: records[i].verificationParentCID, settings: settings)
         let depthLimit = max(0, min(5, maxDepth))

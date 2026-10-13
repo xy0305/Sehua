@@ -78,7 +78,7 @@ struct Pan115ResourceView: View {
                 ForEach(Array(extractionNotes.enumerated()), id: \.offset) { _, note in
                     Text(note).font(.footnote).foregroundStyle(.orange)
                 }
-                Text("提取链接不保证可信、可下载或与标题一致。请核对来源、压缩包密码及版权；只有确认后才创建目录与提交。")
+                Text("提取链接不保证可信、可下载或与标题一致。请核对来源、压缩包密码及版权；只有确认后才向所选目录直接提交，不创建帖子目录。")
                     .font(.footnote).foregroundStyle(.orange)
             }
             Section("手动输入（不筛选）") {
@@ -94,7 +94,7 @@ struct Pan115ResourceView: View {
                 ForEach(Array(submissionURLs.enumerated()), id: \.offset) { _, url in
                     Text(url).font(.caption).textSelection(.enabled)
                 }
-                Button("确认归档到独立 tid 目录") { showConfirmation = true }
+                Button("推送到所选目录") { showConfirmation = true }
                     .disabled(busy || extractionBusy || submissionURLs.isEmpty || uncertainWrite)
                 if busy { ProgressView() }
                 if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
@@ -107,7 +107,7 @@ struct Pan115ResourceView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("115 归档 / 播放")
+        .navigationTitle("115 直接推送 / 资源")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
@@ -132,11 +132,11 @@ struct Pan115ResourceView: View {
         } message: {
             Text("当前父CID：\(SHT115Settings.load().parentCID)\ntid：\(detail.tid)\n设备内旧目录名：\(resource?.directoryName ?? "未知")\n完整分页仍不是事务快照，存在并发创建重复目录风险。确认后先重新全量核验，唯一目录只读复用，否则最多创建一次。结果未知不重发。不推送任何离线任务；成功后须另行确认离线推送。")
         }
-        .confirmationDialog("创建 / 复用此帖独立目录并提交 \(submissionURLs.count) 个链接？", isPresented: $showConfirmation, titleVisibility: .visible) {
-            Button("确认创建目录并提交") { Task { await submit() } }
+        .confirmationDialog("向所选目录直接提交 \(submissionURLs.count) 个链接？", isPresented: $showConfirmation, titleVisibility: .visible) {
+            Button("确认推送到所选目录") { Task { await submit() } }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("请先核对上方全部 URL 和来源警告。这会向115发起真实写入；仅推送、不等待下载、不自动播放。开启安全队列后仅处理确证的新任务；完整核验才将该原包移115回收站，证据不足保留。")
+            Text("请先核对上方全部 URL 和来源警告。这会向115发起真实写入；仅推送、不等待下载、不自动播放。直接模式不自动按帖归档；没有来源快照，不授权自动回收原包。")
         }
     }
 
@@ -152,7 +152,8 @@ struct Pan115ResourceView: View {
             let service = try Pan115UIService.get()
             let settings = SHT115Settings.load()
             let records = await service.resources()
-            resource = records.first { $0.account == settings.account && $0.tid == String(detail.tid) && $0.parentCID == settings.parentCID }
+            let matching = records.filter { $0.account == settings.account && $0.tid == String(detail.tid) && $0.parentCID == settings.parentCID }
+            resource = matching.first { $0.directInput == true } ?? matching.first
             diagnostic = await service.safeDiagnostic(tid: String(detail.tid), settings: settings)
             uncertainWrite = false
             if let resource {
@@ -214,7 +215,7 @@ struct Pan115ResourceView: View {
             message = "此记录经过目录恢复；请另行确认离线推送，不会自动提交。"
             return
         }
-        stage = "创建目录并提交离线"
+        stage = "推送到所选目录"
         await submit()
         if resource?.tasks.contains(where: { $0.state == .accepted }) == true { showTasks = true }
     }
@@ -257,10 +258,10 @@ struct Pan115ResourceView: View {
             let settings = SHT115Settings.load()
             try settings.validate()
             let service = try Pan115UIService.get()
-            stage = "目录核验、签名与离线任务提交"
+            stage = "所选目录验证、签名与直接离线提交"
             resource = try await service.createAndSubmitResource(urls: urls, tid: String(detail.tid), title: detail.title, settings: settings, autoExtraction: SHT115ExtractionPolicy.enabled())
             ExtractBackground.kick()
-            message = "已推送115，下载状态稍后更新。受理不等于下载完成；仅推送，不自动播放。"
+            message = "115已受理到所选目录，下载状态稍后更新。直接模式不新建帖子目录、不自动按帖归档；无提交前来源快照，不授权自动解压回收。受理不等于下载完成。"
         } catch {
             // Derive locks from the durable journal, not from a broad catch:
             // a failed read/signature is not evidence that a write was sent.

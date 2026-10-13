@@ -99,10 +99,12 @@ public struct SHT115Resource: Codable, Identifiable {
     public var directoryWritePending: Bool
     public var tasks: [SHT115Task]
     public var manualInput: Bool? = nil
+    /// Direct post records never own all files in the shared target directory.
+    public var directInput: Bool? = nil
     /// Manual records target the configured parent itself, never a fabricated tid folder.
     public var manualActualParentCID: String? = nil
     public var manualTargetPath: String? = nil
-    var verificationParentCID: String? { manualInput == true ? manualActualParentCID : parentCID }
+    var verificationParentCID: String? { manualInput == true || directInput == true ? manualActualParentCID : parentCID }
     public var directoryRecoveryOnly: Bool? = nil
     public var directoryJournal: [SHT115DirectoryAttempt]? = nil
     public var extractions: [String: SHT115ExtractionState]? = nil

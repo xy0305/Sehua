@@ -241,7 +241,7 @@ struct ThreadDetailView: View {
                     }
                     .buttonStyle(.plain).disabled(panOperating)
                     Button { Task { await play115(d, playback: true) } } label: {
-                        panActionLabel("推送并播放原文件", "play.rectangle.fill", "文件可用后进入播放")
+                        panActionLabel("推送到所选目录 / 播放", "play.rectangle.fill", "直接推送；按资源身份核对播放")
                     }
                     .buttonStyle(.plain).disabled(panOperating)
                     NavigationLink {
@@ -692,7 +692,7 @@ struct ThreadDetailView: View {
             let settings = SHT115Settings.load()
             try settings.validate()
             let service = try Pan115UIService.get()
-            let existing = await service.resources().first { $0.account == settings.account && $0.tid == String(d.tid) && $0.parentCID == settings.parentCID && $0.directoryCID != nil }
+            let existing = await service.resources().first { $0.account == settings.account && $0.tid == String(d.tid) && $0.parentCID == settings.parentCID && $0.directoryCID != nil && $0.directInput == true }
             var resource = existing
             if let existing, existing.tasks.contains(where: { $0.state == .unknown || $0.state == .submitting }) {
                 panStatus = "历史提交未知：正在只读核验，不重发"
@@ -707,11 +707,9 @@ struct ThreadDetailView: View {
             if existing?.tasks.contains(where: { $0.state == .accepted }) != true {
                 panStatus = "提取中"
                 let result = try await ResourceLinkExtractor.extractResult(detail: d, base: postURL)
-                panStatus = "115目录阶段"
-                let created = try await service.createOrReuseResource(tid: String(d.tid), title: d.title.isEmpty ? title : d.title, settings: settings)
-                panStatus = "115提交阶段"
-                resource = try await service.submit(urls: result.links, resourceID: created.id, settings: settings, autoExtraction: SHT115ExtractionPolicy.enabled())
-                ExtractBackground.kick()
+                panStatus = "推送到所选目录"
+                resource = try await service.createAndSubmitResource(urls: result.links, tid: String(d.tid), title: d.title.isEmpty ? title : d.title, settings: settings)
+
             }
             guard let resource else { throw SHT115Error.invalidInput }
             // Submission acceptance is distinct from video readiness. Unknown or
@@ -730,6 +728,10 @@ struct ThreadDetailView: View {
                 } catch {
                     panStatus = "115已受理；只读核验失败，不重发：" + SHT115Settings.safeMessage(error)
                 }
+                return
+            }
+            if resource.directInput == true {
+                panStatus = "115已受理；直接模式不自动按帖归档。共享目录无法安全确定本帖视频，请到115资源列表核对后播放；不会自动播放其他文件。"
                 return
             }
             // Explicit playback reads once; never scans archives or waits for download.

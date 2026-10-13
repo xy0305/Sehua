@@ -109,6 +109,24 @@ actor GrantLog {
         PushLatencyProtocol.routes = []
         do { _ = try await service.prepareAndSubmitManual(urls: [link], settings: settings, targetCID: "20"); preconditionFailure("mismatched target accepted") } catch {}
         precondition(PushLatencyProtocol.routes == ["identity"], "target mismatch must stop before signature/write")
+        let directStore = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directStore) }
+        let directService = try SHT115Service(storeURL: directStore, session: session)
+        PushLatencyProtocol.routes = []; PushLatencyProtocol.starts = []
+        let directStart = Date()
+        let direct = try await directService.createAndSubmitResource(urls: [link], tid: "1278", title: "direct", settings: settings, autoExtraction: true)
+        precondition(direct.directInput == true && direct.tid == "1278" && direct.directoryCID == "10")
+        precondition(direct.extractionQueue?.isEmpty != false)
+        precondition(PushLatencyProtocol.routes == ["identity", "signature", "POST"], "no enumeration/mkdir/task preflight/snapshot")
+        print("PASS direct production routes=\(PushLatencyProtocol.routes) seconds=\(Date().timeIntervalSince(directStart))")
+        for pair in zip(PushLatencyProtocol.starts, PushLatencyProtocol.starts.dropFirst()) {
+            precondition(pair.1.timeIntervalSince(pair.0) >= 1.08)
+        }
+        PushLatencyProtocol.routes = []
+        let listing = try await directService.listVideos(resourceID: direct.id, settings: settings)
+        precondition(listing.videos.isEmpty && PushLatencyProtocol.routes.isEmpty, "shared directory must not attribute unrelated videos")
+        do { _ = try await directService.createAndSubmitResource(urls: [link + "&dn=renamed"], tid: "1279", title: "other", settings: settings); preconditionFailure("cross-post hash lock") } catch {}
+        precondition(PushLatencyProtocol.routes.isEmpty, "local hash lock must precede any requests")
         print("PASS account/target isolation: no cross-account proof cache; wrong target denied before POST")
         print("PASS production pending snapshot/task GET: accepted feedback preceded never-ending reads; no post-submit snapshot authorization, no extraction queue; duplicate blocked; FIFO priority/fairness/cancellation passed")
     }
