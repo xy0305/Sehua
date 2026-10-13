@@ -177,7 +177,10 @@ struct Pan115FolderBrowser: View {
         do {
             let p = try await Pan115UIService.get().browseFolders(cid: cid, offset: offset, settings: settings)
             page = p; folders = p.entries.filter(\.isDirectory)
-        } catch { self.error = SHT115Settings.safeMessage(error) }
+        } catch {
+            if !reset { offset = max(0, offset - (page?.entries.count ?? 0)) }
+            self.error = SHT115Settings.safeMessage(error)
+        }
     }
     @MainActor private func create() async {
         busy = true; error = nil; defer { busy = false }

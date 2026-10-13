@@ -723,7 +723,13 @@ struct ThreadDetailView: View {
                 return
             }
             guard playback else {
-                panStatus = "115已受理；仅推送结束，不等待下载、不取播放URL。受理不等于完成。"
+                panStatus = "115已受理；正在只读核验hash + CID，不重发"
+                do {
+                    let inspection = try await service.inspect(resourceID: resource.id, settings: settings, includeFiles: false)
+                    panStatus = "115已受理；" + inspection.verificationSummary + "；受理/100%不证明实体文件可读，未取播放URL。"
+                } catch {
+                    panStatus = "115已受理；只读核验失败，不重发：" + SHT115Settings.safeMessage(error)
+                }
                 return
             }
             // Explicit playback reads once; never scans archives or waits for download.
