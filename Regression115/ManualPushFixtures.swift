@@ -64,7 +64,7 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
                 if mode == "transport" { throw URLError(.timedOut) }
                 if mode == "partial" { obj = ["state": true, "data": [["state": true, "url": ed]]] }
                 else if mode == "wrong-identity" { obj = ["state": true, "data": [["state": true, "url": ed], ["state": true, "url": "magnet:?xt=urn:btih:" + String(repeating: "f", count: 40)]]] }
-                else if mode == "accepted" { obj = ["state": true, "data": [["state": true, "url": ed], ["state": true, "url": magnet]]] }
+                else if ["accepted", "bad-snapshot"].contains(mode) { obj = ["state": true, "data": [["state": true, "url": ed], ["state": true, "url": magnet]]] }
                 else { obj = ["state": false, "errno": 10008] }
             } else if url.path == "/" {
                 obj = ["state": true, "sign": "fake-sign", "time": "1"]
@@ -74,6 +74,7 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
                 precondition(q.first { $0.name == "cid" }?.value == cid)
                 obj = ["state": true, "count": 0, "data": [], "path": [["cid": "0"], ["cid": mode == "bad-path" ? "9" : cid]], "offset": 0, "limit": 100, "order": "file_name", "is_asc": 1, "fc_mix": 1]
             }
+            if mode == "bad-snapshot", url.path == "/files" { obj.removeValue(forKey: "offset"); obj.removeValue(forKey: "limit"); obj.removeValue(forKey: "order"); obj.removeValue(forKey: "is_asc") }
             return try JSONSerialization.data(withJSONObject: obj)
         }
         if mode == "bad-path" {
@@ -86,7 +87,7 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
         precondition(writes == 0)
         let again = try await service.prepareManualResource(settings: settings)
         precondition(again.id == resource.id)
-        let otherSettings = SHT115Settings(cookie: settings.cookie, parentCID: "99")
+        let otherSettings = SHT115Settings(cookie: "UID=456_A; CID=fake; SEID=fake", parentCID: "99")
         do { _ = try await service.submit(urls: [ed], resourceID: resource.id, settings: otherSettings); preconditionFailure("path changed") } catch {}
         for invalid in [[], ["https://example.invalid/password"], ["magnet:?xt=invalid"], [magnet.replacingOccurrences(of: "magnet:", with: "https://example.invalid/")], [ed.replacingOccurrences(of: "|/", with: "|bad|/")]] {
             do { _ = try await service.submit(urls: invalid, resourceID: resource.id, settings: settings); preconditionFailure("invalid") } catch {}
@@ -104,7 +105,7 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
         catch { precondition(mode != "accepted") }
         var saved = await service.resources().first!
         precondition(writes == 1 && saved.tasks.count == 1 && saved.tasks[0].urls.count == 2)
-        precondition(saved.tasks[0].state == (mode == "accepted" ? .accepted : mode == "rejected" ? .rejected : .unknown))
+        precondition(saved.tasks[0].state == (["accepted", "bad-snapshot"].contains(mode) ? .accepted : mode == "rejected" ? .rejected : .unknown))
         precondition((saved.extractionQueue ?? []).count == (mode == "accepted" ? 2 : 0))
         if mode != "rejected" {
             do { _ = try await service.submit(urls: [ed], resourceID: resource.id, settings: settings); preconditionFailure("repeated") } catch {}
@@ -124,7 +125,7 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
             // Read-only reconciliation does not clear unknown task locks.
             _ = try await restarted.reconcileDirectory(resourceID: restored.id, settings: settings)
             saved = await restarted.resources().first!
-            precondition(saved.tasks[0].state == (mode == "accepted" ? .accepted : .unknown))
+            precondition(saved.tasks[0].state == (["accepted", "bad-snapshot"].contains(mode) ? .accepted : .unknown))
             // A post record cannot bypass a manual unknown/accepted task lock either.
             var post = SHT115Resource(id: "post", account: settings.account, tid: "123", directoryName: "test_tid-123", parentCID: cid, directoryCID: "77", directoryWritePending: false, tasks: [])
             post.directoryJournal = []
@@ -183,7 +184,7 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
         precondition(ResourceLinkExtractor.links(in: draft).count == 2)
         draft = ""
         precondition(ResourceLinkExtractor.links(in: draft).isEmpty)
-        for mode in ["accepted", "partial", "wrong-identity", "transport", "rejected", "bad-path"] { try await run(mode: mode) }
+        for mode in ["accepted", "bad-snapshot", "partial", "wrong-identity", "transport", "rejected", "bad-path"] { try await run(mode: mode) }
         print("manual input extraction / durable journal / request identity / unknown / restart / parent CID fixtures passed")
     }
 }

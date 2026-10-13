@@ -86,7 +86,7 @@ public actor SHT115Service {
         guard let i = records.firstIndex(where: { $0.id == id }) else { throw SHT115Error.invalidInput }
         guard records[i].account == settings.account else { throw SHT115Error.accountMismatch }
         if records[i].manualInput == true {
-            guard records[i].parentCID == settings.parentCID, records[i].directoryCID == settings.parentCID,
+            guard records[i].directoryCID != nil,
                   records[i].tid.isEmpty else { throw SHT115Error.accountMismatch }
         }
         return i
@@ -95,10 +95,11 @@ public actor SHT115Service {
         let timestamp = String(Int(Date().timeIntervalSince1970 * 1000))
         let obj = try await http.json("https://115.com/?ct=offline&ac=space&_=" + timestamp, settings: settings)
         let sign = SHT115HTTP.string(obj["sign"])
+        guard SHT115HTTP.success(obj) else { throw SHT115Diagnostic(stage: "signature", outcome: "未发送：115签名接口拒绝", code: SHT115Diagnostic.apiCode(obj)) }
         let returnedTime = SHT115HTTP.string(obj["time"])
         guard !sign.isEmpty else { throw SHT115Diagnostic(stage: "signature", outcome: "未提交：签名为空", code: SHT115Diagnostic.apiCode(obj)) }
         // Same fallback as tang115 and Pan115Client; keep server time when present.
-        return [("sign", sign), ("time", returnedTime.isEmpty ? timestamp : returnedTime)]
+        return [("sign", sign), ("time", returnedTime.isEmpty ? String(Int(Date().timeIntervalSince1970)) : returnedTime)]
     }
     public func validateSettings(_ settings: SHT115Settings) async throws {
         try await begin(); defer { end() }
@@ -108,20 +109,65 @@ public actor SHT115Service {
     }
     /// Read-only preparation; a stable independent record preserves unknown locks across visits.
     /// No network writes or directory creation. UI calls only after explicit confirmation.
-    public func prepareManualResource(settings: SHT115Settings) async throws -> SHT115Resource {
+    public func prepareManualResource(settings: SHT115Settings, targetCID: String? = nil) async throws -> SHT115Resource {
         try await begin(); defer { end() }
         try settings.validate()
-        try await http.verify(cid: settings.parentCID, parent: nil, settings: settings)
-        let id = "manual-" + SHT115Digest(settings.account + ":" + settings.parentCID)
+        let target = targetCID ?? settings.parentCID
+        guard SHT115Settings.isCID(target) else { throw SHT115Error.invalidInput }
+        let path = try await http.freshPath(cid: target, parent: nil, settings: settings)
+        let actualParent = path.count > 1 ? SHT115HTTP.string(path[path.count - 2]["cid"]) : "0"
+        let displayPath = path.map { SHT115HTTP.string($0["name"] ?? $0["n"]) }.filter { !$0.isEmpty }.joined(separator: " / ")
+        let id = "manual-" + SHT115Digest(settings.account + ":" + target)
         if let resource = records.first(where: { $0.id == id }) {
             guard resource.manualInput == true, resource.tid.isEmpty,
-                  resource.directoryCID == settings.parentCID else { throw SHT115Error.invalidInput }
+                  resource.directoryCID == target else { throw SHT115Error.invalidInput }
             return resource
         }
-        var resource = SHT115Resource(id: id, account: settings.account, tid: "", directoryName: "手动推送 · CID " + settings.parentCID, parentCID: settings.parentCID, directoryCID: settings.parentCID, directoryWritePending: false, tasks: [])
+        var resource = SHT115Resource(id: id, account: settings.account, tid: "", directoryName: displayPath.isEmpty ? "CID " + target : displayPath, parentCID: settings.parentCID, directoryCID: target, directoryWritePending: false, tasks: [])
         resource.manualInput = true
+        resource.manualActualParentCID = actualParent
+        resource.manualTargetPath = displayPath
         records.append(resource); try save()
         return resource
+    }
+
+    /// Paged browser: only the requested directory; never recursively scan the account.
+    public func browseFolders(cid: String, offset: Int = 0, settings: SHT115Settings) async throws -> SHT115Page {
+        try await begin(); defer { end() }
+        try settings.validate()
+        guard SHT115Settings.isCID(cid), offset >= 0 else { throw SHT115Error.invalidInput }
+        let page = try await http.page(cid: cid, offset: offset, settings: settings)
+        try SHT115HTTP.verifiedPath(page.path, cid: cid, parent: nil)
+        return page
+    }
+    public func manualTargetPath(cid: String, settings: SHT115Settings) async throws -> [String] {
+        try await begin(); defer { end() }
+        try settings.validate()
+        return try await http.freshPath(cid: cid, parent: nil, settings: settings).map { SHT115HTTP.string($0["name"] ?? $0["n"]) }
+    }
+    /// An authorization identifies exactly one create. Durable journal precedes POST.
+    public func createManualFolder(name: String, parentCID: String, authorization: UUID, settings: SHT115Settings) async throws -> SHT115Resource {
+        try await begin(); defer { end() }
+        try settings.validate()
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, clean.count <= 100, clean.rangeOfCharacter(from: .controlCharacters.union(CharacterSet(charactersIn: "/\\:*?\"<>|"))) == nil,
+              SHT115Settings.isCID(parentCID) else { throw SHT115Error.invalidInput }
+        let scoped = SHT115Settings(cookie: settings.cookie, parentCID: parentCID)
+        let id = "manual-folder-" + authorization.uuidString
+        if let old = records.first(where: { $0.id == id }) {
+            guard old.account == settings.account else { throw SHT115Error.accountMismatch }
+            if let cid = old.directoryCID {
+                let path = try await http.freshPath(cid: cid, parent: parentCID, settings: scoped)
+                guard SHT115HTTP.string(path.last?["name"] ?? path.last?["n"]) == clean else { throw SHT115Error.unsafeListing }
+                return old
+            }
+            throw SHT115Error.uncertainWrite
+        }
+        guard !records.contains(where: { $0.account == settings.account && $0.parentCID == parentCID && $0.directoryName == clean && $0.directoryWritePending }) else { throw SHT115Error.uncertainWrite }
+        try await http.verify(cid: parentCID, parent: nil, settings: scoped)
+        records.append(SHT115Resource(id: id, account: settings.account, tid: "", directoryName: clean, parentCID: parentCID, directoryCID: nil, directoryWritePending: false, tasks: []))
+        try save()
+        return try await createDirectory(i: records.count - 1, settings: scoped, authorization: authorization, manualRecovery: true)
     }
 
     public static func directoryName(tid: String, title: String) throws -> String {
@@ -201,8 +247,8 @@ public actor SHT115Service {
             if manualRecovery { records[i].directoryRecoveryOnly = true }
             try save()
             if manualRecovery {
-                let verified = try await http.verifiedPage(cid: cid, parent: settings.parentCID, settings: settings)
-                guard SHT115HTTP.string(verified.path.last?["name"] ?? verified.path.last?["n"]) == records[i].directoryName else { throw SHT115Error.uncertainWrite }
+                let verified = try await http.freshPath(cid: cid, parent: settings.parentCID, settings: settings)
+                guard SHT115HTTP.string(verified.last?["name"] ?? verified.last?["n"]) == records[i].directoryName else { throw SHT115Error.uncertainWrite }
             } else { try await http.verify(cid: cid, parent: settings.parentCID, settings: settings) }
             records[i].directoryJournal?[attempt].state = .accepted
             records[i].directoryJournal?[attempt].evidence?.path = "verified"
@@ -319,7 +365,7 @@ public actor SHT115Service {
             guard rows.count == count else { return .unknown }
             if rows.allSatisfy({ SHT115HTTP.success($0) }) {
                 if count > 1, let links {
-                    let returned = rows.compactMap { $0["url"] as? String }
+                    let returned = rows.compactMap { $0["url"] as? String ?? $0["batchurl"] as? String }
                     guard returned.count == count, Set(returned).count == count,
                           Set(returned) == Set(links) else { return .unknown }
                 }
@@ -380,15 +426,13 @@ public actor SHT115Service {
             }) { throw SHT115Diagnostic(stage: "offline-reconcile", outcome: "历史离线任务待核验：unknown/submitting命中本次链接；保留任务锁，本次未重发", code: "") }
             throw SHT115Error.alreadySubmitted
         }
-        let submissionPage: SHT115Page
-        do { submissionPage = try await http.verifiedPage(cid: cid, parent: records[i].verificationParentCID, settings: settings) }
-        catch { throw SHT115Diagnostic(stage: "verify-before-submit", outcome: "未提交：目标路径无法验证", code: "") }
-        // Reuse the existing path read; never add foreground pagination to push.
-        // Larger/unknown-count directories are deliberately not enrolled.
+        do { try await http.verify(cid: cid, parent: records[i].verificationParentCID, settings: settings) }
+        catch { throw SHT115Diagnostic(stage: "verify-before-submit", outcome: "未发送：目标路径无法验证", code: "") }
+        // Snapshot failure is NOT submission failure. No complete snapshot => no extraction.
         var priorIDs: [String]? = nil
-        if autoExtraction, submissionPage.total == submissionPage.entries.count,
-           Set(submissionPage.entries.map(\.id)).count == submissionPage.entries.count {
-            priorIDs = submissionPage.entries.map(\.id)
+        if autoExtraction, let page = try? await http.verifiedPage(cid: cid, parent: records[i].verificationParentCID, settings: settings),
+           page.total == page.entries.count, Set(page.entries.map(\.id)).count == page.entries.count {
+            priorIDs = page.entries.map(\.id)
         }
         let signature: [(String, String)]
         do { signature = try await sign(settings) }
@@ -490,7 +534,7 @@ public actor SHT115Service {
     private func inspectUnlocked(resourceID: String, settings: SHT115Settings, includeFiles: Bool, i: Int) async throws -> SHT115Inspection {
         guard let target = records[i].directoryCID else { throw SHT115Error.invalidInput }
         // Directory availability is independent of the account's offline task history.
-        guard records[i].parentCID == settings.parentCID else { throw SHT115Error.accountMismatch }
+        guard records[i].manualInput == true || records[i].parentCID == settings.parentCID else { throw SHT115Error.accountMismatch }
         let listing: SHT115VideoListing
         if includeFiles {
             listing = try await scan(resourceID: resourceID, settings: settings, maxDepth: 3)
@@ -535,7 +579,7 @@ public actor SHT115Service {
                 if matchingTasks.count == 1, let task = matchingTasks.first {
                     targetCount += 1
                     if Int(SHT115HTTP.string(task["status"])) == 2 { completedCount += 1 }
-                    matches.append(SHT115Progress(url: link, infoHash: SHT115HTTP.string(task["info_hash"] ?? task["hash"]), status: Int(SHT115HTTP.string(task["status"])) ?? -999, percent: Double(SHT115HTTP.string(task["percentDone"] ?? task["percent"])) ?? 0, fileID: SHT115HTTP.string(task["file_id"] ?? task["fid"])))
+                    matches.append(SHT115Progress(url: link, infoHash: SHT115HTTP.string(task["info_hash"] ?? task["hash"]), status: Int(SHT115HTTP.string(task["status"])) ?? -999, percent: Double(SHT115HTTP.string(task["percentDone"] ?? task["percent"])) ?? 0, fileID: SHT115HTTP.string(task["file_id"] ?? task["fileid"] ?? task["fid"])))
                 } else if remote.contains(where: {
                     SHT115HTTP.string($0["wp_path_id"]) != target &&
                     (SHT115HTTP.string($0["url"] ?? $0["url_string"]) == link || (!hash.isEmpty && SHT115HTTP.string($0["info_hash"] ?? $0["hash"]).lowercased() == hash))
@@ -840,7 +884,7 @@ public actor SHT115Service {
     public func cancelExtractionQueue(resourceID: String, queueID: UUID, settings: SHT115Settings) async throws {
         try await begin(); defer { end() }
         let i = try index(resourceID, settings)
-        guard records[i].parentCID == settings.parentCID else { throw SHT115Error.accountMismatch }
+        guard records[i].manualInput == true || records[i].parentCID == settings.parentCID else { throw SHT115Error.accountMismatch }
         guard let q = records[i].extractionQueue?.firstIndex(where: { $0.id == queueID }),
               let state = records[i].extractionQueue?[q].state, [.waiting, .processing].contains(state) else { return }
         records[i].extractionQueue?[q].state = .cancelled

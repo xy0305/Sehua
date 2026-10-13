@@ -249,6 +249,7 @@ struct ThreadDetailView: View {
                     } label: {
                         panActionLabel("115只读恢复 / 脱敏诊断", "checkmark.shield", "核对记录，不自动提交")
                     }
+                    NavigationLink("手动推送 / 选择115文件夹", destination: Pan115ManualPushView())
                     .buttonStyle(.plain)
                     if let panStatus {
                         Text(panStatus)

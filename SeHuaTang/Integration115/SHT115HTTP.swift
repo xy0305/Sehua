@@ -50,7 +50,7 @@ struct SHT115HTTP {
         let (data, _, status) = try await data(endpoint, settings: settings, fields: fields)
         // Preserve identifier tokens before Foundation JSON parsing (never Double).
         guard var text = String(data: data, encoding: .utf8) else { throw SHT115Diagnostic(stage: fields == nil ? "json-read" : "json-write", outcome: "响应不是可验证JSON", code: "", httpStatus: status) }
-        let regex = try NSRegularExpression(pattern: "(\"(?:cid|pid|parent_id|category_id|folder_id|file_id|fid|id|wp_path_id|extract_id)\"\\s*:\\s*)([0-9]+)(?=\\s*[,}])")
+        let regex = try NSRegularExpression(pattern: "(\"(?:cid|pid|parent_id|category_id|folder_id|file_id|fileid|fid|id|wp_path_id|extract_id)\"\\s*:\\s*)([0-9]+)(?=\\s*[,}])")
         text = regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1\"$2\"")
         let obj: [String: Any]
         do {
@@ -135,7 +135,7 @@ extension SHT115HTTP {
     }
     static func entries(_ raw: [[String: Any]]) throws -> [SHT115Entry] {
         try raw.map { item -> SHT115Entry in
-            let fid = Self.string(item["fid"] ?? item["file_id"])
+            let fid = Self.string(item["fid"] ?? item["file_id"] ?? item["fileid"])
             let directory = fid.isEmpty || fid == "0"
             let id = directory ? Self.string(item["cid"] ?? item["category_id"] ?? item["folder_id"]) : fid
             guard SHT115Settings.isCID(id), id != "0" else { throw Self.listingFailure("list", "条目标识无效") }
@@ -155,7 +155,18 @@ extension SHT115HTTP {
         }
     }
     func verify(cid: String, parent: String?, settings: SHT115Settings) async throws {
-        _ = try await verifiedPage(cid: cid, parent: parent, settings: settings)
+        _ = try await freshPath(cid: cid, parent: parent, settings: settings)
+    }
+    /// Identity validation deliberately ignores listing/pagination contracts. One GET,
+    /// no file scan; malformed listing metadata must not disable offline submission.
+    func freshPath(cid: String, parent: String?, settings: SHT115Settings) async throws -> [[String: Any]] {
+        let query = Self.form([("aid", "1"), ("cid", cid), ("offset", "0"), ("limit", "1"), ("show_dir", "1"), ("format", "json")])
+        let obj = try await json("https://webapi.115.com/files?" + query, settings: settings)
+        guard Self.success(obj) else { throw SHT115Diagnostic(stage: "directory-path", outcome: "目录读取被API拒绝；未发送", code: Self.apiCode(obj)) }
+        let nested = obj["data"] as? [String: Any] ?? [:]
+        let path = (obj["path"] as? [[String: Any]]) ?? (nested["path"] as? [[String: Any]]) ?? []
+        try Self.verifiedPath(path, cid: cid, parent: parent)
+        return path
     }
     /// Reuse the exact response whose ancestry was checked, not a TTL assumption.
     /// This avoids immediately fetching offset zero again while keeping fresh

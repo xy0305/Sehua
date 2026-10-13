@@ -100,7 +100,9 @@ public struct SHT115Resource: Codable, Identifiable {
     public var tasks: [SHT115Task]
     public var manualInput: Bool? = nil
     /// Manual records target the configured parent itself, never a fabricated tid folder.
-    var verificationParentCID: String? { manualInput == true ? nil : parentCID }
+    public var manualActualParentCID: String? = nil
+    public var manualTargetPath: String? = nil
+    var verificationParentCID: String? { manualInput == true ? manualActualParentCID : parentCID }
     public var directoryRecoveryOnly: Bool? = nil
     public var directoryJournal: [SHT115DirectoryAttempt]? = nil
     public var extractions: [String: SHT115ExtractionState]? = nil
