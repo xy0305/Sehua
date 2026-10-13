@@ -148,8 +148,9 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
             let different = ed.replacingOccurrences(of: "0123456789abcdef0123456789abcdef", with: String(repeating: "f", count: 32))
             do { _ = try await originalLocked.submit(urls: [different], resourceID: saved.id, settings: settings); preconditionFailure("mock read should stop") }
             catch let error as SHT115Diagnostic { precondition(error.stage == "verify-before-submit") }
-            post.account = SHT115Settings(cookie: "UID=456_A; CID=fake; SEID=fake", parentCID: cid).account
-            try JSONEncoder().encode([saved, post]).write(to: store, options: .atomic)
+            let foreignAccount = SHT115Settings(cookie: "UID=456_A; CID=fake; SEID=fake", parentCID: cid).account
+            let foreign = SHT115Resource(id: post.id, account: foreignAccount, tid: post.tid, directoryName: post.directoryName, parentCID: post.parentCID, directoryCID: post.directoryCID, directoryWritePending: false, tasks: post.tasks)
+            try JSONEncoder().encode([saved, foreign]).write(to: store, options: .atomic)
             let isolated = try SHT115Service(storeURL: store, session: session)
             do { _ = try await isolated.submit(urls: [ed], resourceID: saved.id, settings: settings); preconditionFailure("mock read should stop") }
             catch let error as SHT115Diagnostic { precondition(error.stage == "verify-before-submit") }
