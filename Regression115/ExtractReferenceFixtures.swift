@@ -50,7 +50,7 @@ final class ExtractReferenceMock: URLProtocol, @unchecked Sendable {
             func query(_ key: String) -> String { q.first(where: { $0.name == key })?.value ?? "" }
             let bodyFields = fields(request)
             func form(_ key: String) -> String { bodyFields.first(where: { $0.name == key })?.value ?? "" }
-            if query("ac") == "space" { return "{\"sign\":\"fake\",\"time\":1}" }
+            if query("ac") == "space" { Thread.sleep(forTimeInterval: 0.15); return "{\"sign\":\"fake\",\"time\":1}" }
             if ["add_task_url", "add_task_urls"].contains(query("ac")) {
                 submitted = true
                 let rows: [[String: Any]] = links.map { ["state": true, "url": $0] }
