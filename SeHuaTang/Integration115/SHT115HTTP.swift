@@ -160,6 +160,10 @@ extension SHT115HTTP {
     /// Identity validation deliberately ignores listing/pagination contracts. One GET,
     /// no file scan; malformed listing metadata must not disable offline submission.
     func freshPath(cid: String, parent: String?, settings: SHT115Settings) async throws -> [[String: Any]] {
+        try await freshPathEvidence(cid: cid, parent: parent, settings: settings).path
+    }
+    /// Empty proof comes from this exact fresh identity response, never a later GET.
+    func freshPathEvidence(cid: String, parent: String?, settings: SHT115Settings) async throws -> (path: [[String: Any]], empty: Bool) {
         let query = Self.form([("aid", "1"), ("cid", cid), ("offset", "0"), ("limit", "1"), ("show_dir", "1"), ("format", "json")])
         var obj: [String: Any]
         do { obj = try await json("https://webapi.115.com/files?" + query, settings: settings) }
@@ -171,7 +175,10 @@ extension SHT115HTTP {
         let nested = obj["data"] as? [String: Any] ?? [:]
         let path = (obj["path"] as? [[String: Any]]) ?? (nested["path"] as? [[String: Any]]) ?? []
         try Self.verifiedPath(path, cid: cid, parent: parent)
-        return path
+        let rows = (obj["data"] as? [[String: Any]]) ?? (nested["list"] as? [[String: Any]])
+        let count = Self.string(obj["count"] ?? nested["count"])
+        let empty = count == "0" && rows?.isEmpty == true
+        return (path, empty)
     }
     /// Reuse the exact response whose ancestry was checked, not a TTL assumption.
     /// This avoids immediately fetching offset zero again while keeping fresh

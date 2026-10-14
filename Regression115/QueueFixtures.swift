@@ -7,6 +7,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         do {
             let text = try Self.handler(request)
+            if text == "PENDING_PARSE" { return }
             let deliver = { [self] in
                 client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
                 client?.urlProtocol(self, didLoad: Data(text.utf8))
@@ -52,7 +53,12 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
                 return "{\"state\":true,\"page_count\":1,\"tasks\":[{\"info_hash\":\"\(taskHash)\",\"wp_path_id\":20,\"status\":2,\"percentDone\":100\(fid)}]}"
             }
             if path == "/files/push_extract" {
-                if request.httpMethod == "POST" { parses += 1; return "{\"state\":true}" }
+                if request.httpMethod == "POST" {
+                    parses += 1
+                    if mode == "slowParse" { return "PENDING_PARSE" }
+                    if mode == "parseTimeout" { throw URLError(.timedOut) }
+                    return "{\"state\":true}"
+                }
                 return "{\"state\":true,\"data\":{\"extract_status\":{\"unzip_status\":4,\"progress\":100}}}"
             }
             if path == "/files/extract_info" {
@@ -88,19 +94,42 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         } catch { precondition(mode == "unknownSubmission") }
         let restored = try SHT115Service(storeURL: store, session: session)
         let saved = await restored.resources()
-        if ["largeBaseline", "duplicateBaseline"].contains(mode) { precondition(saved[0].extractionQueue == nil) }
+        if ["largeBaseline", "duplicateBaseline"].contains(mode) {
+            precondition(saved[0].extractionQueue?.first?.sourceProofMissing == true)
+        }
         if mode == "cancelled", let item = saved[0].extractionQueue?.first {
             try await restored.cancelExtractionQueue(resourceID: "q", queueID: item.id, settings: settings)
         }
         let input = mode == "otherAccount" ? SHT115Settings(cookie: "UID=456_A1; CID=fake; SEID=fake", parentCID: "10") :
             mode == "otherParent" ? SHT115Settings(cookie: settings.cookie, parentCID: "11") : settings
         let now = Date()
+        if mode == "slowParse" {
+            let worker = Task { try await restored.runExtractionQueue(settings: input, now: now) }
+            for _ in 0..<400 {
+                if parses == 1 { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            precondition(parses == 1, "production worker must reach real pending parse POST")
+            let start = Date()
+            let pushed = try await restored.submit(urls: ["ed2k://|file|next.zip|43|" + String(repeating: "d", count: 32) + "|/"], resourceID: "q", settings: settings)
+            precondition(pushed.tasks.last?.state == .accepted && pushed.tasks.first?.state == .accepted)
+            precondition(Date().timeIntervalSince(start) < 8 && !released && deletes == 0, "pending parse cannot block push or authorize cleanup")
+            worker.cancel(); _ = try? await worker.value
+            let restart = try SHT115Service(storeURL: store, session: session)
+            let recovered = await restart.resources()[0]
+            precondition(recovered.extractionQueue?.first?.source?.id == "21", "persist source before parse")
+            precondition(recovered.extractions?["21"] == .unknown, "interrupted parse locked on restart")
+            try await restart.runExtractionQueue(settings: settings, now: now.addingTimeInterval(301))
+            precondition(parses == 1 && deletes == 0)
+            print("PASS queue: slowParse; push accepted while parse pending; restart source restored; unknown not replayed; no delete")
+            return
+        }
         try await restored.runExtractionQueue(settings: input, now: now)
         try await restored.runExtractionQueue(settings: input, now: now.addingTimeInterval(301))
         let again = try SHT115Service(storeURL: store, session: session)
         try await again.runExtractionQueue(settings: input, now: now.addingTimeInterval(602))
         let shouldExtract = ["complete", "noFileID", "noOutputHash", "deleteTimeout", "outputHashMismatch", "targetCIDFileID"].contains(mode)
-        precondition(parses == (shouldExtract ? 1 : 0), mode + " parse")
+        precondition(parses == (shouldExtract || mode == "parseTimeout" ? 1 : 0), mode + " parse")
         precondition(deletes == (["complete", "noFileID", "targetCIDFileID", "deleteTimeout"].contains(mode) ? 1 : 0), mode + " recycle")
         // A future launch only reads/marks exhausted; no unbounded retry or replay.
         try await again.runExtractionQueue(settings: input, now: now.addingTimeInterval(90_000))
@@ -115,9 +144,14 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         if ["existingSource", "outputHashMismatch", "taskHashMismatch"].contains(mode) {
             precondition(final[0].extractionQueue?.first?.state == .exhausted)
         }
+        if mode == "parseTimeout" {
+            precondition(final[0].tasks.first?.state == .accepted && final[0].extractionQueue?.first?.state == .retained)
+            let next = try await again.submit(urls: ["ed2k://|file|next.zip|43|" + String(repeating: "d", count: 32) + "|/"], resourceID: "q", settings: settings)
+            precondition(next.tasks.last?.state == .accepted && deletes == 0 && parses == 1)
+        }
         print("PASS queue: " + mode)
     }
     static func main() async throws {
-        for mode in ["complete", "noFileID", "targetCIDFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline", "taskHashMismatch"] { try await run(mode) }
+        for mode in ["slowParse", "parseTimeout", "complete", "noFileID", "targetCIDFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline", "taskHashMismatch"] { try await run(mode) }
     }
 }

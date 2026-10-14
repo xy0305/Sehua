@@ -12,6 +12,7 @@ public actor SHT115Service {
     private var queueRunning = false
     private var operating = false
     private var interactiveWaiters: [CheckedContinuation<Void, Never>] = []
+    private var backgroundOperating = false
     private var backgroundWaiters: [CheckedContinuation<Void, Never>] = []
     public init(storeURL: URL? = nil, session: URLSession? = nil) throws {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -24,6 +25,9 @@ public actor SHT115Service {
             catch { throw SHT115Error.persistence }
         } else { loaded = [] }
         for r in loaded.indices {
+            // A pre-submit empty directory is not a reusable proof after restart.
+            // Accepted queue items already own their durable priorIDs/source evidence.
+            loaded[r].firstSubmissionEmptyBaseline = nil
             for j in loaded[r].directoryJournal?.indices ?? 0..<0 where loaded[r].directoryJournal?[j].state == .submitting {
                 loaded[r].directoryJournal?[j].state = .unknown
                 loaded[r].directoryWritePending = true
@@ -58,18 +62,22 @@ public actor SHT115Service {
     // operation boundary; background reads/extraction never reject a push as busy.
     private func begin(background: Bool = false) async throws {
         try Task.checkCancellation()
-        if operating {
-            await withCheckedContinuation { continuation in
-                if background { backgroundWaiters.append(continuation) }
-                else { interactiveWaiters.append(continuation) }
-            }
+        if background {
+            if backgroundOperating {
+                await withCheckedContinuation { backgroundWaiters.append($0) }
+            } else { backgroundOperating = true }
+        } else if operating {
+            await withCheckedContinuation { interactiveWaiters.append($0) }
         } else { operating = true }
-        // A cancelled waiter must hand its granted permit on before leaving.
-        if Task.isCancelled { end(); throw CancellationError() }
+        // Each lane is serialized independently. A slow download/parse/progress GET
+        // must never hold the interactive submission permit across an await.
+        if Task.isCancelled { end(background: background); throw CancellationError() }
     }
-    private func end() {
-        if !interactiveWaiters.isEmpty { interactiveWaiters.removeFirst().resume() }
-        else if !backgroundWaiters.isEmpty { backgroundWaiters.removeFirst().resume() }
+    private func end(background: Bool = false) {
+        if background {
+            if !backgroundWaiters.isEmpty { backgroundWaiters.removeFirst().resume() }
+            else { backgroundOperating = false }
+        } else if !interactiveWaiters.isEmpty { interactiveWaiters.removeFirst().resume() }
         else { operating = false }
     }
     private func markDirectoryPathVerified(_ i: Int) {
@@ -213,6 +221,7 @@ public actor SHT115Service {
         }
         let i = try index(id, settings)
         if let cid = records[i].directoryCID {
+            records[i].firstSubmissionEmptyBaseline = nil
             guard cid != settings.parentCID, cid != "0" else { throw SHT115Error.unsafeListing }
             let path = try await http.freshPath(cid: cid, parent: records[i].verificationParentCID, settings: settings)
             guard SHT115HTTP.string(path.last?["name"] ?? path.last?["n"]) == records[i].directoryName else { throw SHT115Error.unsafeListing }
@@ -259,8 +268,10 @@ public actor SHT115Service {
             records[i].directoryJournal?[attempt].evidence?.failurePhase = nil
             if manualRecovery { records[i].directoryRecoveryOnly = true }
             try save()
-            let verified = try await http.freshPath(cid: cid, parent: settings.parentCID, settings: settings)
+            let evidence = try await http.freshPathEvidence(cid: cid, parent: settings.parentCID, settings: settings)
+            let verified = evidence.path
             guard SHT115HTTP.string(verified.last?["name"] ?? verified.last?["n"]) == records[i].directoryName else { throw SHT115Error.uncertainWrite }
+            records[i].firstSubmissionEmptyBaseline = evidence.empty
             records[i].directoryJournal?[attempt].state = .accepted
             records[i].directoryJournal?[attempt].evidence?.path = "verified"
             markDirectoryPathVerified(i); records[i].directoryWritePending = false; try save(); return records[i]
@@ -479,7 +490,8 @@ public actor SHT115Service {
         // Capture only a completed pre-POST snapshot; a slow/failed read disables extraction.
         let snapshot = SHT115SubmissionSnapshot()
         let parent = records[i].verificationParentCID
-        let snapshotTask = autoExtraction ? Task { [http] in
+        let freshEmptyBaseline = records[i].firstSubmissionEmptyBaseline == true && records[i].tasks.isEmpty
+        let snapshotTask = autoExtraction && !freshEmptyBaseline ? Task { [http] in
             if let page = try? await SHT115RequestContext.$interactive.withValue(false, operation: {
                 try await SHT115RequestContext.$opportunistic.withValue(true) {
                     try await http.verifiedPage(cid: cid, parent: parent, settings: settings)
@@ -495,8 +507,10 @@ public actor SHT115Service {
         do { signature = try await sign(settings) }
         catch let error as SHT115Diagnostic { throw error }
         catch { throw SHT115Diagnostic(stage: "signature", outcome: "未提交：签名请求失败", code: "") }
-        let priorIDs = await snapshot.ids
+        let priorIDs: [String]? = freshEmptyBaseline ? [] : await snapshot.ids
         snapshotTask?.cancel()
+        // Consume before the offline POST, including unknown/rejected outcomes.
+        records[i].firstSubmissionEmptyBaseline = nil
         records[i].tasks.append(SHT115Task(id: UUID(), urls: links, state: .submitting, progress: [], updatedAt: Date(), writeEvidence: SHT115TaskWriteEvidence(request: links.count == 1 ? "single-offline-post" : "batch-offline-post"))); try save()
         let t = records[i].tasks.count - 1
         let fields = Self.submissionFields(links: links, cid: cid, uid: settings.uid, signature: signature)
@@ -525,10 +539,13 @@ public actor SHT115Service {
         }
         if records[i].tasks[t].state == .unknown { throw SHT115Diagnostic(stage: "submit", outcome: "结果未知：响应未确认完整受理", code: apiCode) }
         if records[i].tasks[t].state == .rejected { throw SHT115Diagnostic(stage: "submit", outcome: "API明确拒绝", code: apiCode) }
-        if let priorIDs, records[i].tasks[t].state == .accepted {
+        if autoExtraction, records[i].tasks[t].state == .accepted {
             if records[i].extractionQueue == nil { records[i].extractionQueue = [] }
             for link in links {
-                let queueItem = SHT115QueueItem(id: UUID(), taskID: records[i].tasks[t].id, createdAt: Date(), priorIDs: priorIDs, url: link)
+                var queueItem = SHT115QueueItem(id: UUID(), taskID: records[i].tasks[t].id, createdAt: Date(), priorIDs: priorIDs ?? [], url: link)
+                queueItem.sourceProofMissing = priorIDs == nil
+                queueItem.phase = "等待下载"
+                if priorIDs == nil { queueItem.note = "缺少完整写前来源基线；队列保留原包，禁止自动解压或回收" }
                 records[i].extractionQueue?.append(queueItem)
             }
             try save()
@@ -536,7 +553,7 @@ public actor SHT115Service {
         return records[i]
     }
     public func listVideos(resourceID: String, settings: SHT115Settings, maxDepth: Int = 3, background: Bool = false) async throws -> SHT115VideoListing {
-        try await begin(background: background); defer { end() }
+        try await begin(background: background); defer { end(background: background) }
         return try await scan(resourceID: resourceID, settings: settings, maxDepth: maxDepth)
     }
     private func scan(resourceID: String, settings: SHT115Settings, maxDepth: Int) async throws -> SHT115VideoListing {
@@ -576,7 +593,7 @@ public actor SHT115Service {
         return SHT115VideoListing(videos: videos.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }, archives: archives, truncated: truncated)
     }
     public func inspect(resourceID: String, settings: SHT115Settings, background: Bool = false, includeFiles: Bool = true) async throws -> SHT115Inspection {
-        try await begin(background: background); defer { end() }
+        try await begin(background: background); defer { end(background: background) }
         let i = try index(resourceID, settings)
         do { return try await inspectUnlocked(resourceID: resourceID, settings: settings, includeFiles: includeFiles, i: i) }
         catch { try recordTaskReadError(i, error); throw error }
@@ -745,7 +762,7 @@ public actor SHT115Service {
     }
     /// One persisted write intent per archive and phase. Unknown writes are never replayed.
     public func requestExtraction(archive: SHT115Archive, resourceID: String, settings: SHT115Settings, confirmed: Bool, background: Bool = false) async throws -> SHT115ExtractionResult {
-        try await begin(background: background); defer { end() }
+        try await begin(background: background); defer { end(background: background) }
         let i = try index(resourceID, settings)
         guard confirmed else { return SHT115ExtractionResult(state: .awaitingConfirmation, message: "尚未授权云解压") }
         guard let target = records[i].directoryCID else { throw SHT115Error.invalidInput }
@@ -990,6 +1007,10 @@ public actor SHT115Service {
             records[i].extractionQueue?[q] = item
             try save()
             do {
+                guard item.sourceProofMissing != true else {
+                    try update(.retained, "缺少提交前完整来源证明；保留原包，不以提交后快照伪造来源")
+                    continue
+                }
                 guard let task = records[i].tasks.first(where: { $0.id == item.taskID }), task.state == .accepted,
                       let link = item.url ?? (task.urls.count == 1 ? task.urls.first : nil), task.urls.contains(link),
                       link.lowercased().hasPrefix("ed2k://|file|") else {

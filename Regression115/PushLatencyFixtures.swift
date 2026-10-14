@@ -136,16 +136,21 @@ actor GrantLog {
         PushLatencyProtocol.routes = []
         let start = Date()
         let result = try await service.prepareAndSubmitManual(urls: [link], settings: settings, targetCID: "10", autoExtraction: true)
-        precondition(result.tasks.first?.state == .accepted && (result.extractionQueue ?? []).isEmpty)
+        precondition(result.tasks.first?.state == .accepted && result.extractionQueue?.first?.sourceProofMissing == true)
         precondition(Date().timeIntervalSince(start) < 6, "pending snapshot must not block accepted feedback")
         precondition(PushLatencyProtocol.routes.contains("snapshot"), "slow snapshot must really have started before POST")
         precondition(!PushLatencyProtocol.routes.contains("taskGET"))
         let writes = PushLatencyProtocol.routes.filter { $0 == "POST" }.count
         do { _ = try await service.submit(urls: [link], resourceID: result.id, settings: settings); preconditionFailure("duplicate") } catch {}
         precondition(PushLatencyProtocol.routes.filter { $0 == "POST" }.count == writes)
-        let readOnly = Task { try? await service.inspect(resourceID: result.id, settings: settings, includeFiles: false) }
+        let readOnly = Task { try? await service.inspect(resourceID: result.id, settings: settings, background: true, includeFiles: false) }
         try await Task.sleep(nanoseconds: 2_700_000_000)
         precondition(PushLatencyProtocol.routes.contains("taskGET"), "slow task GET must really start after acceptance")
+        let concurrentStart = Date()
+        let concurrentLink = "magnet:?xt=urn:btih:" + String(repeating: "f", count: 40)
+        let concurrent = try await service.submit(urls: [concurrentLink], resourceID: result.id, settings: settings)
+        precondition(concurrent.tasks.last?.state == .accepted)
+        precondition(Date().timeIntervalSince(concurrentStart) < 7, "never-ending background GET must not own push permit")
         readOnly.cancel()
         _ = await readOnly.value
         PushLatencyProtocol.slowSnapshot = false; PushLatencyProtocol.signatureDelay = 0.05
@@ -167,9 +172,9 @@ actor GrantLog {
         PushLatencyProtocol.journalURL = directStore
         PushLatencyProtocol.routes = []; PushLatencyProtocol.starts = []
         let directStart = Date()
-        let direct = try await directService.createAndSubmitResource(urls: [link], tid: "1278", title: "post", settings: settings, autoExtraction: false)
+        let direct = try await directService.createAndSubmitResource(urls: [link], tid: "1278", title: "post", settings: settings, autoExtraction: true)
         precondition(direct.directInput != true && direct.tid == "1278" && direct.directoryCID == "20" && direct.directoryName == "post_tid-1278")
-        precondition(direct.extractionQueue?.isEmpty != false)
+        precondition(direct.extractionQueue?.count == 1 && direct.extractionQueue?.first?.priorIDs == [] && direct.extractionQueue?.first?.sourceProofMissing == false, "fresh empty creation GET is pre-POST source proof; no later snapshot")
         precondition(PushLatencyProtocol.routes == ["identity", "mkdir", "identity", "signature", "POST"], "0 parent enumeration, 0 task preflight, mkdir exactly once")
         print("PASS post-folder 1278-parent controlled production routes=\(PushLatencyProtocol.routes) seconds=\(Date().timeIntervalSince(directStart))")
         for pair in zip(PushLatencyProtocol.starts, PushLatencyProtocol.starts.dropFirst()) {
@@ -244,6 +249,6 @@ actor GrantLog {
         PushLatencyProtocol.parentCount = 0
         print("PASS post-folder 1278-parent: 0 parent pages/0 task preflight, single durable mkdir, POST to new CID, fresh reuse; conflict/timeout/accepted-read-failure restart and account/hash/partial/legacy locks")
         print("PASS account/target isolation: no cross-account proof cache; wrong target denied before POST")
-        print("PASS production pending snapshot/task GET: accepted feedback preceded never-ending reads; no post-submit snapshot authorization, no extraction queue; duplicate blocked; FIFO priority/fairness/cancellation passed")
+        print("PASS production pending snapshot/task GET: accepted feedback preceded never-ending reads; durable missing-proof queue forbids write/delete; concurrent push accepted while background GET pending; duplicate blocked; FIFO priority/fairness/cancellation passed")
     }
 }

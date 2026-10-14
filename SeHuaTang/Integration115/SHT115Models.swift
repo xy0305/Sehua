@@ -109,6 +109,9 @@ public struct SHT115Resource: Codable, Identifiable {
     public var directoryJournal: [SHT115DirectoryAttempt]? = nil
     public var extractions: [String: SHT115ExtractionState]? = nil
     public var extractionJobs: [String: SHT115ExtractionJob]? = nil
+    /// Single-use proof captured by the fresh GET immediately after this App created
+    /// the directory. Never populated by a post-submit read or a reused directory.
+    public var firstSubmissionEmptyBaseline: Bool? = nil
     public var extractionQueue: [SHT115QueueItem]? = nil
 }
 public struct SHT115Video: Codable, Identifiable {
@@ -235,6 +238,15 @@ public struct SHT115QueueItem: Codable, Identifiable {
     public var note: String = "等待离线完成身份核验"
     /// One link per queue item; nil is the pre-batch single-link journal format.
     public var url: String? = nil
+    /// nil denotes a legacy, complete pre-submit snapshot; true is explicitly unproven.
+    public var sourceProofMissing: Bool? = nil
+    public var phase: String? = nil
+    public var statusText: String {
+        if state == .recycled { return "已回收" }
+        if state == .cancelled { return "已取消" }
+        if state == .exhausted { return "预算已用尽，保留原包" }
+        return phase ?? (state == .processing ? "解析中/释放核验中" : state == .retained ? "保留原包" : "等待下载")
+    }
 }
 public enum SHT115ExtractionPolicy {
     public static let enabledKey = "avdb.115.backgroundExtraction"
