@@ -37,6 +37,8 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         let hash = String(repeating: "a", count: 32)
         let sha = String(repeating: "b", count: 40)
         let outputSHA = String(repeating: "c", count: 40)
+        let sourceSize = mode == "largeRAR" ? Int64(1_927_827_549) : 42
+        let sourceName = mode == "largeRAR" ? "fixture.rar" : "fixture.zip"
         var submitted = false, released = false, deletes = 0, parses = 0, taskReads = 0, parseReads = 0, releaseReads = 0, releases = 0
         QueueMock.handler = { request in
             let url = request.url!, path = url.path
@@ -90,7 +92,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
             precondition(path == "/files", "unexpected API: " + path)
             var entries = [[String: Any]]()
             if submitted || mode == "existingSource" || mode == "duplicateBaseline" {
-                entries.append(["fid": "21", "n": "fixture.zip", "s": 42, "pc": "sourcePC", "sha": sha])
+                entries.append(["fid": "21", "n": sourceName, "s": sourceSize, "pc": "sourcePC", "sha": sha])
             }
             if mode == "duplicateBaseline" && !submitted { let duplicate = entries; entries.append(contentsOf: duplicate) }
             if released { entries.append(["fid": "22", "n": "movie.mp4", "s": 42, "pc": "outputPC", "sha": mode == "outputHashMismatch" ? String(repeating: "d", count: 40) : outputSHA]) }
@@ -101,7 +103,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         }
         let service = try SHT115Service(storeURL: store, session: session)
         do {
-            _ = try await service.submit(urls: ["ed2k://|file|fixture.zip|42|\(hash)|/"], resourceID: "q", settings: settings, autoExtraction: mode != "legacy")
+            _ = try await service.submit(urls: ["ed2k://|file|\(sourceName)|\(sourceSize)|\(hash)|/"], resourceID: "q", settings: settings, autoExtraction: mode != "legacy")
             precondition(mode != "unknownSubmission")
         } catch { precondition(mode == "unknownSubmission") }
         let restored = try SHT115Service(storeURL: store, session: session)
@@ -169,9 +171,9 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         try await restored.runExtractionQueue(settings: input, now: now.addingTimeInterval(301))
         let again = try SHT115Service(storeURL: store, session: session)
         try await again.runExtractionQueue(settings: input, now: now.addingTimeInterval(602))
-        let shouldExtract = ["parseResume", "releaseResume", "disabledBeforeRecycle", "complete", "noFileID", "noOutputHash", "deleteTimeout", "outputHashMismatch", "targetCIDFileID"].contains(mode)
+        let shouldExtract = ["largeRAR", "parseResume", "releaseResume", "disabledBeforeRecycle", "complete", "noFileID", "noOutputHash", "deleteTimeout", "outputHashMismatch", "targetCIDFileID"].contains(mode)
         precondition(parses == (shouldExtract || mode == "parseTimeout" ? 1 : 0), mode + " parse")
-        precondition(deletes == (["parseResume", "releaseResume", "complete", "noFileID", "targetCIDFileID", "deleteTimeout"].contains(mode) ? 1 : 0), mode + " recycle")
+        precondition(deletes == (["largeRAR", "parseResume", "releaseResume", "complete", "noFileID", "targetCIDFileID", "deleteTimeout"].contains(mode) ? 1 : 0), mode + " recycle")
         precondition(releases <= 1, "accepted release must never POST again")
         if mode == "parseResume" { precondition(parseReads >= 2 && parses == 1 && releases == 1) }
         if mode == "releaseResume" { precondition(releaseReads >= 2 && parses == 1 && releases == 1) }
@@ -229,6 +231,6 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
     }
     static func main() async throws {
         try await driverGuards()
-        for mode in ["parseResume", "releaseResume", "downloadingFirst", "slowParse", "parseTimeout", "disabledBeforeRecycle", "complete", "noFileID", "targetCIDFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline", "taskHashMismatch"] { try await run(mode) }
+        for mode in ["largeRAR", "parseResume", "releaseResume", "downloadingFirst", "slowParse", "parseTimeout", "disabledBeforeRecycle", "complete", "noFileID", "targetCIDFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline", "taskHashMismatch"] { try await run(mode) }
     }
 }

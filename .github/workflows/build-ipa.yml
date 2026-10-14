@@ -162,7 +162,8 @@ jobs:
           for VERSION in 52 54; do
             mkdir -p /tmp/baseline-$VERSION
             if [ "$VERSION" = 52 ]; then REF=ca753eebdd4d9af3c1d4126f4d00de9c8500ef7a; else REF=36465b88c1d0b25ff3d8d1e3dc6edb02158d1ca5; fi
-            git ls-tree -r --name-only "$REF" -- SeHuaTang/Integration115 | rg '/SHT115[^/]*\.swift$' | while IFS= read -r FILE; do
+            git ls-tree -r --name-only "$REF" -- SeHuaTang/Integration115 | while IFS= read -r FILE; do
+              case "$FILE" in SeHuaTang/Integration115/SHT115*.swift) ;; *) continue ;; esac
               git show "$REF:$FILE" > "/tmp/baseline-$VERSION/$(basename "$FILE")"
             done
             xcrun swiftc -parse-as-library -D BASELINE_LISTING -D VERSION$VERSION /tmp/baseline-$VERSION/*.swift Regression115/ListingFixtures.swift -o /tmp/listing-$VERSION
