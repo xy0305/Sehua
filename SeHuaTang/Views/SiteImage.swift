@@ -86,13 +86,39 @@ struct SiteImage<Placeholder: View>: View {
     // document media should derive layout from decoded image dimensions.
     var preservesIntrinsicAspectRatio = true
     var animationBudget = 32 * 1024 * 1024
+    // The detail owns this lightweight cache across lazy row destruction.
+    var documentLayout: DetailImageLayout? = nil
     @ViewBuilder var placeholder: () -> Placeholder
 
     @State private var image: UIImage?
+    @State private var nearViewport = false
+    // Geometry survives bitmap eviction, including when the bounded shared
+    // geometry cache is full. This is a scalar, never a decoded-image cache.
+    @State private var resolvedDocumentRatio: Double?
+
+    private var viewportManaged: Bool { documentLayout != nil && preservesIntrinsicAspectRatio }
+    private var shouldLoad: Bool { !viewportManaged || nearViewport }
+    private struct LoadID: Equatable {
+        let key: String
+        let visible: Bool
+    }
+
+    private var layoutKey: String { DetailImageLayout.key(url: url, referer: referer) }
 
     var body: some View {
         Group {
-            if let image {
+            if let documentLayout, preservesIntrinsicAspectRatio {
+                // An unloaded/cancelled/offscreen bitmap must occupy exactly the
+                // last decoded rectangle. Overlay prevents placeholder intrinsic
+                // height (120pt in the detail) from changing the scroll extent.
+                Color.clear
+                    .aspectRatio(resolvedDocumentRatio ?? documentLayout.ratio(for: layoutKey), contentMode: .fit)
+                    .overlay {
+                        if let image { AnimatedSiteImage(image: image, mode: contentMode) }
+                        else { placeholder() }
+                    }
+                    .clipped()
+            } else if let image {
                 if preservesIntrinsicAspectRatio {
                     AnimatedSiteImage(image: image, mode: contentMode)
                         .aspectRatio(image.size.width / max(image.size.height, 1), contentMode: contentMode)
@@ -103,7 +129,21 @@ struct SiteImage<Placeholder: View>: View {
                 placeholder()
             }
         }
-        .task(id: url) { await load() }
+        .onGeometryChange(for: Bool.self) { proxy in
+            // A small prefetch margin, not the height of the whole document.
+            // Unlike onAppear, this also changes for eager VStack descendants.
+            let viewport = UIScreen.main.bounds.insetBy(dx: 0, dy: -160)
+            return proxy.frame(in: .global).intersects(viewport)
+        } action: { visible in
+            guard viewportManaged else { return }
+            nearViewport = visible
+            if !visible { image = nil }
+        }
+        .task(id: LoadID(key: layoutKey, visible: shouldLoad)) {
+            if shouldLoad { await load() }
+            else { image = nil }
+        }
+        // Release RGBA/GIF frames; document geometry deliberately survives.
         .onDisappear { image = nil }
     }
 
@@ -115,6 +155,11 @@ struct SiteImage<Placeholder: View>: View {
             let data = try await SiteImageNetwork.shared.data(url: url, referer: referer)
             guard let img = await SiteImageDecodeQueue.shared.decode(data, animationBudget: animationBudget) else { return }
             try Task.checkCancellation()
+            guard shouldLoad else { return }
+            if viewportManaged, resolvedDocumentRatio == nil {
+                resolvedDocumentRatio = Double(img.size.width / max(img.size.height, 1))
+            }
+            documentLayout?.record(width: Double(img.size.width), height: Double(img.size.height), for: layoutKey)
             image = img
         } catch {
             return

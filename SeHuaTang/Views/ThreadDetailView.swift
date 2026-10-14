@@ -17,6 +17,7 @@ struct ThreadDetailView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var readOwner: UUID?
     @State private var preparedBlocks: [String: [[HTML.Content]]] = [:]
+    @State private var imageLayout = DetailImageLayout()
     @State private var inlineAttachmentIDs = Set<String>()
     @State private var copied = false
     @State private var playVideos: [SHT115Video] = []
@@ -208,7 +209,12 @@ struct ThreadDetailView: View {
 
     private func content(_ d: ThreadDetail) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            // Eager geometry, not eager media: nested lazy stacks estimate the
+            // entire post from three-fragment rows, then revise the outer extent
+            // during recycling. UIKit's offset compensation can rewind a swipe.
+            // Measure this loaded page once; SiteImage gates network/decode by
+            // viewport and releases offscreen bitmaps independently of layout.
+            VStack(alignment: .leading, spacing: 0) {
                 if d.purchaseState == .unknown {
                     Text("购买状态未确认：可能需要登录、验证或回复/阅读权限。请在原帖确认；不代表免费，不会自动付款。")
                         .font(.footnote).foregroundStyle(ForumChrome.secondary).padding(12)
@@ -287,7 +293,7 @@ struct ThreadDetailView: View {
                 }
 
                 ForEach(d.posts) { post in
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 10) {
                         if d.posts.first?.id != post.id {
                             authorBar(post, isOriginal: false)
                         }
@@ -520,7 +526,7 @@ struct ThreadDetailView: View {
             NavigationLink {
                 ImagePage(url: url, referer: postURL.absoluteString)
             } label: {
-                SiteImage(url: url, referer: postURL.absoluteString, contentMode: .fit) {
+                SiteImage(url: url, referer: postURL.absoluteString, contentMode: .fit, documentLayout: imageLayout) {
                     ProgressView().frame(maxWidth: .infinity).frame(height: 120)
                 }
                 .frame(maxWidth: .infinity)
@@ -536,7 +542,7 @@ struct ThreadDetailView: View {
                         NavigationLink {
                             ImagePage(url: url, referer: postURL.absoluteString)
                         } label: {
-                            SiteImage(url: url, referer: postURL.absoluteString, contentMode: .fit) {
+                            SiteImage(url: url, referer: postURL.absoluteString, contentMode: .fit, documentLayout: imageLayout) {
                                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                             }
                             .frame(height: 180)
@@ -836,6 +842,7 @@ struct ThreadDetailView: View {
                 return
             }
             warmFirstImages(prepared.firstScreenImages, source: requestedURL)
+            imageLayout = DetailImageLayout()
             preparedBlocks = prepared.groups
             inlineAttachmentIDs = prepared.inlineAttachmentIDs
             detail = parsed

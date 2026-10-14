@@ -2,7 +2,7 @@ name: Build IPA
 
 on:
   push:
-    branches: [ main, 'recovery/115-evidence-*', 'recovery/detail-*' ]
+    branches: [ main, 'recovery/115-evidence-*', 'recovery/detail-*', 'fix/detail-scroll-*' ]
   workflow_dispatch:
 
 jobs:
@@ -61,6 +61,11 @@ jobs:
           python3 Regression115/DetailBaseline.py
           xcrun swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors /tmp/detail-baseline70/BaselineHTML.swift /tmp/detail-baseline70/BaselineDiscuzParser.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/PreparedThread.swift SeHuaTang/Models/DetailPerformance.swift Regression115/DetailPerformanceFixtures.swift -o /tmp/detail-performance-fixtures
           /tmp/detail-performance-fixtures
+
+      - name: Detail stable document geometry regression
+        run: |
+          xcrun swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors SeHuaTang/Models/DetailImageLayout.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/PreparedThread.swift SeHuaTang/Models/DetailPerformance.swift Regression115/DetailScrollFixtures.swift -o /tmp/detail-scroll-fixtures
+          /tmp/detail-scroll-fixtures
 
       - name: Production WKWebView queue cancellation isolation
         run: |
@@ -255,7 +260,7 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Payload/SeHuaTang.app/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" Payload/SeHuaTang.app/Info.plist
           NAME="SeHuaTang-unsigned-${VERSION}-${BUILD}.ipa"
-          if [ "$GITHUB_REF" != 'refs/heads/main' ]; then NAME="SeHuaTang-unsigned-${VERSION}-${BUILD}-detail-candidate.ipa"; fi
+          if [ "$GITHUB_REF" != 'refs/heads/main' ]; then NAME="SeHuaTang-unsigned-${VERSION}-${BUILD}-candidate.ipa"; fi
           zip -qry "$NAME" Payload
           ls -lh "$NAME"
           echo "IPA_NAME=$NAME" >> "$GITHUB_ENV"
