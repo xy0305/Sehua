@@ -1005,7 +1005,8 @@ public actor SHT115Service {
                 records[i].extractionQueue?[q].note = note
                 if state == .processing {
                     let sourceID = records[i].extractionQueue?[q].source?.id ?? ""
-                    records[i].extractionQueue?[q].phase = records[i].extractions?[sourceID] == .accepted ? "释放核验中" : "解析中"
+                    let phase = records[i].extractions?[sourceID] == .accepted ? "释放核验中" : "解析中"
+                    records[i].extractionQueue?[q].phase = phase
                 } else { records[i].extractionQueue?[q].phase = state == .waiting ? "等待下载" : "保留原包" }
                 try save()
             }
