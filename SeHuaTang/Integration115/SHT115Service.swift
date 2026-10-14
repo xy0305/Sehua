@@ -10,6 +10,7 @@ public actor SHT115Service {
     private let storeURL: URL
     private var records: [SHT115Resource]
     private var queueRunning = false
+    private var extractionRunning = Set<String>()
     private var operating = false
     private var interactiveWaiters: [CheckedContinuation<Void, Never>] = []
     private var backgroundOperating = false
@@ -762,6 +763,11 @@ public actor SHT115Service {
     }
     /// One persisted write intent per archive and phase. Unknown writes are never replayed.
     public func requestExtraction(archive: SHT115Archive, resourceID: String, settings: SHT115Settings, confirmed: Bool, background: Bool = false) async throws -> SHT115ExtractionResult {
+        let operationID = settings.account + ":" + resourceID + ":" + archive.id
+        guard extractionRunning.insert(operationID).inserted else {
+            return SHT115ExtractionResult(state: .parsing, message: "此原包正在独立队列处理中；不重复写入")
+        }
+        defer { extractionRunning.remove(operationID) }
         try await begin(background: background); defer { end(background: background) }
         let i = try index(resourceID, settings)
         guard confirmed else { return SHT115ExtractionResult(state: .awaitingConfirmation, message: "尚未授权云解压") }
