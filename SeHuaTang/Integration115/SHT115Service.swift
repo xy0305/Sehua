@@ -925,6 +925,10 @@ public actor SHT115Service {
             return result("原包身份或路径已变化，保留原包")
         }
         try Task.checkCancellation()
+        guard SHT115ExtractionPolicy.enabled(),
+              records[i].extractionQueue?.contains(where: { $0.id == authorization && $0.state == .processing && $0.source?.id == archive.id }) == true else {
+            return result("自动处理已关闭或队列已取消；保留原包")
+        }
         job.cleanup = .submitting
         records[i].extractionJobs?[archive.id] = job
         try save() // durable intent BEFORE POST; on crash/timeout this can never be replayed

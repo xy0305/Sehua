@@ -24,6 +24,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
 
 @main struct QueueFixtures {
     static func run(_ mode: String) async throws {
+        defer { UserDefaults.standard.removeObject(forKey: SHT115ExtractionPolicy.enabledKey) }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [QueueMock.self]
         let session = URLSession(configuration: configuration)
@@ -67,6 +68,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
             }
             if path == "/files/add_extract_file" {
                 if request.httpMethod == "POST" { released = true; return "{\"state\":true,\"data\":{\"extract_id\":900}}" }
+                if mode == "disabledBeforeRecycle" { UserDefaults.standard.set(false, forKey: SHT115ExtractionPolicy.enabledKey) }
                 return "{\"state\":true,\"data\":{\"percent\":100}}"
             }
             if path == "/rb/delete" {
@@ -128,7 +130,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         try await restored.runExtractionQueue(settings: input, now: now.addingTimeInterval(301))
         let again = try SHT115Service(storeURL: store, session: session)
         try await again.runExtractionQueue(settings: input, now: now.addingTimeInterval(602))
-        let shouldExtract = ["complete", "noFileID", "noOutputHash", "deleteTimeout", "outputHashMismatch", "targetCIDFileID"].contains(mode)
+        let shouldExtract = ["disabledBeforeRecycle", "complete", "noFileID", "noOutputHash", "deleteTimeout", "outputHashMismatch", "targetCIDFileID"].contains(mode)
         precondition(parses == (shouldExtract || mode == "parseTimeout" ? 1 : 0), mode + " parse")
         precondition(deletes == (["complete", "noFileID", "targetCIDFileID", "deleteTimeout"].contains(mode) ? 1 : 0), mode + " recycle")
         // A future launch only reads/marks exhausted; no unbounded retry or replay.
@@ -152,6 +154,6 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         print("PASS queue: " + mode)
     }
     static func main() async throws {
-        for mode in ["slowParse", "parseTimeout", "complete", "noFileID", "targetCIDFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline", "taskHashMismatch"] { try await run(mode) }
+        for mode in ["slowParse", "parseTimeout", "disabledBeforeRecycle", "complete", "noFileID", "targetCIDFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline", "taskHashMismatch"] { try await run(mode) }
     }
 }
