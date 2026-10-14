@@ -12,10 +12,21 @@ final class DetailScrollUITests: XCTestCase {
         XCTAssertTrue(top.waitForExistence(timeout: 20))
         let more = app.buttons["加载更多回复"]
         var down = 0
+        var verifiedGIF = false
+        let gif = app.descendants(matching: .any)["detail-media-0"].firstMatch
         while !more.isHittable && down < 65 {
             scroll.swipeUp(velocity: .slow)
             down += 1
+            if !verifiedGIF && gif.isHittable {
+                let decoded = NSPredicate(format: "value == %@", "decoded-animated")
+                XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: decoded, object: gif)], timeout: 15) == .completed,
+                              "visible GIF must be actually decoded, not a placeholder")
+                verifiedGIF = true
+                let media = XCTAttachment(screenshot: app.screenshot())
+                media.name = "detail-real-decoded-gif"; media.lifetime = .keepAlways; add(media)
+            }
         }
+        XCTAssertTrue(verifiedGIF, "must observe a real loaded animated image during gestures")
         XCTAssertTrue(more.isHittable, "must reach page-one bottom")
         let initialBottom = XCTAttachment(screenshot: app.screenshot())
         initialBottom.name = "detail-page-one-bottom"; initialBottom.lifetime = .keepAlways; add(initialBottom)

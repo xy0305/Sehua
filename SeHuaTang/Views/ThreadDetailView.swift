@@ -209,7 +209,12 @@ struct ThreadDetailView: View {
 
     private func content(_ d: ThreadDetail) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            // Eager geometry, not eager media: nested lazy stacks estimate the
+            // entire post from three-fragment rows, then revise the outer extent
+            // during recycling. UIKit's offset compensation can rewind a swipe.
+            // Measure this loaded page once; SiteImage gates network/decode by
+            // viewport and releases offscreen bitmaps independently of layout.
+            VStack(alignment: .leading, spacing: 0) {
                 if d.purchaseState == .unknown {
                     Text("购买状态未确认：可能需要登录、验证或回复/阅读权限。请在原帖确认；不代表免费，不会自动付款。")
                         .font(.footnote).foregroundStyle(ForumChrome.secondary).padding(12)
@@ -288,7 +293,7 @@ struct ThreadDetailView: View {
                 }
 
                 ForEach(d.posts) { post in
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 10) {
                         if d.posts.first?.id != post.id {
                             authorBar(post, isOriginal: false)
                         }

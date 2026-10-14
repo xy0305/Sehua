@@ -17,6 +17,6 @@ import Foundation
         guard ratio.isFinite, ratio > 0 else { return }
         // First successful decode fixes this response's geometry. Cancellation,
         // re-decode/downsampling, errors and GIF frame changes cannot shrink it.
-        if ratios[key] == nil { ratios[key] = ratio }
+        if ratios[key] == nil, ratios.count < 512 { ratios[key] = ratio }
     }
 }

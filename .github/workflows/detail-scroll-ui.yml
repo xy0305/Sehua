@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        layout: [ baseline78, stable ]
+        layout: [ stable ]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,11 +21,6 @@ jobs:
             if [ -d "$p" ]; then sudo xcode-select -s "$p/Contents/Developer"; break; fi
           done
           xcodebuild -version
-      - name: Restore old layout for controlled comparison
-        if: matrix.layout == 'baseline78'
-        run: |
-          git show e67bff4530e9f4359cc70795aea29fc17c2441a8:SeHuaTang/Views/SiteImage.swift > SeHuaTang/Views/SiteImage.swift
-          git show e67bff4530e9f4359cc70795aea29fc17c2441a8:SeHuaTang/Views/ThreadDetailView.swift > SeHuaTang/Views/ThreadDetailView.swift
       - name: Prepare test target and loopback fixture
         run: |
           gem install --user-install xcodeproj --no-document
@@ -44,7 +39,6 @@ jobs:
           PY
       - name: Bottom-to-top production detail UI regression
         id: ui
-        continue-on-error: ${{ matrix.layout == 'baseline78' }}
         run: |
           set -o pipefail
           xcodebuild test -project SeHuaTang.xcodeproj -scheme DetailScroll -configuration Debug -destination "platform=iOS Simulator,id=$SCROLL_DEVICE" -derivedDataPath /tmp/ScrollDerived -resultBundlePath "$PWD/Scroll-${{ matrix.layout }}.xcresult" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" | tee "Scroll-${{ matrix.layout }}.log"

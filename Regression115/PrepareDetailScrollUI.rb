@@ -12,6 +12,16 @@ needle = 'SelectableDetailText(text: NSAttributedString(string: d.title.isEmpty 
 raise 'title instrumentation anchor missing' unless view.include?(needle)
 view.sub!(needle, needle + "\n                    .accessibilityIdentifier(\"detail-scroll-title\")")
 File.write(view_path, view)
+# Read decoded UIImage state, not just a successful HTTP response. Only the
+# disposable UI build receives these accessibility diagnostics.
+image_path = 'SeHuaTang/Views/SiteImage.swift'
+image = File.read(image_path)
+anchor = '        .onGeometryChange(for: Bool.self)'
+raise 'image viewport anchor missing' unless image.include?(anchor)
+image.sub!(anchor, '        .accessibilityElement(children: .ignore)' + "\n" +
+  '        .accessibilityIdentifier("detail-media-\\(url?.lastPathComponent ?? "none")")' + "\n" +
+  '        .accessibilityValue(image == nil ? "placeholder" : (image?.images == nil ? "decoded-static" : "decoded-animated"))' + "\n" + anchor)
+File.write(image_path, image)
 p = Xcodeproj::Project.open('SeHuaTang.xcodeproj')
 app_target = p.targets.find { |t| t.name == 'SeHuaTang' }
 tests = p.new_target(:ui_test_bundle, 'DetailScrollUITests', :ios, '17.0')
