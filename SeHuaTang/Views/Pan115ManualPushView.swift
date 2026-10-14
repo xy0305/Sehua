@@ -101,7 +101,11 @@ struct Pan115ManualPushView: View {
             message = "已推送115，下载状态稍后更新。受理不等于下载完成。"
             // Read-only reconciliation must not hold the interaction busy state.
             Task {
-                _ = try? await service.inspect(resourceID: prepared.id, settings: settings, background: true, includeFiles: false)
+                do {
+                    _ = try await service.inspect(resourceID: prepared.id, settings: settings, background: true, includeFiles: false)
+                } catch {
+                    message = "115已受理；后续只读进度检查失败：" + SHT115Settings.safeMessage(error) + "；不会因此重发。"
+                }
             }
             input = ""
             ExtractBackground.kick()
@@ -110,7 +114,10 @@ struct Pan115ManualPushView: View {
             if let service = try? Pan115UIService.get() {
                 resource = await service.resources().first { $0.account == settings.account && $0.manualInput == true && $0.directoryCID == targetCID }
                 if let pending = resource, pending.tasks.contains(where: { $0.state == .unknown }) {
-                    Task { _ = try? await service.inspect(resourceID: pending.id, settings: settings, background: true, includeFiles: false) }
+                    Task {
+                        do { _ = try await service.inspect(resourceID: pending.id, settings: settings, background: true, includeFiles: false) }
+                        catch { message = "写入结果仍未知；只读续查失败：" + SHT115Settings.safeMessage(error) + "；保留锁，不重发。" }
+                    }
                 }
             }
         }

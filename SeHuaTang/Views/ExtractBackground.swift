@@ -5,7 +5,7 @@ import UIKit
 /// iOS best effort only; force quit/suspension never promises continued execution.
 @MainActor enum ExtractBackground {
     static let taskID = "app.sehuatang.ios.extract"
-    private static var foregroundWork: Task<Void, Never>?
+    private static let foreground = SHT115ExtractionDriver()
     private static var backgroundWork: Task<Bool, Never>?
 
     static func register() {
@@ -23,32 +23,39 @@ import UIKit
         Task { @MainActor in
             let settings = SHT115Settings.load()
             guard let service = try? Pan115UIService.get(),
-                  await service.hasPendingExtraction(settings: settings) else { return }
+                  let nextDue = await service.nextExtractionDue(settings: settings) else { return }
             guard SHT115ExtractionPolicy.enabled(),
                   settings.account == SHT115Settings.load().account,
                   settings.parentCID == SHT115Settings.load().parentCID else { return }
             let request = BGProcessingTaskRequest(identifier: taskID)
             request.requiresNetworkConnectivity = true
             request.requiresExternalPower = false
-            request.earliestBeginDate = Date(timeIntervalSinceNow: 300)
+            request.earliestBeginDate = max(nextDue, Date(timeIntervalSinceNow: 20))
             try? BGTaskScheduler.shared.submit(request)
         }
     }
 
     /// Detached from the submit button: submit acceptance does not await this work.
     static func kick() {
-        guard SHT115ExtractionPolicy.enabled(), foregroundWork == nil else { return }
-        foregroundWork = Task { @MainActor in
-            defer { foregroundWork = nil; BackgroundRun.end(); schedule() }
-            let settings = SHT115Settings.load()
-            guard let service = try? Pan115UIService.get() else { return }
-            try? await service.runExtractionQueue(settings: settings)
-        }
+        guard SHT115ExtractionPolicy.enabled(), UIApplication.shared.applicationState == .active else { return }
+        let settings = SHT115Settings.load()
+        guard let service = try? Pan115UIService.get() else { return }
+        foreground.kick(eligible: {
+            let current = SHT115Settings.load()
+            return SHT115ExtractionPolicy.enabled() && UIApplication.shared.applicationState == .active &&
+                current.account == settings.account && current.parentCID == settings.parentCID
+        }, next: {
+            await service.nextExtractionDue(settings: settings)
+        }, run: {
+            do { try await service.runExtractionQueue(settings: settings) }
+            catch is CancellationError { return }
+            catch { /* Item failures are persisted by the service; driver backs off. */ }
+        })
     }
 
     /// Call when account, parent CID, or automation setting changes.
     static func stop() {
-        foregroundWork?.cancel()
+        foreground.stop()
         backgroundWork?.cancel()
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: taskID)
         BackgroundRun.end()
@@ -81,7 +88,8 @@ struct BackgroundKeepAlive: View {
             .onAppear { ExtractBackground.kick() }
             .onChange(of: scenePhase) { phase in
                 if phase == .background {
-                    if SHT115ExtractionPolicy.enabled() { BackgroundRun.begin(); ExtractBackground.kick(); ExtractBackground.schedule() }
+                    ExtractBackground.stop()
+                    ExtractBackground.schedule()
                 } else if phase == .active {
                     BackgroundRun.end(); ExtractBackground.kick()
                 }

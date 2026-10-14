@@ -798,6 +798,7 @@ public actor SHT115Service {
         }
         if state == nil {
             try Task.checkCancellation()
+            guard SHT115ExtractionPolicy.enabled(), records[i].extractionQueue?.contains(where: { $0.state == .processing && $0.source?.id == archive.id }) == true else { throw CancellationError() }
             try persist(.submitting)
             do {
                 let obj = try await http.json("https://webapi.115.com/files/push_extract", settings: settings, fields: [("pick_code", pick), ("secret", "")])
@@ -831,6 +832,7 @@ public actor SHT115Service {
             return SHT115ExtractionResult(state: .unsupported, message: "目标存在同名输出；不覆盖、不解压，保留原包")
         }
         try Task.checkCancellation()
+        guard SHT115ExtractionPolicy.enabled(), records[i].extractionQueue?.contains(where: { $0.state == .processing && $0.source?.id == archive.id }) == true else { throw CancellationError() }
         try persist(.submitting)
         do {
             let result = try await http.json("https://webapi.115.com/files/add_extract_file", settings: settings, fields: fields)
@@ -988,16 +990,27 @@ public actor SHT115Service {
         }
     }
 
+    /// Earliest durable due date, isolated to the current account and parent.
+    public func nextExtractionDue(settings: SHT115Settings) -> Date? {
+        records.filter { $0.account == settings.account && $0.parentCID == settings.parentCID }
+            .flatMap { $0.extractionQueue ?? [] }
+            .filter { [.waiting, .processing].contains($0.state) }
+            .map(\.nextAttempt).min()
+    }
+
     /// One bounded pass; no sleeps, loops over progress, global scan, or old-task migration.
     /// Every resumed operation starts with fresh read proof. Unknown writes stay locked.
     public func runExtractionQueue(settings: SHT115Settings, now: Date = Date()) async throws {
-        guard !queueRunning else { return }
+        guard SHT115ExtractionPolicy.enabled(), !queueRunning else { return }
         queueRunning = true; defer { queueRunning = false }
         try settings.validate()
         let candidates = records.filter { $0.account == settings.account && $0.parentCID == settings.parentCID }
-            .flatMap { resource in (resource.extractionQueue ?? []).filter { [.waiting, .processing].contains($0.state) && $0.nextAttempt <= now }.map { (resource.id, $0.id) } }
-        for (resourceID, queueID) in candidates.prefix(4) {
+            .flatMap { resource in (resource.extractionQueue ?? []).filter { [.waiting, .processing].contains($0.state) && $0.nextAttempt <= now }.map { (resource.id, $0.id, $0.nextAttempt) } }
+            .sorted { $0.2 < $1.2 }
+        // One item per pass, earliest due first: a slow old task cannot monopolize four slots.
+        for (resourceID, queueID, _) in candidates.prefix(1) {
             try Task.checkCancellation()
+            guard SHT115ExtractionPolicy.enabled() else { return }
             let i = try index(resourceID, settings)
             guard let q = records[i].extractionQueue?.firstIndex(where: { $0.id == queueID }),
                   var item = records[i].extractionQueue?[q], [.waiting, .processing].contains(item.state),
@@ -1014,11 +1027,13 @@ public actor SHT115Service {
                 } else { records[i].extractionQueue?[q].phase = state == .waiting ? "等待下载" : "保留原包" }
                 try save()
             }
-            if item.attempts >= 12 || now.timeIntervalSince(item.createdAt) > 86_400 {
-                try update(.exhausted, "已达12次/24小时处理预算；保留原包，不无限轮询")
+            if item.attempts >= 240 || now.timeIntervalSince(item.createdAt) > 86_400 {
+                try update(.exhausted, "已达240次/24小时处理预算；保留原包，不无限轮询")
                 continue
             }
-            item.attempts += 1; item.nextAttempt = now.addingTimeInterval(300)
+            // Download checks are read-only; never reinterpret a pending/unknown parse as permission to POST.
+            item.attempts += 1
+            item.nextAttempt = now.addingTimeInterval(item.state == .processing ? 30 : (item.attempts <= 30 ? 20 : 30))
             records[i].extractionQueue?[q] = item
             try save()
             do {
@@ -1090,7 +1105,7 @@ public actor SHT115Service {
                     try update(.processing, result.message)
                 }
             } catch is CancellationError { throw CancellationError() }
-            catch { try update(.waiting, "本轮未完成核验；保留原包，未知写入不会重发") }
+            catch { try update(.waiting, "本轮读取/核验失败：" + SHT115Settings.safeMessage(error) + "；保留原包，未知写入不会重发") }
         }
     }
 

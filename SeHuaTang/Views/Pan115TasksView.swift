@@ -84,6 +84,8 @@ struct Pan115TaskDetailView: View {
                 ForEach(resource.tasks) { task in
                     VStack(alignment: .leading, spacing: 8) {
                         Text("状态：\(submissionStatus(task.state))")
+                        let queued = (resource.extractionQueue ?? []).filter { $0.taskID == task.id }
+                        Text(queued.isEmpty ? "未入自动解压队列（开关关闭、未受理或非支持的压缩包）；受理不代表下载完成" : "自动解压已入队 \(queued.count) 项；请查看下方来源状态和检查时间").font(.caption)
                         Text(task.updatedAt, style: .date).font(.caption)
                         ForEach(Array(task.urls.enumerated()), id: \.offset) { _, url in
                             Text(url).font(.caption).textSelection(.enabled)
@@ -102,8 +104,12 @@ struct Pan115TaskDetailView: View {
             Section("安全后台解压队列") {
                 ForEach(resource.extractionQueue ?? []) { item in
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("状态：" + item.state.rawValue + " · 尝试 \(item.attempts)/12")
+                        Text("状态：" + item.state.rawValue + " · 检查 \(item.attempts)/240")
                         Text(item.note).font(.caption)
+                        Text(item.sourceProofMissing == true ? "来源证明不足：禁止自动解压/删除，原包保留" : "已入队；每轮仍须核验精确来源与完成证据").font(.caption)
+                        if item.state == .waiting || item.state == .processing {
+                            Text("下次检查：\(item.nextAttempt.formatted(date: .omitted, time: .standard))（前台按期；后台时机由iOS决定）").font(.caption)
+                        }
                         if item.state == .waiting || item.state == .processing {
                             Button("取消此项后续自动处理") {
                                 Task { await cancel(item.id) }

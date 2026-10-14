@@ -37,7 +37,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         let hash = String(repeating: "a", count: 32)
         let sha = String(repeating: "b", count: 40)
         let outputSHA = String(repeating: "c", count: 40)
-        var submitted = false, released = false, deletes = 0, parses = 0
+        var submitted = false, released = false, deletes = 0, parses = 0, taskReads = 0
         QueueMock.handler = { request in
             let url = request.url!, path = url.path
             let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
@@ -49,6 +49,10 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
                 return "{\"state\":true}"
             }
             if query("ac") == "task_lists" {
+                taskReads += 1
+                if mode == "downloadingFirst", taskReads == 1 {
+                    return "{\"state\":true,\"page_count\":1,\"tasks\":[{\"info_hash\":\"\(hash)\",\"wp_path_id\":20,\"status\":1,\"percentDone\":50}]}"
+                }
                 let fid = mode == "noFileID" ? "" : (mode == "targetCIDFileID" ? ",\"file_id\":20" : ",\"file_id\":21")
                 let taskHash = mode == "taskHashMismatch" ? String(repeating: "e", count: 32) : hash
                 return "{\"state\":true,\"page_count\":1,\"tasks\":[{\"info_hash\":\"\(taskHash)\",\"wp_path_id\":20,\"status\":2,\"percentDone\":100\(fid)}]}"
@@ -105,6 +109,31 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         let input = mode == "otherAccount" ? SHT115Settings(cookie: "UID=456_A1; CID=fake; SEID=fake", parentCID: "10") :
             mode == "otherParent" ? SHT115Settings(cookie: settings.cookie, parentCID: "11") : settings
         let now = Date()
+        if mode == "downloadingFirst" {
+            try await restored.runExtractionQueue(settings: settings, now: now)
+            let waiting = await restored.resources()[0].extractionQueue!.first!
+            precondition(waiting.state == .waiting && parses == 0 && deletes == 0)
+            precondition(waiting.nextAttempt.timeIntervalSince(now) == 20)
+            let due = await restored.nextExtractionDue(settings: settings)
+            precondition(due == waiting.nextAttempt)
+            try await restored.runExtractionQueue(settings: settings, now: now.addingTimeInterval(1))
+            precondition(taskReads == 1, "not due: zero HTTP requests, no busy polling")
+            let driver = await SHT115ExtractionDriver()
+            await driver.kick(eligible: { true }, next: { await restored.nextExtractionDue(settings: settings) }, run: {
+                try! await restored.runExtractionQueue(settings: settings)
+            })
+            // No second kick, no scene transition: production timer resumes the queue.
+            for _ in 0..<1000 {
+                if await restored.resources()[0].extractionQueue!.first!.state == .recycled { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            await driver.stop()
+            let final = await restored.resources()[0].extractionQueue!.first!.state
+            precondition(final == .recycled)
+            precondition(parses == 1 && deletes == 1 && taskReads >= 2)
+            print("PASS foreground: first download incomplete, 20s due timer resumes without kick/background, single parse/release/recycle")
+            return
+        }
         if mode == "slowParse" {
             let worker = Task { try await restored.runExtractionQueue(settings: input, now: now) }
             for _ in 0..<400 {
@@ -153,7 +182,40 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         }
         print("PASS queue: " + mode)
     }
+    @MainActor static func driverGuards() async throws {
+        let driver = SHT115ExtractionDriver()
+        var count = 0, enabled = true, due: Date? = Date()
+        let operation: @MainActor () async -> Void = {
+            count += 1
+            due = Date().addingTimeInterval(300)
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        driver.kick(eligible: { enabled }, next: { due }, run: operation)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        due = Date() // new accepted queue during an old pass
+        driver.kick(eligible: { enabled }, next: { due }, run: operation)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        precondition(count == 2, "kick during pass must wake new due queue")
+        due = Date()
+        driver.kick(eligible: { enabled }, next: { due }, run: operation)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        precondition(count == 3, "kick must wake sleeping worker")
+        due = Date()
+        enabled = false
+        driver.stop()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        precondition(count == 3, "stop prevents later requests")
+        enabled = true
+        driver.kick(eligible: { enabled }, next: { due }, run: {
+            count += 1 // simulate failing pass that leaves a stale/past due date
+        })
+        try await Task.sleep(nanoseconds: 300_000_000)
+        precondition(count == 4, "stale due must back off, never busy loop")
+        driver.stop()
+        print("PASS driver: kick during pass and sleep, cancellation/account-switch eligibility, stale-due backoff")
+    }
     static func main() async throws {
-        for mode in ["slowParse", "parseTimeout", "disabledBeforeRecycle", "complete", "noFileID", "targetCIDFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline", "taskHashMismatch"] { try await run(mode) }
+        try await driverGuards()
+        for mode in ["downloadingFirst", "slowParse", "parseTimeout", "disabledBeforeRecycle", "complete", "noFileID", "targetCIDFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline", "taskHashMismatch"] { try await run(mode) }
     }
 }
