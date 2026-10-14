@@ -261,7 +261,9 @@ struct Pan115ResourceView: View {
             stage = "帖子目录核验或单次创建、签名与离线提交"
             resource = try await service.createAndSubmitResource(urls: urls, tid: String(detail.tid), title: detail.title, settings: settings, autoExtraction: SHT115ExtractionPolicy.enabled())
             ExtractBackground.kick()
-            message = "115已受理到父目录 / \(resource?.directoryName ?? "帖子标题_tid目录")（CID \(resource?.directoryCID ?? "待核验")），下载状态稍后更新。不搬移旧文件；解压及回收仍须来源证据。受理不等于下载完成。"
+            let queue = resource?.extractionQueue ?? []
+            let queueStatus = queue.isEmpty ? "未入自动解压队列（开关关闭或无支持项）。" : (queue.contains { $0.sourceProofMissing == true } ? "已记录队列但来源证明不足；禁止自动解压/删除，保留原包。" : "已入队，前台将按到期时间继续核验。")
+            message = queueStatus + "115已受理到父目录 / \(resource?.directoryName ?? "帖子标题_tid目录")（CID \(resource?.directoryCID ?? "待核验")），下载状态稍后更新。不搬移旧文件；解压及回收仍须来源证据。受理不等于下载完成。"
         } catch {
             // Derive locks from the durable journal, not from a broad catch:
             // a failed read/signature is not evidence that a write was sent.

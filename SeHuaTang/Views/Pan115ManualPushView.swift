@@ -98,7 +98,9 @@ struct Pan115ManualPushView: View {
             message = "目标核验、签名与单次提交；未知不重发"
             let prepared = try await service.prepareAndSubmitManual(urls: approved, settings: settings, targetCID: targetCID, autoExtraction: SHT115ExtractionPolicy.enabled())
             resource = prepared
-            message = "已推送115，下载状态稍后更新。受理不等于下载完成。"
+            let queue = prepared.extractionQueue ?? []
+            let queueStatus = queue.isEmpty ? "未入自动解压队列（开关关闭或无支持项）" : (queue.contains { $0.sourceProofMissing == true } ? "已记录队列，但来源证明不足；禁止自动解压/删除，保留原包" : "已入自动解压队列；前台按到期时间继续只读核验")
+            message = "已推送115，下载状态稍后更新。受理不等于下载完成。" + queueStatus
             // Read-only reconciliation must not hold the interaction busy state.
             Task {
                 do {

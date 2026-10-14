@@ -26,8 +26,10 @@ import Foundation
             }
             while !Task.isCancelled && eligible() && Date() < deadline {
                 let observed = revision
-                guard let due = await next() else { return }
-                guard !Task.isCancelled && eligible() else { return }
+                let nextDue = await next()
+                guard generation == token, !Task.isCancelled && eligible() else { return }
+                if revision != observed { continue }
+                guard let due = nextDue else { return }
                 let ran = due <= Date()
                 if ran {
                     let pass = Task { await run() }
@@ -45,8 +47,9 @@ import Foundation
                 }
                 if revision != observed { continue } // accepted new queue while old pass ran
                 let upcoming = await next()
-                guard let upcoming, !Task.isCancelled && eligible() else { return }
+                guard generation == token, !Task.isCancelled && eligible() else { return }
                 if revision != observed { continue }
+                guard let upcoming else { return }
                 let delay = min(30, max(ran ? 20 : 1, upcoming.timeIntervalSinceNow))
                 let timer = Task { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
                 sleeper = timer
