@@ -1003,6 +1003,10 @@ public actor SHT115Service {
                 guard records[i].extractionQueue?[q].state != .cancelled else { return }
                 records[i].extractionQueue?[q].state = state
                 records[i].extractionQueue?[q].note = note
+                if state == .processing {
+                    let sourceID = records[i].extractionQueue?[q].source?.id ?? ""
+                    records[i].extractionQueue?[q].phase = records[i].extractions?[sourceID] == .accepted ? "释放核验中" : "解析中"
+                } else { records[i].extractionQueue?[q].phase = state == .waiting ? "等待下载" : "保留原包" }
                 try save()
             }
             if item.attempts >= 12 || now.timeIntervalSince(item.createdAt) > 86_400 {

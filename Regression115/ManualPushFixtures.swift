@@ -112,8 +112,10 @@ final class ManualProtocol: URLProtocol, @unchecked Sendable {
         var saved = await service.resources().first!
         precondition(writes == 1 && saved.tasks.count == 1 && saved.tasks[0].urls.count == 2)
         precondition(saved.tasks[0].state == (["accepted", "bad-snapshot", "pending-snapshot"].contains(mode) ? .accepted : mode == "rejected" ? .rejected : .unknown))
-        if mode == "accepted" { precondition([0, 2].contains((saved.extractionQueue ?? []).count)) }
-        else { precondition((saved.extractionQueue ?? []).isEmpty) }
+        if ["accepted", "bad-snapshot", "pending-snapshot"].contains(mode) {
+            precondition(saved.extractionQueue?.count == 2)
+            if mode != "accepted" { precondition(saved.extractionQueue?.allSatisfy { $0.sourceProofMissing == true } == true) }
+        } else { precondition((saved.extractionQueue ?? []).isEmpty) }
         if mode != "rejected" {
             do { _ = try await service.submit(urls: [ed], resourceID: resource.id, settings: settings); preconditionFailure("repeated") } catch {}
             precondition(writes == 1)
