@@ -17,6 +17,7 @@ struct ThreadDetailView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var readOwner: UUID?
     @State private var preparedBlocks: [String: [[HTML.Content]]] = [:]
+    @State private var imageLayout = DetailImageLayout()
     @State private var inlineAttachmentIDs = Set<String>()
     @State private var copied = false
     @State private var playVideos: [SHT115Video] = []
@@ -520,7 +521,7 @@ struct ThreadDetailView: View {
             NavigationLink {
                 ImagePage(url: url, referer: postURL.absoluteString)
             } label: {
-                SiteImage(url: url, referer: postURL.absoluteString, contentMode: .fit) {
+                SiteImage(url: url, referer: postURL.absoluteString, contentMode: .fit, documentLayout: imageLayout) {
                     ProgressView().frame(maxWidth: .infinity).frame(height: 120)
                 }
                 .frame(maxWidth: .infinity)
@@ -536,7 +537,7 @@ struct ThreadDetailView: View {
                         NavigationLink {
                             ImagePage(url: url, referer: postURL.absoluteString)
                         } label: {
-                            SiteImage(url: url, referer: postURL.absoluteString, contentMode: .fit) {
+                            SiteImage(url: url, referer: postURL.absoluteString, contentMode: .fit, documentLayout: imageLayout) {
                                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                             }
                             .frame(height: 180)
@@ -836,6 +837,7 @@ struct ThreadDetailView: View {
                 return
             }
             warmFirstImages(prepared.firstScreenImages, source: requestedURL)
+            imageLayout = DetailImageLayout()
             preparedBlocks = prepared.groups
             inlineAttachmentIDs = prepared.inlineAttachmentIDs
             detail = parsed

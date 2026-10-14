@@ -86,13 +86,28 @@ struct SiteImage<Placeholder: View>: View {
     // document media should derive layout from decoded image dimensions.
     var preservesIntrinsicAspectRatio = true
     var animationBudget = 32 * 1024 * 1024
+    // The detail owns this lightweight cache across lazy row destruction.
+    var documentLayout: DetailImageLayout? = nil
     @ViewBuilder var placeholder: () -> Placeholder
 
     @State private var image: UIImage?
 
+    private var layoutKey: String { DetailImageLayout.key(url: url, referer: referer) }
+
     var body: some View {
         Group {
-            if let image {
+            if let documentLayout, preservesIntrinsicAspectRatio {
+                // An unloaded/cancelled/offscreen bitmap must occupy exactly the
+                // last decoded rectangle. Overlay prevents placeholder intrinsic
+                // height (120pt in the detail) from changing the scroll extent.
+                Color.clear
+                    .aspectRatio(documentLayout.ratio(for: layoutKey), contentMode: .fit)
+                    .overlay {
+                        if let image { AnimatedSiteImage(image: image, mode: contentMode) }
+                        else { placeholder() }
+                    }
+                    .clipped()
+            } else if let image {
                 if preservesIntrinsicAspectRatio {
                     AnimatedSiteImage(image: image, mode: contentMode)
                         .aspectRatio(image.size.width / max(image.size.height, 1), contentMode: contentMode)
@@ -103,7 +118,8 @@ struct SiteImage<Placeholder: View>: View {
                 placeholder()
             }
         }
-        .task(id: url) { await load() }
+        .task(id: layoutKey) { await load() }
+        // Release RGBA/GIF frames; document geometry deliberately survives.
         .onDisappear { image = nil }
     }
 
@@ -115,6 +131,7 @@ struct SiteImage<Placeholder: View>: View {
             let data = try await SiteImageNetwork.shared.data(url: url, referer: referer)
             guard let img = await SiteImageDecodeQueue.shared.decode(data, animationBudget: animationBudget) else { return }
             try Task.checkCancellation()
+            documentLayout?.record(width: Double(img.size.width), height: Double(img.size.height), for: layoutKey)
             image = img
         } catch {
             return

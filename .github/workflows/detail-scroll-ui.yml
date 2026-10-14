@@ -1,0 +1,63 @@
+name: Detail Scroll UI
+on:
+  push:
+    branches: [ 'fix/detail-scroll-*' ]
+  workflow_dispatch:
+jobs:
+  scroll-ui:
+    runs-on: macos-15
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        layout: [ baseline78, stable ]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Select Xcode
+        run: |
+          for p in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app /Applications/Xcode_26.1.1.app /Applications/Xcode_26.0.1.app /Applications/Xcode_26.app /Applications/Xcode_16.4.app; do
+            if [ -d "$p" ]; then sudo xcode-select -s "$p/Contents/Developer"; break; fi
+          done
+          xcodebuild -version
+      - name: Restore old layout for controlled comparison
+        if: matrix.layout == 'baseline78'
+        run: |
+          git show e67bff4530e9f4359cc70795aea29fc17c2441a8:SeHuaTang/Views/SiteImage.swift > SeHuaTang/Views/SiteImage.swift
+          git show e67bff4530e9f4359cc70795aea29fc17c2441a8:SeHuaTang/Views/ThreadDetailView.swift > SeHuaTang/Views/ThreadDetailView.swift
+      - name: Prepare test target and loopback fixture
+        run: |
+          gem install --user-install xcodeproj --no-document
+          ruby Regression115/PrepareDetailScrollUI.rb
+          python3 -m venv /tmp/scroll-venv
+          /tmp/scroll-venv/bin/pip install pillow
+          /tmp/scroll-venv/bin/python Regression115/DetailScrollHTTPFixture.py > /tmp/scroll-http.log 2>&1 &
+          curl --noproxy '*' --retry 5 --retry-connrefused --max-time 15 -f http://127.0.0.1:18766/ready
+          xcrun simctl list devices available -j > /tmp/scroll-devices.json
+          python3 - <<'PY'
+          import json, os
+          groups = json.load(open('/tmp/scroll-devices.json'))['devices']
+          devices = [d for runtime, values in groups.items() if 'iOS' in runtime for d in values if d['isAvailable'] and 'iPhone' in d['name']]
+          device = devices[0]['udid']
+          with open(os.environ['GITHUB_ENV'], 'a') as f: f.write('SCROLL_DEVICE=' + device + '\n')
+          PY
+      - name: Bottom-to-top production detail UI regression
+        id: ui
+        continue-on-error: ${{ matrix.layout == 'baseline78' }}
+        run: |
+          set -o pipefail
+          xcodebuild test -project SeHuaTang.xcodeproj -scheme DetailScroll -configuration Debug -destination "platform=iOS Simulator,id=$SCROLL_DEVICE" -derivedDataPath /tmp/ScrollDerived -resultBundlePath "$PWD/Scroll-${{ matrix.layout }}.xcresult" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" | tee "Scroll-${{ matrix.layout }}.log"
+      - name: Record fixture counters
+        if: always()
+        run: |
+          curl --noproxy '*' -f http://127.0.0.1:18766/stats > "Scroll-${{ matrix.layout }}-stats.json" || true
+          cp /tmp/scroll-http.log "Scroll-${{ matrix.layout }}-http.log" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: detail-scroll-${{ matrix.layout }}-evidence
+          path: |
+            Scroll-*.xcresult
+            Scroll-*.log
+            Scroll-*-stats.json
