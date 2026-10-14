@@ -19,6 +19,8 @@ tests.add_dependency(app_target)
 ref = p.main_group.new_file('Regression115/DetailScrollUITests.swift')
 tests.source_build_phase.add_file_reference(ref)
 tests.build_configurations.each do |c|
+  c.build_settings['PRODUCT_NAME'] = '$(TARGET_NAME)'
+  c.build_settings['PRODUCT_MODULE_NAME'] = 'DetailScrollUITests'
   c.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'app.sehuatang.scrolltests'
   c.build_settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   c.build_settings['TEST_TARGET_NAME'] = 'SeHuaTang'
