@@ -47,8 +47,10 @@ class Handler(BaseHTTPRequestHandler):
             body = ''.join(f'<p>SCROLL ROW {i} native selectable text</p><img src="/media/{i}"><p>AFTER IMAGE {i}</p>' for i in range(12))
             data = ('<html><body><h1 id="thread_subject">SCROLL TOP</h1>' + post(7901, body) + '<a href="forum.php?mod=viewthread&amp;tid=79&amp;page=2">下一页</a></body></html>').encode()
         elif parsed.path == '/forum.php' and page == 2 and count == 1:
-            status = 503
-            data = b'<html><body>controlled first-page-two failure</body></html>'
+            # Invalid completed page, not a WebKit HTTP-error navigation whose
+            # displayed document is platform-dependent. Production must retain
+            # the current page and offer a bounded explicit retry.
+            data = b'<html><body>controlled empty reply page</body></html>'
         elif parsed.path == '/forum.php' and page == 2:
             data = ('<html><body>' + post(7901, '<p>duplicate original must not append</p>') + post(7902, '<p>PAGE TWO REPLY</p>') + '</body></html>').encode()
         else:

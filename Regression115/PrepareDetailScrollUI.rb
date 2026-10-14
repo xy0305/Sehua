@@ -4,7 +4,7 @@
 require 'xcodeproj'
 app_path = 'SeHuaTang/SeHuaTangApp.swift'
 app = File.read(app_path)
-app.sub!('RootView()', 'NavigationStack { ThreadDetailView(tid: 79, title: "SCROLL TOP", sourceURL: URL(string: "http://127.0.0.1:18766/forum.php?mod=viewthread&tid=79&page=1")!) }')
+app.sub!('RootView()', 'NavigationStack { ThreadDetailView(tid: 79, title: "SCROLL TOP", sourceURL: URL(string: "http://127.0.0.1:18766/forum.php?mod=viewthread&tid=79&page=1")!) }.background { HiddenWebView().frame(width: 1, height: 1).opacity(0.01).allowsHitTesting(false) }')
 File.write(app_path, app)
 view_path = 'SeHuaTang/Views/ThreadDetailView.swift'
 view = File.read(view_path)

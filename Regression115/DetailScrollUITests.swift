@@ -2,6 +2,7 @@ import XCTest
 
 final class DetailScrollUITests: XCTestCase {
     func testBottomThenBackToTopAndExplicitPagination() throws {
+        continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
         let scroll = app.scrollViews.firstMatch
@@ -16,6 +17,21 @@ final class DetailScrollUITests: XCTestCase {
             down += 1
         }
         XCTAssertTrue(more.isHittable, "must reach page-one bottom")
+        let initialBottom = XCTAttachment(screenshot: app.screenshot())
+        initialBottom.name = "detail-page-one-bottom"; initialBottom.lifetime = .keepAlways; add(initialBottom)
+        var initialUp = 0
+        while !top.isHittable && initialUp < 75 {
+            scroll.swipeDown(velocity: .slow); initialUp += 1
+        }
+        XCTAssertTrue(top.isHittable, "page-one bottom-to-top must work before any pagination request")
+        let initialTop = XCTAttachment(screenshot: app.screenshot())
+        initialTop.name = "detail-page-one-returned-top"; initialTop.lifetime = .keepAlways; add(initialTop)
+        print("SCROLL UI initial bottom swipes=\(down), return-to-top swipes=\(initialUp)")
+        var secondDown = 0
+        while !more.isHittable && secondDown < 65 {
+            scroll.swipeUp(velocity: .slow); secondDown += 1
+        }
+        XCTAssertTrue(more.isHittable)
         // A failed page must remain an explicit button, never an onAppear retry.
         more.tap()
         let error = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "未取得下一页回复")).firstMatch
