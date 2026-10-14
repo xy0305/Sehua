@@ -119,7 +119,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
             try await restored.runExtractionQueue(settings: settings, now: now)
             let waiting = await restored.resources()[0].extractionQueue!.first!
             precondition(waiting.state == .waiting && parses == 0 && deletes == 0)
-            precondition(waiting.nextAttempt.timeIntervalSince(now) == 20)
+            precondition(waiting.nextAttempt.timeIntervalSince(now) >= 20 && waiting.nextAttempt.timeIntervalSince(now) < 30)
             let due = await restored.nextExtractionDue(settings: settings)
             precondition(due == waiting.nextAttempt)
             try await restored.runExtractionQueue(settings: settings, now: now.addingTimeInterval(1))
@@ -148,7 +148,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
             }
             precondition(parses == 1, "production worker must reach real pending parse POST")
             let start = Date()
-            let pushed = try await restored.submit(urls: ["ed2k://|file|next.zip|43|" + String(repeating: "d", count: 32) + "|/"], resourceID: "q", settings: settings)
+            let pushed = try await restored.submit(urls: ["ed2k://|file|next.zip|43|" + String(repeating: "d", count: 32) + "|/"], resourceID: "q", settings: settings, autoExtraction: true)
             precondition(pushed.tasks.last?.state == .accepted && pushed.tasks.first?.state == .accepted)
             precondition(Date().timeIntervalSince(start) < 8 && !released && deletes == 0, "pending parse cannot block push or authorize cleanup")
             worker.cancel(); _ = try? await worker.value
@@ -156,7 +156,11 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
             let recovered = await restart.resources()[0]
             precondition(recovered.extractionQueue?.first?.source?.id == "21", "persist source before parse")
             precondition(recovered.extractions?["21"] == .unknown, "interrupted parse locked on restart")
+            precondition(recovered.extractionQueue?.count == 2)
+            precondition(recovered.extractionQueue!.first!.nextAttempt > recovered.extractionQueue!.last!.nextAttempt, "slow old pass completion must back off behind new accepted queue")
             try await restart.runExtractionQueue(settings: settings, now: now.addingTimeInterval(301))
+            let fair = await restart.resources()[0].extractionQueue!
+            precondition(fair.first!.attempts == 1 && fair.last!.attempts == 1, "new due queue must run before old slow task")
             precondition(parses == 1 && deletes == 0)
             print("PASS queue: slowParse; push accepted while parse pending; restart source restored; unknown not replayed; no delete")
             return

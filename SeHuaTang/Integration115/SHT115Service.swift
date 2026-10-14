@@ -1020,6 +1020,11 @@ public actor SHT115Service {
                 guard records[i].extractionQueue?[q].state != .cancelled else { return }
                 records[i].extractionQueue?[q].state = state
                 records[i].extractionQueue?[q].note = note
+                if [.waiting, .processing].contains(state), let due = records[i].extractionQueue?[q].nextAttempt {
+                    // Backoff is measured from completion as well as dispatch: a slow old read
+                    // must not remain permanently earlier than a newly accepted queue item.
+                    records[i].extractionQueue?[q].nextAttempt = max(due, Date().addingTimeInterval(state == .processing ? 30 : 20))
+                }
                 if state == .processing {
                     let sourceID = records[i].extractionQueue?[q].source?.id ?? ""
                     let phase = records[i].extractions?[sourceID] == .accepted ? "释放核验中" : "解析中"
@@ -1104,7 +1109,13 @@ public actor SHT115Service {
                 } else {
                     try update(.processing, result.message)
                 }
-            } catch is CancellationError { throw CancellationError() }
+            } catch is CancellationError {
+                if let current = records[i].extractionQueue?[q], [.waiting, .processing].contains(current.state) {
+                    records[i].extractionQueue?[q].nextAttempt = max(current.nextAttempt, Date().addingTimeInterval(30))
+                    try save()
+                }
+                throw CancellationError()
+            }
             catch { try update(.waiting, "本轮读取/核验失败：" + SHT115Settings.safeMessage(error) + "；保留原包，未知写入不会重发") }
         }
     }
