@@ -178,7 +178,7 @@ actor GrantLog {
         precondition(PushLatencyProtocol.routes == ["identity", "mkdir", "identity", "signature", "POST"], "0 parent enumeration, 0 task preflight, mkdir exactly once")
         print("PASS post-folder 1278-parent controlled production routes=\(PushLatencyProtocol.routes) seconds=\(Date().timeIntervalSince(directStart))")
         for pair in zip(PushLatencyProtocol.starts, PushLatencyProtocol.starts.dropFirst()) {
-            precondition(pair.1.timeIntervalSince(pair.0) >= 1.08)
+            precondition(pair.1.timeIntervalSince(pair.0) >= 1.08, "post-folder request start spacing: \(pair.1.timeIntervalSince(pair.0)); all starts=\(PushLatencyProtocol.starts)")
         }
         PushLatencyProtocol.routes = []
         let reused = try await directService.createOrReuseResource(tid: "1278", title: "post", settings: settings)
