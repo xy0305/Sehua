@@ -51,6 +51,11 @@ jobs:
           /tmp/manual-push-fixtures
           python3 Regression115/ManualPushUIGuards.py
 
+      - name: Bounded extraction queue and source provenance regression
+        run: |
+          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/QueueFixtures.swift -o /tmp/queue-fixtures
+          /tmp/queue-fixtures
+
       - name: Detail preparation performance and cancellation regression
         run: |
           python3 Regression115/DetailBaseline.py
@@ -78,11 +83,6 @@ jobs:
         run: |
           xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/ExtractReferenceFixtures.swift -o /tmp/extract-reference-fixtures
           /tmp/extract-reference-fixtures
-
-      - name: Bounded extraction queue and source provenance regression
-        run: |
-          xcrun swiftc -parse-as-library SeHuaTang/Integration115/SHT115*.swift Regression115/QueueFixtures.swift -o /tmp/queue-fixtures
-          /tmp/queue-fixtures
 
       - name: Read-only per-link task progress regression
         run: |

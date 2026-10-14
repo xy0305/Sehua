@@ -37,7 +37,7 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         let hash = String(repeating: "a", count: 32)
         let sha = String(repeating: "b", count: 40)
         let outputSHA = String(repeating: "c", count: 40)
-        var submitted = false, released = false, deletes = 0, parses = 0, taskReads = 0
+        var submitted = false, released = false, deletes = 0, parses = 0, taskReads = 0, parseReads = 0, releaseReads = 0, releases = 0
         QueueMock.handler = { request in
             let url = request.url!, path = url.path
             let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
@@ -64,6 +64,10 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
                     if mode == "parseTimeout" { throw URLError(.timedOut) }
                     return "{\"state\":true}"
                 }
+                parseReads += 1
+                if mode == "parseResume", parseReads == 1 {
+                    return "{\"state\":true,\"data\":{\"extract_status\":{\"unzip_status\":1,\"progress\":50}}}"
+                }
                 return "{\"state\":true,\"data\":{\"extract_status\":{\"unzip_status\":4,\"progress\":100}}}"
             }
             if path == "/files/extract_info" {
@@ -71,7 +75,9 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
                 return "{\"state\":true,\"data\":{\"count\":1,\"next_marker\":\"\",\"list\":[{\"file_name\":\"movie.mp4\",\"size\":42,\"ico\":\"mp4\"\(sha)}]}}"
             }
             if path == "/files/add_extract_file" {
-                if request.httpMethod == "POST" { released = true; return "{\"state\":true,\"data\":{\"extract_id\":900}}" }
+                if request.httpMethod == "POST" { releases += 1; released = true; return "{\"state\":true,\"data\":{\"extract_id\":900}}" }
+                releaseReads += 1
+                if mode == "releaseResume", releaseReads == 1 { return "{\"state\":true,\"data\":{\"percent\":50}}" }
                 if mode == "disabledBeforeRecycle" { UserDefaults.standard.set(false, forKey: SHT115ExtractionPolicy.enabledKey) }
                 return "{\"state\":true,\"data\":{\"percent\":100}}"
             }
@@ -159,9 +165,12 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
         try await restored.runExtractionQueue(settings: input, now: now.addingTimeInterval(301))
         let again = try SHT115Service(storeURL: store, session: session)
         try await again.runExtractionQueue(settings: input, now: now.addingTimeInterval(602))
-        let shouldExtract = ["disabledBeforeRecycle", "complete", "noFileID", "noOutputHash", "deleteTimeout", "outputHashMismatch", "targetCIDFileID"].contains(mode)
+        let shouldExtract = ["parseResume", "releaseResume", "disabledBeforeRecycle", "complete", "noFileID", "noOutputHash", "deleteTimeout", "outputHashMismatch", "targetCIDFileID"].contains(mode)
         precondition(parses == (shouldExtract || mode == "parseTimeout" ? 1 : 0), mode + " parse")
-        precondition(deletes == (["complete", "noFileID", "targetCIDFileID", "deleteTimeout"].contains(mode) ? 1 : 0), mode + " recycle")
+        precondition(deletes == (["parseResume", "releaseResume", "complete", "noFileID", "targetCIDFileID", "deleteTimeout"].contains(mode) ? 1 : 0), mode + " recycle")
+        precondition(releases <= 1, "accepted release must never POST again")
+        if mode == "parseResume" { precondition(parseReads >= 2 && parses == 1 && releases == 1) }
+        if mode == "releaseResume" { precondition(releaseReads >= 2 && parses == 1 && releases == 1) }
         // A future launch only reads/marks exhausted; no unbounded retry or replay.
         try await again.runExtractionQueue(settings: input, now: now.addingTimeInterval(90_000))
         precondition(deletes <= 1)
@@ -216,6 +225,6 @@ final class QueueMock: URLProtocol, @unchecked Sendable {
     }
     static func main() async throws {
         try await driverGuards()
-        for mode in ["downloadingFirst", "slowParse", "parseTimeout", "disabledBeforeRecycle", "complete", "noFileID", "targetCIDFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline", "taskHashMismatch"] { try await run(mode) }
+        for mode in ["parseResume", "releaseResume", "downloadingFirst", "slowParse", "parseTimeout", "disabledBeforeRecycle", "complete", "noFileID", "targetCIDFileID", "existingSource", "noOutputHash", "cancelled", "otherAccount", "otherParent", "legacy", "unknownSubmission", "deleteTimeout", "outputHashMismatch", "largeBaseline", "duplicateBaseline", "taskHashMismatch"] { try await run(mode) }
     }
 }
