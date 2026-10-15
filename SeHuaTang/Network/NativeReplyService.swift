@@ -44,11 +44,7 @@ private final class ReplyRedirectGuard: NSObject, URLSessionTaskDelegate, @unche
         request.setValue(base.absoluteString, forHTTPHeaderField: "Origin")
         request.setValue(url.absoluteString, forHTTPHeaderField: "Referer")
         request.setValue(session.webView.customUserAgent, forHTTPHeaderField: "User-Agent")
-        let applicable = cookies.filter {
-            let domain = $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
-            let host = base.host!.lowercased()
-            return (host == domain || host.hasSuffix("." + domain)) && form.action.path.hasPrefix($0.path) && ($0.expiresDate.map { $0 > Date() } ?? true)
-        }
+        let applicable = cookies.filter { SiteRoutePolicy.cookieApplies($0, to: form.action) }
         for (name, value) in HTTPCookie.requestHeaderFields(with: applicable) { request.setValue(value, forHTTPHeaderField: name) }
         // Persist BEFORE dispatch; process death/timeout/cancellation cannot unlock an uncertain POST.
         try NativeReplyProtocol.DispatchGate(defaults: defaults).begin(identity)

@@ -42,11 +42,7 @@ import Foundation
         request.setValue(session.baseURL.absoluteString, forHTTPHeaderField: "Origin")
         request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer")
         request.setValue(session.webView.customUserAgent, forHTTPHeaderField: "User-Agent")
-        let applicable = cookies.filter {
-            let domain = $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
-            let host = session.baseURL.host!.lowercased()
-            return (host == domain || host.hasSuffix("." + domain)) && form.action.path.hasPrefix($0.path)
-        }
+        let applicable = cookies.filter { SiteRoutePolicy.cookieApplies($0, to: form.action) }
         for (name, value) in HTTPCookie.requestHeaderFields(with: applicable) { request.setValue(value, forHTTPHeaderField: name) }
         let (data, response) = try await transport.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200,

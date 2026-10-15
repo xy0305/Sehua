@@ -13,6 +13,7 @@ enum RouteMigrationFixtures {
         rejectParsing()
         acceptBuiltins()
         persistWithoutSecrets()
+        cookieScopeContract()
         manualRouteLifecycle()
         directOrgMigration()
         verifiedFamilyMigration()
@@ -88,6 +89,18 @@ enum RouteMigrationFixtures {
         let loaded = SiteRouteStore.load(data: store.persistedJSON(), legacyHost: "http://evil.example")
         require(loaded.routes.map(\.host).starts(with: SiteRoutePolicy.builtinHosts), "builtins restored")
         require(loaded.routes.first { $0.host == "98tang.com" }?.enabled == false, "disabled flag persists")
+    }
+
+    static func cookieScopeContract() {
+        let host = HTTPCookie(properties: [.domain: "sehuatang.org", .name: "auth", .value: "host-only", .path: "/member", .secure: "TRUE"])!
+        let domain = HTTPCookie(properties: [.domain: ".sehuatang.org", .name: "auth", .value: "domain-scoped", .path: "/", .secure: "TRUE"])!
+        require(!SiteRoutePolicy.cookieApplies(host, to: URL(string: "https://www.sehuatang.org/member")!), "host-only scope never widened")
+        require(!SiteRoutePolicy.cookieApplies(host, to: URL(string: "https://sehuatang.org/membership")!), "cookie path boundary preserved")
+        require(!SiteRoutePolicy.cookieApplies(domain, to: URL(string: "http://sehuatang.org/member")!), "Secure cookie not downgraded")
+        require(SiteRoutePolicy.cookieApplies(domain, to: URL(string: "https://www.sehuatang.org/member")!), "Domain cookie natural sharing")
+        for target in ["www.sehuatang.net", "98tang.com", "forum.swift.org"] {
+            require(!SiteRoutePolicy.cookieApplies(domain, to: URL(string: "https://\(target)/")!), "every native transport rejects cross-domain cookie")
+        }
     }
 
     static func manualRouteLifecycle() {

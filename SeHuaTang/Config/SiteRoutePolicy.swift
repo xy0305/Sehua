@@ -84,6 +84,18 @@ enum SiteRoutePolicy {
         return host == selectedHost || sameSiteDirect(host, selectedHost)
     }
 
+    /// Re-match original cookie scope for native transports; never widen a
+    /// host-only cookie, and never send Secure/expired/path-mismatched cookies.
+    static func cookieApplies(_ cookie: HTTPCookie, to url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let domainOK = host == domain || (cookie.domain.hasPrefix(".") && host.hasSuffix("." + domain))
+        let path = cookie.path.isEmpty ? "/" : cookie.path
+        let pathOK = url.path == path || (url.path.hasPrefix(path) && (path.hasSuffix("/") || url.path.dropFirst(path.count).hasPrefix("/")))
+        return domainOK && pathOK && (!cookie.isSecure || url.scheme?.lowercased() == "https")
+            && (cookie.expiresDate.map { $0 > Date() } ?? true)
+    }
+
     static func isIPAddress(_ host: String) -> Bool {
         let host = host.lowercased()
         if host.contains(":") { return true }

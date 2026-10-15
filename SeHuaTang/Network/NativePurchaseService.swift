@@ -39,11 +39,7 @@ final class SiteWriteRedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked
         request.setValue(session.baseURL.absoluteString, forHTTPHeaderField: "Origin")
         request.setValue(source.absoluteString, forHTTPHeaderField: "Referer")
         request.setValue(session.webView.customUserAgent, forHTTPHeaderField: "User-Agent")
-        let applicable = cookies.filter {
-            let domain = $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
-            let host = session.baseURL.host!.lowercased()
-            return (host == domain || host.hasSuffix("." + domain)) && form.action.path.hasPrefix($0.path)
-        }
+        let applicable = cookies.filter { SiteRoutePolicy.cookieApplies($0, to: form.action) }
         for (name, value) in HTTPCookie.requestHeaderFields(with: applicable) { request.setValue(value, forHTTPHeaderField: name) }
         defaults.set(true, forKey: identity)
         do {

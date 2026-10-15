@@ -60,14 +60,7 @@ import WebKit
         req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
         req.setValue(referer, forHTTPHeaderField: "Referer")
         req.setValue("image/avif,image/webp,image/apng,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
-        let matching = cookies.filter { cookie in
-            let domain = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-            let host = url.host ?? ""
-            let path = cookie.path
-            let pathOK = url.path == path || (url.path.hasPrefix(path) && (path.hasSuffix("/") || url.path.dropFirst(path.count).hasPrefix("/")))
-            return (host == domain || (cookie.domain.hasPrefix(".") && host.hasSuffix("." + domain))) && pathOK && (!cookie.isSecure || url.scheme == "https")
-                && (cookie.expiresDate.map { $0 > Date() } ?? true)
-        }.sorted { $0.path.count > $1.path.count }
+        let matching = cookies.filter { SiteRoutePolicy.cookieApplies($0, to: url) }.sorted { $0.path.count > $1.path.count }
         for (key, value) in HTTPCookie.requestHeaderFields(with: matching) { req.setValue(value, forHTTPHeaderField: key) }
         // Include the ENTIRE account jar, even when authorization is on a source
         // domain and the image itself is served by another CDN domain.
