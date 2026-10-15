@@ -13,25 +13,23 @@ extension SiteRouteStore {
 struct RouteSwitchOutcome: Equatable, Sendable {
     var migrated: Bool
     var notice: String
+    var ready: Bool = true
 }
 
-/// Owns route configuration and per-host login cookies. Route JSON never
-/// contains account secrets; cookie adaptation happens only after a decision.
+/// No cookie snapshots, domain rewriting, or plaintext credential persistence.
+/// WebKit alone stores cookies and enforces their original Domain/path scope.
 @MainActor
 final class SiteRouteController {
     static let shared = SiteRouteController()
     private let defaults: UserDefaults
     private var store: SiteRouteStore
-    private var ledger: RouteCookieLedger
-    private var verifiedTargets = Set<String>()
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        store = SiteRouteStore.load(
-            data: defaults.data(forKey: SiteRouteStore.storageKey),
-            legacyHost: defaults.string(forKey: SiteRouteStore.legacyHostKey)
-        )
-        ledger = RouteCookieLedger.load(data: defaults.data(forKey: RouteCookieLedger.storageKey))
+        store = SiteRouteStore.load(data: defaults.data(forKey: SiteRouteStore.storageKey),
+                                    legacyHost: defaults.string(forKey: SiteRouteStore.legacyHostKey))
+        // Purge the insecure legacy export; never re-import or copy its secrets.
+        defaults.removeObject(forKey: RouteCookieLedger.storageKey)
         persist()
     }
 
@@ -41,168 +39,99 @@ final class SiteRouteController {
 
     func add(_ raw: String) -> Result<Void, SiteRoutePolicy.Rejection> {
         switch store.adding(raw) {
-        case .failure(let error):
-            return .failure(error)
-        case .success(let next):
-            store = next
-            persist()
-            return .success(())
+        case .failure(let error): return .failure(error)
+        case .success(let next): store = next; persist(); return .success(())
         }
     }
-
     func setEnabled(_ host: String, _ enabled: Bool) {
-        store = store.settingEnabled(host, enabled)
-        persist()
+        store = store.settingEnabled(host, enabled); persist()
     }
-
-    func remove(_ host: String) {
-        store = store.removing(host)
-        ledger.scopes[host] = nil
-        verifiedTargets.remove(host)
-        persist()
-    }
-
-    func select(_ host: String) {
-        store = store.selecting(host)
-        persist()
-    }
-
-    func rememberCookies(_ cookies: [ScopedCookie], for host: String) {
-        guard case .success(let normalized) = SiteRoutePolicy.normalize(host) else { return }
-        ledger.scopes[normalized] = cookies.filter { !$0.name.isEmpty }
-        persist()
-    }
-
-    func cookies(for host: String) -> [ScopedCookie] {
-        ledger.scopes[host.lowercased()] ?? []
-    }
+    func remove(_ host: String) { store = store.removing(host); persist() }
+    func select(_ host: String) { store = store.selecting(host); persist() }
 
     func clearAllRouteCookies() {
-        ledger = ledger.clearingAll()
-        verifiedTargets.removeAll()
-        persist()
-        let store = WKWebsiteDataStore.default()
-        let types = WKWebsiteDataStore.allWebsiteDataTypes()
-        store.fetchDataRecords(ofTypes: types) { records in
-            store.removeData(ofTypes: types, for: records) {}
+        defaults.removeObject(forKey: RouteCookieLedger.storageKey)
+        let dataStore = WKWebsiteDataStore.default()
+        // Explicit cookie deletion also covers hosts absent from the route list.
+        dataStore.httpCookieStore.getAllCookies { cookies in
+            for cookie in cookies { dataStore.httpCookieStore.delete(cookie) }
         }
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        dataStore.removeData(ofTypes: types, modifiedSince: .distantPast) {}
     }
 
     func prepareMigration(from source: String, to target: String) async -> RouteSwitchOutcome {
-        select(target)
-        let hasCookies = !(ledger.scopes[source]?.isEmpty ?? true)
-        if !hasCookies {
-            return RouteSwitchOutcome(migrated: false, notice: "已切换到 \(target)。当前线路没有可迁移的登录 Cookie。")
+        guard enabledHosts.contains(target) else {
+            return RouteSwitchOutcome(migrated: false, notice: "线路未启用", ready: false)
         }
-        if source == target || SiteRoutePolicy.sameSiteDirect(source, target) || verifiedTargets.contains(migrationKey(source, target)) {
-            let kind = source == target ? "当前线路" : "同站点"
-            return await applyMigration(from: source, to: target, kind: kind)
-        }
-        guard SiteRoutePolicy.requiresReadOnlyVerification(source, target) else {
-            return RouteSwitchOutcome(migrated: false, notice: "未确认同站点，未发送原登录 Cookie。")
-        }
+        // First contact is entirely anonymous. Do not let an automatic redirect
+        // visit a different entry point with that entry point's existing login.
         let probe = await Self.readOnlyProbe(host: target)
-        let decision = RouteMigration.decision(source: source, target: target, hasCookies: true, probe: probe)
-        switch decision {
-        case .verified:
-            verifiedTargets.insert(migrationKey(source, target))
-            return await applyMigration(from: source, to: target, kind: "只读验证通过")
-        case .direct, .noCookies:
-            return await applyMigration(from: source, to: target, kind: "同站点")
-        case .rejected(let reason):
-            return RouteSwitchOutcome(migrated: false, notice: "已切换到 \(target)，但\(reason)。请在该线路重新登录。")
+        guard !probe.ageGateUncertain,
+              probe.finalHost == target || SiteRoutePolicy.sameSiteDirect(probe.finalHost, target) else {
+            return RouteSwitchOutcome(migrated: false,
+                notice: "匿名 HTTPS 检查未确认最终目标，未使用该线路已有 Cookie。请稍后重试或独立打开已知入口。", ready: false)
         }
-    }
-
-    private func migrationKey(_ source: String, _ target: String) -> String { "\(source)->\(target)" }
-
-    private func applyMigration(from source: String, to target: String, kind: String) async -> RouteSwitchOutcome {
-        guard let migrated = ledger.migrating(from: source, to: target) else {
-            return RouteSwitchOutcome(migrated: false, notice: "未确认同站点，未发送原登录 Cookie。")
-        }
-        ledger = migrated
-        persist()
-        await installCookies(ledger.scopes[target] ?? [], host: target)
-        return RouteSwitchOutcome(migrated: true, notice: "\(kind)：已把现有登录 Cookie 适配到 \(target)，无需重输账号。")
-    }
-
-    private func installCookies(_ cookies: [ScopedCookie], host: String) async {
-        let store = WKWebsiteDataStore.default().httpCookieStore
-        for cookie in cookies {
-            var properties: [HTTPCookiePropertyKey: Any] = [
-                .name: cookie.name,
-                .value: cookie.value,
-                .domain: host,
-                .path: cookie.path.isEmpty ? "/" : cookie.path,
-                .secure: "TRUE"
-            ]
-            if let expires = cookie.expires { properties[.expires] = expires }
-            guard let http = HTTPCookie(properties: properties) else { continue }
-            await withCheckedContinuation { continuation in
-                store.setCookie(http) { continuation.resume() }
-            }
-        }
+        select(target)
+        let notice = SiteRoutePolicy.sameSiteDirect(source, target)
+            ? "已切换到 \(target)。仅按原 Cookie Domain 自然共享；host-only Cookie 不复制，必要时独立登录。"
+            : "已切换到 \(target)。内置入口不代表共同归属；跨域不复制原 Cookie，请独立登录（可使用该域自身已有登录）。"
+        return RouteSwitchOutcome(migrated: false, notice: notice)
     }
 
     private func persist() {
         defaults.set(store.persistedJSON(), forKey: SiteRouteStore.storageKey)
         defaults.set(store.selectedHost, forKey: SiteRouteStore.legacyHostKey)
-        defaults.set(ledger.persistedJSON(), forKey: RouteCookieLedger.storageKey)
+        defaults.removeObject(forKey: RouteCookieLedger.storageKey)
     }
 
-    /// Cookie-less GET. Limited HTTPS redirects, then site-marker classification.
-    static func readOnlyProbe(host: String) async -> RouteMigration.Probe {
+    static func readOnlyProbe(host: String, configuration supplied: URLSessionConfiguration? = nil) async -> RouteMigration.Probe {
         guard case .success(let normalized) = SiteRoutePolicy.normalize(host),
-              let url = URL(string: "https://\(normalized)/forum.php?mod=forumdisplay&fid=36&mobile=2") else {
-            return RouteMigration.Probe(finalHost: host, challenged: false, ageGateUncertain: true, siteMarker: false, redirects: 0)
+              let url = URL(string: "https://\(normalized)/") else {
+            return .init(finalHost: host, challenged: false, ageGateUncertain: true, siteMarker: false, redirects: 0)
         }
-        let session = URLSession(configuration: cookieFreeConfiguration())
-        defer { session.invalidateAndCancel() }
-        var current = url
-        var steps: [RouteRedirectStep] = []
-        do {
-            for _ in 0..<RouteMigration.maxRedirects {
-                var request = URLRequest(url: current, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
-                request.httpShouldHandleCookies = false
-                request.setValue("no-cookie", forHTTPHeaderField: "Cookie")
-                let (data, response) = try await session.data(for: request)
-                guard let http = response as? HTTPURLResponse else {
-                    return RouteMigration.Probe(finalHost: current.host ?? normalized, challenged: false, ageGateUncertain: true, siteMarker: false, redirects: steps.count)
-                }
-                if (300..<400).contains(http.statusCode) {
-                    steps.append(RouteRedirectStep(status: http.statusCode, location: http.value(forHTTPHeaderField: "Location")))
-                    guard let location = http.value(forHTTPHeaderField: "Location"),
-                          let next = URL(string: location, relativeTo: current),
-                          next.scheme?.lowercased() == "https",
-                          next.user == nil,
-                          next.port == nil || next.port == 443,
-                          let nextHost = next.host?.lowercased(),
-                          SiteRoutePolicy.isSiteHost(nextHost) else {
-                        return RouteMigration.probe(startHost: normalized, steps: steps, bodyHost: current.host ?? "", body: "")
-                    }
-                    current = next
-                    continue
-                }
-                let body = String(data: data, encoding: .utf8) ?? ""
-                return RouteMigration.probe(
-                    startHost: normalized,
-                    steps: steps,
-                    bodyHost: http.url?.host ?? current.host ?? normalized,
-                    body: body
-                )
-            }
-            return RouteMigration.Probe(finalHost: current.host ?? normalized, challenged: false, ageGateUncertain: true, siteMarker: false, redirects: steps.count)
-        } catch {
-            return RouteMigration.Probe(finalHost: normalized, challenged: false, ageGateUncertain: true, siteMarker: false, redirects: steps.count)
-        }
-    }
-
-    private static func cookieFreeConfiguration() -> URLSessionConfiguration {
-        let configuration = URLSessionConfiguration.ephemeral
+        let configuration = supplied ?? URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.httpCookieAcceptPolicy = .never
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return configuration
+        configuration.urlCache = nil
+        let session = URLSession(configuration: configuration, delegate: AnonymousRouteRedirectGuard(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        var current = url
+        var count = 0
+        do {
+            while count <= RouteMigration.maxRedirects {
+                var request = URLRequest(url: current, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
+                request.httpShouldHandleCookies = false
+                // No Cookie or Authorization header, including across redirects.
+                let (_, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse else { break }
+                if (300..<400).contains(http.statusCode) {
+                    guard count < RouteMigration.maxRedirects,
+                          let location = http.value(forHTTPHeaderField: "Location"),
+                          let next = URL(string: location, relativeTo: current)?.absoluteURL,
+                          SiteRoutePolicy.permitsNavigation(next, selectedHost: normalized) else { break }
+                    current = next; count += 1; continue
+                }
+                guard (200..<500).contains(http.statusCode), http.url?.scheme == "https",
+                      let final = http.url?.host?.lowercased(),
+                      final == normalized || SiteRoutePolicy.sameSiteDirect(final, normalized) else { break }
+                // Text, challenge, and age-gate markers never grant trust.
+                return .init(finalHost: final, challenged: http.statusCode == 403,
+                             ageGateUncertain: false, siteMarker: false, redirects: count)
+            }
+        } catch { }
+        return .init(finalHost: current.host ?? normalized, challenged: false,
+                     ageGateUncertain: true, siteMarker: false, redirects: count)
+    }
+}
+
+/// URLSession's default redirect-following would bypass the manual HTTPS check.
+private final class AnonymousRouteRedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

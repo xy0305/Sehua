@@ -5,8 +5,7 @@ import Foundation
 enum SiteRoutePolicy {
     static var builtinHosts: [String] { SiteConfig.mirrors }
     static let orgFamily: Set<String> = ["www.sehuatang.org", "sehuatang.org"]
-    /// Confirmed same-account family. .net / 98tang.com still need a read-only
-    /// redirect check before any existing login cookie is adapted.
+    /// Built-in entry points only; this list is NOT an ownership or account trust claim.
     static let confirmedFamily: Set<String> = [
         "www.sehuatang.org", "sehuatang.org", "www.sehuatang.net", "98tang.com"
     ]
@@ -48,13 +47,13 @@ enum SiteRoutePolicy {
         }
         let path = components.path
         let hasExtra = !(path.isEmpty || path == "/")
-            || !(components.query ?? "").isEmpty
-            || !(components.fragment ?? "").isEmpty
+            || components.query != nil
+            || components.fragment != nil
         if hasExtra {
             return .failure(.init(reason: "线路只能是站点主机，不能带路径或参数"))
         }
-        guard isSiteHost(host) else {
-            return .failure(.init(reason: "不是已确认的色花堂站点主机"))
+        guard isPublicHostname(host) else {
+            return .failure(.init(reason: "只接受合法公网域名，不接受本地、私有或保留域名"))
         }
         return .success(host)
     }
@@ -62,6 +61,27 @@ enum SiteRoutePolicy {
     static func isSiteHost(_ host: String) -> Bool {
         let host = host.lowercased()
         return confirmedFamily.contains(host)
+    }
+
+    static func isPublicHostname(_ host: String) -> Bool {
+        guard host.count <= 253, host.utf8.allSatisfy({ $0 < 128 }), !host.contains("%") else { return false }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 2, let tld = labels.last, tld.count >= 2,
+              tld.allSatisfy({ $0.isLetter && $0.isASCII }) else { return false }
+        let reserved: Set<String> = ["localhost", "local", "internal", "lan", "home", "test", "invalid", "example", "onion", "arpa"]
+        guard !reserved.contains(String(tld)), host != "example.com", host != "example.net", host != "example.org" else { return false }
+        return labels.allSatisfy { label in
+            !label.isEmpty && label.count <= 63 && label.first != "-" && label.last != "-"
+                && label.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+        }
+    }
+
+    /// Navigation remains on the explicitly selected host. Only the known org
+    /// parent/subdomain pair may share cookies under native Cookie Domain rules.
+    static func permitsNavigation(_ url: URL, selectedHost: String) -> Bool {
+        guard url.scheme?.lowercased() == "https", url.user == nil, url.password == nil,
+              url.port == nil || url.port == 443, let host = url.host?.lowercased() else { return false }
+        return host == selectedHost || sameSiteDirect(host, selectedHost)
     }
 
     static func isIPAddress(_ host: String) -> Bool {
@@ -123,7 +143,10 @@ struct SiteRouteStore: Equatable, Sendable {
             guard case .success(let host) = SiteRoutePolicy.normalize(route.host), seen.insert(host).inserted else { continue }
             kept.append(SiteRouteRecord(host: host, enabled: route.enabled, builtin: false))
         }
-        let selected = SiteRoutePolicy.normalize(selectedHost).success
+        if !kept.contains(where: { $0.enabled }), let index = kept.firstIndex(where: { $0.host == SiteConfig.defaultHost }) {
+            kept[index].enabled = true
+        }
+        let selected = kept.first { $0.host == selectedHost && $0.enabled }?.host
             ?? kept.first { $0.enabled }?.host
             ?? SiteConfig.defaultHost
         return SiteRouteStore(routes: kept, selectedHost: selected)
@@ -151,7 +174,7 @@ struct SiteRouteStore: Equatable, Sendable {
         if !enabled, next.selectedHost == host {
             next.selectedHost = next.routes.first { $0.enabled && $0.host != host }?.host ?? SiteConfig.defaultHost
         }
-        return next
+        return next.normalized()
     }
 
     func removing(_ host: String) -> SiteRouteStore {
@@ -161,7 +184,7 @@ struct SiteRouteStore: Equatable, Sendable {
         if next.selectedHost == host {
             next.selectedHost = next.routes.first { $0.enabled }?.host ?? SiteConfig.defaultHost
         }
-        return next
+        return next.normalized()
     }
 
     var enabledHosts: [String] { normalized().routes.filter(\.enabled).map(\.host) }
@@ -233,7 +256,7 @@ struct RouteCookieLedger: Equatable, Sendable {
 
     /// Adapt names/values onto the target host. Domain is the target only.
     func migrating(from source: String, to target: String) -> RouteCookieLedger? {
-        guard SiteRoutePolicy.isSiteHost(source), SiteRoutePolicy.isSiteHost(target) else { return nil }
+        guard source == target else { return nil }
         guard let cookies = scopes[source], !cookies.isEmpty else { return self }
         var next = self
         next.scopes[target] = cookies.map {
@@ -268,23 +291,10 @@ enum RouteMigration {
 
     static func decision(source: String, target: String, hasCookies: Bool, probe: Probe?) -> RouteMigrationDecision {
         guard hasCookies else { return .noCookies }
-        guard SiteRoutePolicy.isSiteHost(source), SiteRoutePolicy.isSiteHost(target) else {
-            return .rejected("目标不是已确认站点，未发送原登录 Cookie")
-        }
         if source == target || SiteRoutePolicy.sameSiteDirect(source, target) { return .direct }
-        guard SiteRoutePolicy.requiresReadOnlyVerification(source, target), let probe else {
-            return .rejected("首次切换需要只读验证，未发送原登录 Cookie")
-        }
-        if probe.challenged {
-            return .rejected("验证遇到 Cloudflare/挑战页，未发送原登录 Cookie")
-        }
-        if probe.ageGateUncertain {
-            return .rejected("年龄门结果不确定，未发送原登录 Cookie")
-        }
-        guard probe.siteMarker, SiteRoutePolicy.isSiteHost(probe.finalHost), probe.redirects <= maxRedirects else {
-            return .rejected("最终跳转不属于已确认同站点，未发送原登录 Cookie")
-        }
-        return .verified
+        // HTTPS and forum-looking text cannot establish common ownership.
+        // No automatic cross-domain credential transfer, even after a probe.
+        return .rejected("跨域线路需独立登录，未复制原登录 Cookie")
     }
 
     /// Follow a bounded HTTPS redirect chain without sending cookies.

@@ -73,7 +73,7 @@ jobs:
           FIXTURE_PID=$!
           trap 'cat /tmp/detail-http.log; kill "$FIXTURE_PID"' EXIT
           curl --noproxy '*' --retry 3 --retry-connrefused --max-time 10 -f http://127.0.0.1:18764/ready > /dev/null
-          xcrun swiftc -parse-as-library SeHuaTang/Network/WebSession.swift SeHuaTang/Network/AppStore.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Models/SiteRoute.swift SeHuaTang/Config/SiteRoutePolicy.swift SeHuaTang/Config/SiteRouteController.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/PresentationTiming.swift SeHuaTang/Models/DetailPerformance.swift Regression115/DetailWebSessionFixtures.swift -o /tmp/detail-web-fixtures
+          xcrun swiftc -D ROUTE_FIXTURES -parse-as-library SeHuaTang/Network/WebSession.swift SeHuaTang/Network/AppStore.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Models/SiteRoute.swift SeHuaTang/Config/SiteRoutePolicy.swift SeHuaTang/Config/SiteRouteController.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/PresentationTiming.swift SeHuaTang/Models/DetailPerformance.swift Regression115/DetailWebSessionFixtures.swift -o /tmp/detail-web-fixtures
           /tmp/detail-web-fixtures
       - name: Detail body readiness and production image transport regression
         run: |
@@ -81,7 +81,7 @@ jobs:
           FIXTURE_PID=$!
           trap 'cat /tmp/detail-readiness-http.log; kill "$FIXTURE_PID"' EXIT
           curl --noproxy '*' --retry 3 --retry-connrefused --max-time 10 -f http://127.0.0.1:18765/ready > /dev/null
-          xcrun swiftc -parse-as-library SeHuaTang/Network/WebSession.swift SeHuaTang/Network/AppStore.swift SeHuaTang/Network/SiteImageNetwork.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Models/SiteRoute.swift SeHuaTang/Config/SiteRoutePolicy.swift SeHuaTang/Config/SiteRouteController.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/PresentationTiming.swift SeHuaTang/Models/DetailPerformance.swift Regression115/DetailReadinessFixtures.swift -o /tmp/detail-readiness-fixtures
+          xcrun swiftc -D ROUTE_FIXTURES -parse-as-library SeHuaTang/Network/WebSession.swift SeHuaTang/Network/AppStore.swift SeHuaTang/Network/SiteImageNetwork.swift SeHuaTang/Parser/HTML.swift SeHuaTang/Parser/DiscuzParser.swift SeHuaTang/Models/Models.swift SeHuaTang/Models/SiteRoute.swift SeHuaTang/Config/SiteRoutePolicy.swift SeHuaTang/Config/SiteRouteController.swift SeHuaTang/Config/SiteConfig.swift SeHuaTang/Models/PresentationTiming.swift SeHuaTang/Models/DetailPerformance.swift Regression115/DetailReadinessFixtures.swift -o /tmp/detail-readiness-fixtures
           /tmp/detail-readiness-fixtures
 
       - name: Uploaded 115 extraction protocol and recursive identity regression
@@ -146,6 +146,8 @@ jobs:
           /tmp/body-link-fixtures
           xcrun swiftc -parse-as-library SeHuaTang/Config/SiteRoutePolicy.swift SeHuaTang/Config/SiteConfig.swift Regression115/RouteMigrationFixtures.swift -o /tmp/route-migration-fixtures
           /tmp/route-migration-fixtures
+          xcrun swiftc -parse-as-library SeHuaTang/Config/SiteRoutePolicy.swift SeHuaTang/Config/SiteRouteController.swift SeHuaTang/Config/SiteConfig.swift Regression115/RouteSecurityFixtures.swift -o /tmp/route-security-fixtures
+          /tmp/route-security-fixtures
 
       - name: Animated signature and decoding fixtures
         run: |
@@ -245,7 +247,7 @@ jobs:
             build
 
       - name: Package IPA
-        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/recovery/detail-') || github.ref == 'refs/heads/fix/detail-scroll-80'
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/recovery/detail-') || startsWith(github.ref, 'refs/heads/fix/detail-scroll-80')
         run: |
           set -euo pipefail
           APP=$(find DerivedData/Build/Products -path '*/Release-iphoneos/*.app' | head -1)
@@ -268,7 +270,7 @@ jobs:
           echo "IPA_NAME=$NAME" >> "$GITHUB_ENV"
 
       - name: Upload IPA
-        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/recovery/detail-') || github.ref == 'refs/heads/fix/detail-scroll-80'
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/recovery/detail-') || startsWith(github.ref, 'refs/heads/fix/detail-scroll-80')
         uses: actions/upload-artifact@v4
         with:
           name: SeHuaTang-unsigned-ipa

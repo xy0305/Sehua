@@ -9,7 +9,7 @@ enum SiteConfig {
     static let cookiePrefix = "cPNj_2132_"
     static let ageCookieName = "_safe"
     static let defaultHost = "www.sehuatang.org"
-    /// Confirmed HTTPS hosts. Link classification uses this list so isolated
+    /// Built-in HTTPS entries, not a common-ownership claim. Link classification uses this list so isolated
     /// regressions do not need the route controller.
     static let mirrors = [
         "www.sehuatang.org",

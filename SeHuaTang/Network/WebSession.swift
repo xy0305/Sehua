@@ -185,6 +185,7 @@ final class WebSession: NSObject, ObservableObject {
     }
 
     func clearCookies() {
+        cancelReads()
         SiteRouteController.shared.clearAllRouteCookies()
         username = nil
         routeNotice = "已清除全部线路的本地登录 Cookie，115 设置与本地记录未改动。"
@@ -221,8 +222,8 @@ final class WebSession: NSObject, ObservableObject {
     func selectRoute(_ target: String) async {
         let source = host
         guard target != source else { return }
-        guard SiteRoutePolicy.isSiteHost(target), SiteRouteController.shared.enabledHosts.contains(target) else {
-            routeNotice = "线路未启用或不在已确认站点内"
+        guard SiteRouteController.shared.enabledHosts.contains(target) else {
+            routeNotice = "线路未启用"
             return
         }
         cancelReads()
@@ -232,6 +233,7 @@ final class WebSession: NSObject, ObservableObject {
         routeNotice = outcome.notice
         username = nil
         AppStore.shared.invalidateForRouteChange()
+        guard outcome.ready else { return }
         await AppStore.shared.loadForums()
     }
 
@@ -404,6 +406,14 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
         }
         if url.scheme == "magnet" || url.scheme == "ed2k" {
             decisionHandler(.cancel)
+            return
+        }
+        #if DEBUG || ROUTE_FIXTURES
+        if url.host == "127.0.0.1" { decisionHandler(.allow); return }
+        #endif
+        guard SiteRoutePolicy.permitsNavigation(url, selectedHost: host) else {
+            decisionHandler(.cancel)
+            if let id = activeID { complete(id: id, result: .failure(URLError(.redirectToNonExistentLocation))) }
             return
         }
         decisionHandler(.allow)

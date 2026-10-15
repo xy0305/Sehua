@@ -23,7 +23,7 @@ struct LoginWebView: View {
 private struct LoginWK: UIViewRepresentable {
     let url: URL
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(host: url.host?.lowercased() ?? "") }
 
     func makeUIView(context: Context) -> WKWebView {
         let conf = WKWebViewConfiguration()
@@ -40,20 +40,10 @@ private struct LoginWK: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
     final class Coordinator: NSObject, WKNavigationDelegate {
+        let host: String
+        init(host: String) { self.host = host }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            let host = webView.url?.host?.lowercased() ?? ""
-            guard SiteRoutePolicy.isSiteHost(host) else { return }
-            webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                let scoped = cookies.filter { cookie in
-                    let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
-                    return domain == host || host.hasSuffix("." + domain)
-                }.map {
-                    ScopedCookie(name: $0.name, value: $0.value, path: $0.path, secure: true, expires: $0.expiresDate)
-                }
-                Task { @MainActor in
-                    SiteRouteController.shared.rememberCookies(scoped, for: host)
-                }
-            }
             webView.evaluateJavaScript("""
             (function(){
               var a = document.querySelector('a.enter-btn');
@@ -76,7 +66,7 @@ private struct LoginWK: UIViewRepresentable {
                 UIApplication.shared.open(url)
                 return
             }
-            guard ["http", "https", "about"].contains(url.scheme?.lowercased() ?? "") else {
+            guard SiteRoutePolicy.permitsNavigation(url, selectedHost: host) else {
                 decisionHandler(.cancel)
                 return
             }

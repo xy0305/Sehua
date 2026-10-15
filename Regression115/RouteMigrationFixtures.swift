@@ -13,6 +13,7 @@ enum RouteMigrationFixtures {
         rejectParsing()
         acceptBuiltins()
         persistWithoutSecrets()
+        manualRouteLifecycle()
         directOrgMigration()
         verifiedFamilyMigration()
         rejectCrossSiteAndChallenge()
@@ -28,13 +29,22 @@ enum RouteMigrationFixtures {
             "https://www.sehuatang.org:8443",
             "https://1.2.3.4",
             "https://127.0.0.1",
-            "https://evil.example",
-            "https://www.sehuatang.org.evil.com",
+            "https://localhost",
+            "https://forum.local",
+            "https://host.internal",
+            "https://[::1]",
+            "https://2130706433",
+            "https://127.1",
+            "https://foo.com?",
+            "https://foo.com#",
+            "https://foo.com/?query=1",
+            "https://foo.com/#fragment",
+            "https://foo_bar.com",
+            "https://-foo.com",
             "www.sehuatang.org/forum.php",
             "https://www.sehuatang.org/path",
             "ftp://www.sehuatang.org",
-            "sehuatang.net",
-            "www.98tang.com",
+            "https://foo.invalid",
             ""
         ]
         for raw in rejected {
@@ -65,12 +75,12 @@ enum RouteMigrationFixtures {
     static func persistWithoutSecrets() {
         let added = SiteRouteStore.fresh().adding("https://user:secret@www.sehuatang.net")
         require(added.failureReason != nil, "userinfo must not be stored")
-        var store = SiteRouteStore.fresh().adding("www.sehuatang.net").value
+        var store = SiteRouteStore.fresh().adding("https://forum.swift.org").value
         store = store.settingEnabled("98tang.com", false)
         store = store.removing("www.sehuatang.org")
         require(store.routes.contains { $0.host == "www.sehuatang.org" && $0.builtin }, "builtin cannot be deleted")
-        let removed = store.removing("www.sehuatang.net")
-        require(!removed.routes.contains { $0.host == "www.sehuatang.net" }, "manual route removed")
+        let removed = store.removing("forum.swift.org")
+        require(!removed.routes.contains { $0.host == "forum.swift.org" }, "manual route removed")
         let json = String(data: store.persistedJSON(), encoding: .utf8) ?? ""
         require(!json.contains("secret"), "route config has no secret")
         require(!json.contains("cookie"), "route config has no cookie")
@@ -80,63 +90,68 @@ enum RouteMigrationFixtures {
         require(loaded.routes.first { $0.host == "98tang.com" }?.enabled == false, "disabled flag persists")
     }
 
+    static func manualRouteLifecycle() {
+        var store = SiteRouteStore.fresh().adding(" HTTPS://FORUM.SWIFT.ORG:443/ ").value
+        store = store.adding("forum.swift.org").value
+        require(store.routes.filter { $0.host == "forum.swift.org" }.count == 1, "normalized duplicate deduplicated")
+        require(store.routes.first { $0.host == "forum.swift.org" }?.builtin == false, "custom route deletable")
+        store.selectedHost = "forum.swift.org"
+        store = store.removing("forum.swift.org")
+        require(store.selectedHost == SiteConfig.defaultHost, "selected deletion falls back to default")
+        for host in store.enabledHosts { store = store.settingEnabled(host, false) }
+        require(!store.enabledHosts.isEmpty, "last disabled route restores usable default")
+        require(store.selectedHost == SiteConfig.defaultHost && store.enabledHosts.contains(store.selectedHost), "fallback is enabled")
+        var stale = store
+        stale.selectedHost = "deleted.swift.org"
+        require(stale.normalized().selectedHost == SiteConfig.defaultHost, "dangling selection repaired")
+        store = store.adding("forum.swift.org").value
+        store.selectedHost = "forum.swift.org"
+        store = store.settingEnabled("forum.swift.org", false)
+        require(store.selectedHost == SiteConfig.defaultHost, "active disable falls back")
+    }
+
     static func directOrgMigration() {
         require(SiteRoutePolicy.sameSiteDirect("www.sehuatang.org", "sehuatang.org"), "org pair")
         require(!SiteRoutePolicy.requiresReadOnlyVerification("sehuatang.org", "www.sehuatang.org"), "direct pair skips probe")
         let decision = RouteMigration.decision(
             source: "www.sehuatang.org", target: "sehuatang.org", hasCookies: true, probe: nil)
         require(decision == .direct, "org migrates without probe")
-        var ledger = RouteCookieLedger(scopes: [
-            "www.sehuatang.org": [ScopedCookie(name: "cPNj_2132_auth", value: "token", path: "/", secure: true, expires: nil)]
+        let ledger = RouteCookieLedger(scopes: [
+            "www.sehuatang.org": [ScopedCookie(name: "auth", value: "token", path: "/", secure: true, expires: nil)]
         ])
-        ledger = ledger.migrating(from: "www.sehuatang.org", to: "sehuatang.org")!
-        require(ledger.scopes["sehuatang.org"]?.first?.value == "token", "cookie adapted to bare org")
-        require(ledger.scopes["sehuatang.org"]?.first?.secure == true, "adapted cookie stays secure")
+        require(ledger.migrating(from: "www.sehuatang.org", to: "sehuatang.org") == nil,
+                "host-only credentials are never widened even within org")
+        // Domain cookies are left in native WK storage, not adapted by a ledger.
     }
 
     static func verifiedFamilyMigration() {
-        require(SiteRoutePolicy.requiresReadOnlyVerification("www.sehuatang.org", "www.sehuatang.net"), "net needs probe")
-        require(SiteRoutePolicy.requiresReadOnlyVerification("sehuatang.org", "98tang.com"), "98tang needs probe")
-        let probe = RouteMigration.Probe(
-            finalHost: "www.sehuatang.net", challenged: false, ageGateUncertain: false, siteMarker: true, redirects: 1)
-        let decision = RouteMigration.decision(
-            source: "www.sehuatang.org", target: "www.sehuatang.net", hasCookies: true, probe: probe)
-        require(decision == .verified, "verified family migrates")
         let ledger = RouteCookieLedger(scopes: [
-            "www.sehuatang.org": [ScopedCookie(name: "cPNj_2132_auth", value: "token", path: "/", secure: true, expires: nil)]
-        ]).migrating(from: "www.sehuatang.org", to: "www.sehuatang.net")
-        require(ledger?.scopes["www.sehuatang.net"]?.first?.name == "cPNj_2132_auth", "cookie copied only after verification")
-        require(RouteCookieLedger(scopes: ["www.sehuatang.org": []]).migrating(from: "www.sehuatang.org", to: "evil.example") == nil, "cross-site adapt refused")
+            "www.sehuatang.org": [ScopedCookie(name: "auth", value: "token", path: "/", secure: true, expires: nil)]
+        ])
+        for target in ["www.sehuatang.net", "98tang.com", "forum.swift.org", "www.sehuatang.org.evil.com"] {
+            let forged = RouteMigration.Probe(finalHost: target, challenged: false,
+                ageGateUncertain: false, siteMarker: true, redirects: 0)
+            if case .rejected = RouteMigration.decision(source: "www.sehuatang.org", target: target, hasCookies: true, probe: forged) {} else {
+                require(false, "forged forum markers never authorize migration")
+            }
+            require(ledger.migrating(from: "www.sehuatang.org", to: target) == nil, "cross-domain cookie copy forbidden")
+            require(!SiteRoutePolicy.permitsNavigation(URL(string: "https://\(target)/")!, selectedHost: "www.sehuatang.org"), "redirect cannot visit other host with its cookies")
+        }
     }
 
     static func rejectCrossSiteAndChallenge() {
-        let foreign = RouteMigration.Probe(
-            finalHost: "evil.example", challenged: false, ageGateUncertain: false, siteMarker: false, redirects: 1)
-        require(
-            RouteMigration.decision(source: "www.sehuatang.org", target: "www.sehuatang.net", hasCookies: true, probe: foreign)
-                == .rejected("最终跳转不属于已确认同站点，未发送原登录 Cookie"),
-            "foreign final host")
-        let cf = RouteMigration.Probe(
-            finalHost: "www.sehuatang.net", challenged: true, ageGateUncertain: false, siteMarker: false, redirects: 0)
-        require(
-            RouteMigration.decision(source: "www.sehuatang.org", target: "98tang.com", hasCookies: true, probe: cf)
-                == .rejected("验证遇到 Cloudflare/挑战页，未发送原登录 Cookie"),
-            "cf")
-        let age = RouteMigration.Probe(
-            finalHost: "98tang.com", challenged: false, ageGateUncertain: true, siteMarker: true, redirects: 0)
-        require(
-            RouteMigration.decision(source: "www.sehuatang.org", target: "98tang.com", hasCookies: true, probe: age)
-                == .rejected("年龄门结果不确定，未发送原登录 Cookie"),
-            "age gate")
-        require(
-            RouteMigration.decision(source: "www.sehuatang.org", target: "evil.example", hasCookies: true, probe: nil)
-                == .rejected("目标不是已确认站点，未发送原登录 Cookie"),
-            "cross site")
-        let untouched = RouteCookieLedger(scopes: [
-            "www.sehuatang.org": [ScopedCookie(name: "a", value: "b", path: "/", secure: true, expires: nil)]
-        ])
-        require(untouched.migrating(from: "www.sehuatang.org", to: "evil.example") == nil, "rejection does not copy")
-        require(untouched.scopes["www.sehuatang.org"]?.count == 1, "source cookies remain until logout")
+        for final in ["www.sehuatang.net", "98tang.com", "forum.swift.org"] {
+            for challenged in [true, false] {
+                let probe = RouteMigration.Probe(finalHost: final, challenged: challenged,
+                    ageGateUncertain: challenged, siteMarker: !challenged, redirects: 1)
+                if case .rejected = RouteMigration.decision(source: "www.sehuatang.org", target: final, hasCookies: true, probe: probe) {} else {
+                    require(false, "no challenge or HTML outcome can transfer login")
+                }
+            }
+        }
+        for bad in ["http://www.sehuatang.org/", "https://user:pass@www.sehuatang.org/", "https://www.sehuatang.org:8443/", "https://127.0.0.1/"] {
+            require(!SiteRoutePolicy.permitsNavigation(URL(string: bad)!, selectedHost: "www.sehuatang.org"), "unsafe authenticated redirect refused")
+        }
     }
 
     static func logoutClearsEveryScope() {

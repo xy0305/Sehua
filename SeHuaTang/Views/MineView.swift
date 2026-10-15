@@ -219,7 +219,7 @@ struct RouteSettingsSection: View {
                         .font(.footnote)
                         Spacer()
                         if route.builtin {
-                            Text("内置")
+                            Text("内置入口")
                                 .font(.footnote)
                                 .foregroundStyle(ForumChrome.secondary)
                         } else {
@@ -246,7 +246,7 @@ struct RouteSettingsSection: View {
                     .foregroundStyle(ForumChrome.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("org 与裸 sehuatang.org 视为同站点。首次切到 .net / 98tang.com 会先做不含登录 Cookie 的只读验证，确认最终跳转后才适配现有登录；验证失败不会把原 Cookie 发到未知线路。")
+            Text("允许添加合法公网 HTTPS 域名；陌生域名请先匿名访问并自行确认。内置入口不代表已验证共同归属。.net、98tang.com 及自定义跨域线路独立登录，不复制原 Cookie。org 与裸 org 仅按系统 Cookie Domain 自然共享，host-only Cookie 不扩大范围。Cookie 仅由系统 WebKit 存储，退出清除所有线路登录，不影响 115 记录。")
                 .font(.footnote)
                 .foregroundStyle(ForumChrome.secondary)
         }
