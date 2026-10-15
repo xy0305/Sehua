@@ -41,6 +41,19 @@ private struct LoginWK: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            let host = webView.url?.host?.lowercased() ?? ""
+            guard SiteRoutePolicy.isSiteHost(host) else { return }
+            webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+                let scoped = cookies.filter { cookie in
+                    let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                    return domain == host || host.hasSuffix("." + domain)
+                }.map {
+                    ScopedCookie(name: $0.name, value: $0.value, path: $0.path, secure: true, expires: $0.expiresDate)
+                }
+                Task { @MainActor in
+                    SiteRouteController.shared.rememberCookies(scoped, for: host)
+                }
+            }
             webView.evaluateJavaScript("""
             (function(){
               var a = document.querySelector('a.enter-btn');

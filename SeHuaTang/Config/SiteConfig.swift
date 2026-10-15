@@ -9,10 +9,11 @@ enum SiteConfig {
     static let cookiePrefix = "cPNj_2132_"
     static let ageCookieName = "_safe"
     static let defaultHost = "www.sehuatang.org"
-    static let mirrors = [
-        "www.sehuatang.org",
-        "sehuatang.org"
-    ]
+    /// Enabled routes, not a hardcoded pair. Builtin family includes .net and 98tang.com.
+    static var mirrors: [String] {
+        let enabled = SiteRouteController.shared.enabledHosts
+        return enabled.isEmpty ? SiteRoutePolicy.builtinHosts : enabled
+    }
     // BuiltinForums maps fid 97 to 资源出售区; never infer this from thread titles.
     static let resourceSaleFID = 97
     static let adFIDs: Set<Int> = [148, 149]

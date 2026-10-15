@@ -3,6 +3,7 @@ import Combine
 
 @MainActor
 final class AppStore: ObservableObject {
+    static let shared = AppStore()
     @Published var categories: [ForumCategory] = BuiltinForums.categories
     @Published var forumState: LoadState = .idle
 
@@ -63,6 +64,37 @@ final class AppStore: ObservableObject {
     private var searchQuery = ""
     private var searchNextURL: URL?
     private var visitedSearchURLs = Set<URL>()
+
+    /// Drop in-flight detail/search/list generations. 115 settings and local
+    /// reading records are independent stores and are intentionally untouched.
+    func invalidateForRouteChange() {
+        threadGeneration = UUID()
+        forumGeneration = UUID()
+        portalGeneration = UUID()
+        searchGeneration = UUID()
+        activeThreadRequest = nil
+        failedThreadRequest = nil
+        threads = []
+        threadTypes = []
+        threadPage = 1
+        threadSelectedPage = 1
+        threadTotalPages = nil
+        threadHasNext = false
+        threadState = .idle
+        boardTitle = ""
+        currentFID = nil
+        searchHits = []
+        searchState = .idle
+        searchPage = 1
+        searchHasNext = false
+        searchQuery = ""
+        searchNextURL = nil
+        visitedSearchURLs = []
+        portal = PortalPage(notices: [], sections: [])
+        portalState = .idle
+        categories = BuiltinForums.categories
+        forumState = .idle
+    }
 
     func loadForums() async {
         guard forumState != .loading, !Task.isCancelled else { return }

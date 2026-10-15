@@ -7,7 +7,7 @@ enum SiteLinks {
         guard scheme == "http" || scheme == "https" else { return false }
         let host = (url.host ?? "").lowercased()
         if host.isEmpty { return true }
-        return SiteConfig.mirrors.contains { host == $0 || host.hasSuffix("." + $0) }
+        return SiteRoutePolicy.isSiteHost(host)
     }
 
     static func open(_ url: URL) {

@@ -142,8 +142,10 @@ jobs:
 
       - name: Body hyperlink and native routing fixtures
         run: |
-          xcrun swiftc -parse-as-library SeHuaTang/Parser/HTML.swift SeHuaTang/Models/SiteRoute.swift SeHuaTang/Config/SiteConfig.swift Regression115/BodyLinkFixtures.swift -o /tmp/body-link-fixtures
+          xcrun swiftc -parse-as-library SeHuaTang/Parser/HTML.swift SeHuaTang/Models/SiteRoute.swift SeHuaTang/Config/SiteRoutePolicy.swift SeHuaTang/Config/SiteConfig.swift Regression115/BodyLinkFixtures.swift -o /tmp/body-link-fixtures
           /tmp/body-link-fixtures
+          xcrun swiftc -parse-as-library SeHuaTang/Config/SiteRoutePolicy.swift SeHuaTang/Config/SiteConfig.swift Regression115/RouteMigrationFixtures.swift -o /tmp/route-migration-fixtures
+          /tmp/route-migration-fixtures
 
       - name: Animated signature and decoding fixtures
         run: |
@@ -260,7 +262,7 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Payload/SeHuaTang.app/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" Payload/SeHuaTang.app/Info.plist
           NAME="SeHuaTang-unsigned-${VERSION}-${BUILD}.ipa"
-          if [ "$GITHUB_REF" != 'refs/heads/main' ]; then NAME="SeHuaTang-unsigned-${VERSION}-${BUILD}-candidate.ipa"; fi
+          if [ "$GITHUB_REF" != 'refs/heads/main' ]; then NAME="SeHuaTang-unsigned-${VERSION}-${BUILD}-detail-candidate.ipa"; fi
           zip -qry "$NAME" Payload
           ls -lh "$NAME"
           echo "IPA_NAME=$NAME" >> "$GITHUB_ENV"

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SearchView: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject private var session: WebSession
     @State private var q = ""
     @State private var submittedQuery = ""
     @State private var searchTask: Task<Void, Never>?
@@ -21,6 +22,11 @@ struct SearchView: View {
             .padding(16)
         }
         .scrollDismissesKeyboard(.interactively)
+        .onChange(of: session.host) { _, _ in
+            searchTask?.cancel()
+            searchTask = nil
+            Task { await store.search(submittedQuery) }
+        }
         .background(ForumChrome.page)
         .tint(ForumChrome.accent)
         .navigationTitle("搜索")

@@ -120,6 +120,17 @@ struct ThreadDetailView: View {
             library.record(readingItem)
             if detail == nil || requestGate.source != postURL || requestGate.tid != tid { await load() }
         }
+        .onChange(of: session.host) { _, _ in
+            readTask?.cancel()
+            prefetchTask?.cancel()
+            readTask = nil
+            prefetchTask = nil
+            readOwner = nil
+            requestGate.invalidate()
+            detail = nil
+            state = .idle
+            Task { await load() }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { prefetchTask?.cancel(); prefetchTask = nil }
         }

@@ -7,12 +7,12 @@ import ObjectiveC
 final class WebSession: NSObject, ObservableObject {
     static let shared = WebSession()
 
-    @Published var host: String {
-        didSet { UserDefaults.standard.set(host, forKey: "sht.host") }
-    }
+    @Published var host: String
     @Published var username: String?
     @Published var needsChallenge = false
     @Published var lastError: String?
+    @Published var routeNotice: String?
+    @Published private(set) var routes: [SiteRouteRecord] = []
 
     let webView: WKWebView
     enum Readiness { case complete, threadBody }
@@ -38,7 +38,9 @@ final class WebSession: NSObject, ObservableObject {
     }
 
     private override init() {
-        host = UserDefaults.standard.string(forKey: "sht.host") ?? SiteConfig.defaultHost
+        let controller = SiteRouteController.shared
+        host = controller.selectedHost
+        routes = controller.routes
         let conf = WKWebViewConfiguration()
         conf.websiteDataStore = .default()
         conf.defaultWebpagePreferences.allowsContentJavaScript = true
@@ -183,11 +185,62 @@ final class WebSession: NSObject, ObservableObject {
     }
 
     func clearCookies() {
-        let store = WKWebsiteDataStore.default()
-        store.fetchDataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes()) { recs in
-            store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: recs) {}
-        }
+        SiteRouteController.shared.clearAllRouteCookies()
         username = nil
+        routeNotice = "已清除全部线路的本地登录 Cookie，115 设置与本地记录未改动。"
+    }
+
+    func addRoute(_ raw: String) {
+        switch SiteRouteController.shared.add(raw) {
+        case .failure(let error):
+            routeNotice = error.reason
+        case .success:
+            routes = SiteRouteController.shared.routes
+            routeNotice = nil
+        }
+    }
+
+    func setRouteEnabled(_ host: String, _ enabled: Bool) {
+        let previous = self.host
+        SiteRouteController.shared.setEnabled(host, enabled)
+        routes = SiteRouteController.shared.routes
+        if !enabled, previous == host {
+            Task { await selectRoute(SiteRouteController.shared.selectedHost) }
+        }
+    }
+
+    func removeRoute(_ host: String) {
+        let previous = self.host
+        SiteRouteController.shared.remove(host)
+        routes = SiteRouteController.shared.routes
+        if previous == host {
+            Task { await selectRoute(SiteRouteController.shared.selectedHost) }
+        }
+    }
+
+    func selectRoute(_ target: String) async {
+        let source = host
+        guard target != source else { return }
+        guard SiteRoutePolicy.isSiteHost(target), SiteRouteController.shared.enabledHosts.contains(target) else {
+            routeNotice = "线路未启用或不在已确认站点内"
+            return
+        }
+        cancelReads()
+        let outcome = await SiteRouteController.shared.prepareMigration(from: source, to: target)
+        host = target
+        routes = SiteRouteController.shared.routes
+        routeNotice = outcome.notice
+        username = nil
+        AppStore.shared.invalidateForRouteChange()
+        await AppStore.shared.loadForums()
+    }
+
+    private func cancelReads() {
+        let ids = Array(waiters.keys)
+        for id in ids {
+            complete(id: id, result: .failure(CancellationError()))
+        }
+        webView.stopLoading()
     }
 }
 
@@ -281,7 +334,10 @@ extension WebSession: WKNavigationDelegate, WKUIDelegate {
                         let body = DiscuzParser.messageBodies(in: html).joined(separator: "\n")
                         let signature = self.readiness[id] == .threadBody ? ((snapshot?["signature"] as? String) ?? body) : body
                         let stable = signature == previousBody
-                        let trusted = self.webView.url?.host.map { SiteConfig.mirrors.contains($0) || $0 == "127.0.0.1" } ?? false
+                        let trusted = self.webView.url?.host.map { host in
+            let normalized = host.lowercased()
+            return SiteRoutePolicy.isSiteHost(normalized) || normalized == "127.0.0.1"
+        } ?? false
                         let pending = (snapshot?["pending"] as? Bool) == true
                         let safeEarly = self.readiness[id] == .threadBody && trusted
                             && (snapshot?["safe"] as? Bool) == true && !body.isEmpty && stable

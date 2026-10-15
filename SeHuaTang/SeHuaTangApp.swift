@@ -9,7 +9,7 @@ private struct SilentPlaybackLog: LogHandler {
 @main
 struct SeHuaTangApp: App {
     @ObservedObject private var session = WebSession.shared
-    @StateObject private var store = AppStore()
+    @ObservedObject private var store = AppStore.shared
 
     init() {
         KSOptions.logger = SilentPlaybackLog()

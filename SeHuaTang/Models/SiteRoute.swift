@@ -8,7 +8,7 @@ enum SiteRoute: Hashable, Identifiable {
         let scheme = url.scheme?.lowercased() ?? ""
         if scheme == "magnet" || scheme == "ed2k" { return .resource(url) }
         guard ["http", "https"].contains(scheme), let host = url.host?.lowercased() else { return nil }
-        let local = SiteConfig.mirrors.contains { host == $0 || host.hasSuffix("." + $0) }
+        let local = SiteRoutePolicy.isSiteHost(host)
         if local {
             let path = url.path.lowercased()
             let items = URLComponents(url: url, resolvingAgainstBaseURL: true)?.queryItems ?? []

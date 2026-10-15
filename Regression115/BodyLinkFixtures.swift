@@ -21,6 +21,10 @@ struct BodyLinkFixtures {
         precondition(SiteRoute.resolve(outside) == .web(outside))
         let trick = URL(string: "https://sehuatang.org.evil.test/thread-42-1-1.html")!
         precondition(SiteRoute.resolve(trick) == .web(trick))
+        let net = URL(string: "https://www.sehuatang.net/forum.php?mod=viewthread&tid=42")!
+        let tang = URL(string: "https://98tang.com/thread-42-1-1.html")!
+        precondition(SiteRoute.resolve(net) == .thread(42))
+        precondition(SiteRoute.resolve(tang) == .thread(42))
         precondition(SiteRoute.resolve(URL(string: "magnet:?xt=urn:btih:test")!) != nil)
         let semantic = HTML.orderedContent(in: "<center><font color='red'><b>提示</b></font><p><a href='thread-42-1-1.html'>完整资源<br>第二行标题</a></p><img src='/static/image/decor.gif'></center>", base: base)
         guard case .richText(let heading) = semantic[0], case .richText(let title) = semantic[1], case .image = semantic[2] else { fatalError("semantic order") }

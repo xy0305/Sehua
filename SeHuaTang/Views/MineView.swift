@@ -4,6 +4,7 @@ struct MineView: View {
     @EnvironmentObject var session: WebSession
     @AppStorage("appearance.mode") private var appearanceMode = "system"
     @State private var showsClearCookiesConfirmation = false
+    @State private var routeDraft = ""
 
     var body: some View {
         ScrollView {
@@ -45,29 +46,7 @@ struct MineView: View {
                     }
                 }
                 section("访问线路", symbol: "network") {
-                    VStack(spacing: 0) {
-                        ForEach(SiteConfig.mirrors, id: \.self) { host in
-                            Button {
-                                session.host = host
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Text(host)
-                                        .font(.subheadline)
-                                        .foregroundStyle(ForumChrome.text)
-                                        .multilineTextAlignment(.leading)
-                                    Spacer()
-                                    if session.host == host {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(ForumChrome.accent)
-                                    }
-                                }
-                                .frame(minHeight: 44)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(ForumPressStyle())
-                            .accessibilityValue(session.host == host ? "已选择" : "未选择")
-                        }
-                    }
+                    RouteSettingsSection(draft: $routeDraft)
                 }
                 section("115 网盘", symbol: "externaldrive") {
                     VStack(alignment: .leading, spacing: 12) {
@@ -199,5 +178,77 @@ struct MineView: View {
         }
         .font(.subheadline)
         .frame(minHeight: 44)
+    }
+}
+
+
+struct RouteSettingsSection: View {
+    @EnvironmentObject private var session: WebSession
+    @Binding var draft: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("内置 www.sehuatang.org、sehuatang.org、www.sehuatang.net、98tang.com。只保存 HTTPS 站点主机，不保存账号、密码或 Cookie。")
+                .font(.footnote)
+                .foregroundStyle(ForumChrome.secondary)
+            ForEach(session.routes) { route in
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        Task { await session.selectRoute(route.host) }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Text(route.host)
+                                .font(.subheadline)
+                                .foregroundStyle(route.enabled ? ForumChrome.text : ForumChrome.secondary)
+                            Spacer()
+                            if session.host == route.host {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(ForumChrome.accent)
+                            }
+                        }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(ForumPressStyle())
+                    .disabled(!route.enabled)
+                    .accessibilityValue(session.host == route.host ? "已选择" : "未选择")
+                    HStack {
+                        Button(route.enabled ? "停用" : "启用") {
+                            session.setRouteEnabled(route.host, !route.enabled)
+                        }
+                        .font(.footnote)
+                        Spacer()
+                        if route.builtin {
+                            Text("内置")
+                                .font(.footnote)
+                                .foregroundStyle(ForumChrome.secondary)
+                        } else {
+                            Button("删除", role: .destructive) {
+                                session.removeRoute(route.host)
+                            }
+                            .font(.footnote)
+                        }
+                    }
+                }
+                Divider().overlay(ForumChrome.line)
+            }
+            TextField("https:// 站点主机", text: $draft)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.subheadline)
+                .frame(minHeight: 44)
+            Button("添加线路") { session.addRoute(draft); draft = "" }
+                .font(.subheadline.weight(.semibold))
+                .frame(minHeight: 44)
+            if let notice = session.routeNotice, !notice.isEmpty {
+                Text(notice)
+                    .font(.footnote)
+                    .foregroundStyle(ForumChrome.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("org 与裸 sehuatang.org 视为同站点。首次切到 .net / 98tang.com 会先做不含登录 Cookie 的只读验证，确认最终跳转后才适配现有登录；验证失败不会把原 Cookie 发到未知线路。")
+                .font(.footnote)
+                .foregroundStyle(ForumChrome.secondary)
+        }
     }
 }
