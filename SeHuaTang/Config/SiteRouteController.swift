@@ -72,6 +72,7 @@ final class SiteRouteController {
             return RouteSwitchOutcome(migrated: false,
                 notice: "匿名 HTTPS 检查未确认最终目标，未使用该线路已有 Cookie。请稍后重试或独立打开已知入口。", ready: false)
         }
+        guard enabledHosts.contains(target) else { return .init(migrated: false, notice: "线路已删除或停用", ready: false) }
         select(target)
         let notice = SiteRoutePolicy.sameSiteDirect(source, target)
             ? "已切换到 \(target)。仅按原 Cookie Domain 自然共享；host-only Cookie 不复制，必要时独立登录。"

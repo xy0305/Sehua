@@ -502,7 +502,7 @@ struct ThreadDetailView: View {
     }
 
     private func openBodyLink(_ url: URL) {
-        guard let route = SiteRoute.resolve(url) else { return }
+        guard let route = SiteRoute.resolve(url, activeHost: session.host) else { return }
         if case .resource = route { SiteLinks.open(url) } else if linkRoute == nil { tappedLinkURL = url; linkRoute = route }
     }
 
@@ -513,7 +513,7 @@ struct ThreadDetailView: View {
                 .font: run.bold ? UIFont(descriptor: UIFont.preferredFont(forTextStyle: .body).fontDescriptor.withSymbolicTraits(.traitBold) ?? UIFont.preferredFont(forTextStyle: .body).fontDescriptor, size: 0) : UIFont.preferredFont(forTextStyle: .body),
                 .foregroundColor: run.color.map { UIColor(bodyColor($0)) } ?? UIColor.label
             ]
-            if let url = run.url, SiteRoute.resolve(url) != nil { attributes[.link] = url }
+            if let url = run.url, SiteRoute.resolve(url, activeHost: session.host) != nil { attributes[.link] = url }
             result.append(NSAttributedString(string: run.text, attributes: attributes))
         }
         return result

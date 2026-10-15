@@ -6,7 +6,7 @@ enum SiteRoutePolicy {
     static var builtinHosts: [String] { SiteConfig.mirrors }
     static let orgFamily: Set<String> = ["www.sehuatang.org", "sehuatang.org"]
     /// Built-in entry points only; this list is NOT an ownership or account trust claim.
-    static let confirmedFamily: Set<String> = [
+    static let builtinEntries: Set<String> = [
         "www.sehuatang.org", "sehuatang.org", "www.sehuatang.net", "98tang.com"
     ]
 
@@ -60,7 +60,7 @@ enum SiteRoutePolicy {
 
     static func isSiteHost(_ host: String) -> Bool {
         let host = host.lowercased()
-        return confirmedFamily.contains(host)
+        return builtinEntries.contains(host)
     }
 
     static func isPublicHostname(_ host: String) -> Bool {
@@ -95,7 +95,7 @@ enum SiteRoutePolicy {
         return true
     }
 
-    /// org and bare sehuatang.org are the same site and may migrate immediately.
+    /// org parent/subdomain may naturally share Domain cookies; never rewrite host-only cookies.
     static func sameSiteDirect(_ source: String, _ target: String) -> Bool {
         orgFamily.contains(source.lowercased()) && orgFamily.contains(target.lowercased())
     }
@@ -230,8 +230,8 @@ struct ScopedCookie: Codable, Equatable, Sendable {
     var expires: Date?
 }
 
-/// Login cookies keyed by the host they were adapted for. Switching never
-/// copies them until same-site migration is confirmed.
+/// Legacy export shape retained for regression and purge-key compatibility only.
+/// Production never loads, persists, or adapts this ledger; WebKit owns cookies.
 struct RouteCookieLedger: Equatable, Sendable {
     static let storageKey = "sht.routeCookies.v1"
     var scopes: [String: [ScopedCookie]]
@@ -254,7 +254,7 @@ struct RouteCookieLedger: Equatable, Sendable {
 
     func clearingAll() -> RouteCookieLedger { RouteCookieLedger(scopes: [:]) }
 
-    /// Adapt names/values onto the target host. Domain is the target only.
+    /// Cross-host adaptation is disabled, including the org parent/subdomain pair.
     func migrating(from source: String, to target: String) -> RouteCookieLedger? {
         guard source == target else { return nil }
         guard let cookies = scopes[source], !cookies.isEmpty else { return self }

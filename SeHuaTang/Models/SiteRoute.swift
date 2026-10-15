@@ -4,11 +4,11 @@ import Foundation
 enum SiteRoute: Hashable, Identifiable {
     case thread(Int), forum(Int), member(Int), web(URL), resource(URL)
     var id: String { String(describing: self) }
-    static func resolve(_ url: URL) -> SiteRoute? {
+    static func resolve(_ url: URL, activeHost: String? = nil) -> SiteRoute? {
         let scheme = url.scheme?.lowercased() ?? ""
         if scheme == "magnet" || scheme == "ed2k" { return .resource(url) }
         guard ["http", "https"].contains(scheme), let host = url.host?.lowercased() else { return nil }
-        let local = SiteRoutePolicy.isSiteHost(host)
+        let local = SiteRoutePolicy.isSiteHost(host) || host == activeHost
         if local {
             let path = url.path.lowercased()
             let items = URLComponents(url: url, resolvingAgainstBaseURL: true)?.queryItems ?? []

@@ -81,6 +81,15 @@ import WebKit
         _ = try await network.data(url:retryURL,referer:origin)
         let cookie = HTTPCookie(properties:[.domain:"source.example",.path:"/",.name:"auth",.value:"fixture-A"])!
         let other = HTTPCookie(properties:[.domain:"source.example",.path:"/",.name:"auth",.value:"fixture-B"])!
+        let parentCookie = HTTPCookie(properties:[.domain:"sehuatang.org",.path:"/",.name:"auth",.value:"host-only",.secure:"TRUE"])!
+        let domainCookie = HTTPCookie(properties:[.domain:".sehuatang.org",.path:"/",.name:"auth",.value:"domain-scoped",.secure:"TRUE"])!
+        let www = URL(string:"https://www.sehuatang.org/image.gif")!
+        precondition(SiteImageNetwork.request(url:www,referer:origin,cookies:[parentCookie]).0.value(forHTTPHeaderField:"Cookie") == nil, "host-only image cookies never widen to subdomain")
+        precondition(SiteImageNetwork.request(url:www,referer:origin,cookies:[domainCookie]).0.value(forHTTPHeaderField:"Cookie")?.contains("domain-scoped") == true, "native domain-scoped sharing retained")
+        for foreign in ["www.sehuatang.net", "98tang.com", "forum.swift.org"] {
+            let target = URL(string:"https://\(foreign)/image.gif")!
+            precondition(SiteImageNetwork.request(url:target,referer:origin,cookies:[domainCookie]).0.value(forHTTPHeaderField:"Cookie") == nil, "cross-domain images never receive source login")
+        }
         let keyA=SiteImageNetwork.request(url:url,referer:origin,cookies:[cookie]).1
         let keyB=SiteImageNetwork.request(url:url,referer:origin,cookies:[other]).1
         precondition(keyA != keyB,"CDN URL without matching cookie must still be account-isolated")
