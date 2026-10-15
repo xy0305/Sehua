@@ -95,7 +95,8 @@ final class SiteRouteController {
             return RouteSwitchOutcome(migrated: false, notice: "已切换到 \(target)。当前线路没有可迁移的登录 Cookie。")
         }
         if source == target || SiteRoutePolicy.sameSiteDirect(source, target) || verifiedTargets.contains(migrationKey(source, target)) {
-            return await applyMigration(from: source, to: target, kind: "同站点" if source != target else "当前线路")
+            let kind = source == target ? "当前线路" : "同站点"
+            return await applyMigration(from: source, to: target, kind: kind)
         }
         guard SiteRoutePolicy.requiresReadOnlyVerification(source, target) else {
             return RouteSwitchOutcome(migrated: false, notice: "未确认同站点，未发送原登录 Cookie。")
