@@ -11,8 +11,7 @@ enum SiteConfig {
     static let defaultHost = "www.sehuatang.org"
     /// Enabled routes, not a hardcoded pair. Builtin family includes .net and 98tang.com.
     static var mirrors: [String] {
-        let enabled = SiteRouteController.shared.enabledHosts
-        return enabled.isEmpty ? SiteRoutePolicy.builtinHosts : enabled
+        SiteRoutePolicy.builtinHosts
     }
     // BuiltinForums maps fid 97 to 资源出售区; never infer this from thread titles.
     static let resourceSaleFID = 97
