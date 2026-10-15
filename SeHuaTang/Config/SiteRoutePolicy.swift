@@ -3,12 +3,7 @@ import Foundation
 /// HTTPS site-route policy. Pure and side-effect free so production and
 /// regressions share one parser. Credentials are never part of a route.
 enum SiteRoutePolicy {
-    static let builtinHosts = [
-        "www.sehuatang.org",
-        "sehuatang.org",
-        "www.sehuatang.net",
-        "98tang.com"
-    ]
+    static var builtinHosts: [String] { SiteConfig.mirrors }
     static let orgFamily: Set<String> = ["www.sehuatang.org", "sehuatang.org"]
     /// Confirmed same-account family. .net / 98tang.com still need a read-only
     /// redirect check before any existing login cookie is adapted.
