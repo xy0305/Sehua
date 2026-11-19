@@ -174,7 +174,7 @@ struct MineView: View {
             .buttonStyle(.borderedProminent)
         }
         .padding(16)
-        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func section<Content: View>(_ title: String, symbol: String, @ViewBuilder content: () -> Content) -> some View {
@@ -186,7 +186,7 @@ struct MineView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func webRow(_ title: String) -> some View {

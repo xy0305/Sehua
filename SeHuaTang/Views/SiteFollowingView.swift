@@ -27,9 +27,13 @@ struct SiteFollowingView: View {
             if !status.isEmpty { Text(status).font(.footnote).foregroundStyle(.secondary).padding(.horizontal) }
             List(entries) { entry in
                 if section == 0 {
-                    NavigationLink(entry.title) { ThreadDetailView(tid: entry.id, title: entry.title) }
+                    NavigationLink { ThreadDetailView(tid: entry.id, title: entry.title) } label: {
+                        Text(entry.title).font(.headline)
+                    }
                 } else {
-                    NavigationLink(entry.title) { MemberSpaceView(uid: entry.id, name: entry.title) }
+                    NavigationLink { MemberSpaceView(uid: entry.id, name: entry.title) } label: {
+                        Text(entry.title).font(.headline)
+                    }
                 }
             }.listStyle(.insetGrouped)
                 .scrollContentBackground(.hidden)

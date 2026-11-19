@@ -93,11 +93,7 @@ struct PortalView: View {
                     .foregroundStyle(ForumChrome.secondary.opacity(0.7))
             }
             .padding(12)
-            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(ForumChrome.accent.opacity(0.16), lineWidth: 1)
-            )
+            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
     }
@@ -163,8 +159,8 @@ struct PortalView: View {
                 }
             }
         }
-        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 

@@ -62,7 +62,7 @@ struct SearchView: View {
             .disabled(trimmedQuery.isEmpty)
         }
         .padding(16)
-        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
     }
 
     @ViewBuilder private var statusSection: some View {
@@ -72,7 +72,7 @@ struct SearchView: View {
                 Text("正在搜索…").foregroundStyle(ForumChrome.secondary)
                 Spacer()
             }
-            .padding(16).background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+            .padding(16).background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
         } else if let error = store.searchState.errorMessage, store.searchHits.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 Label("搜索未完成", systemImage: "wifi.exclamationmark")
@@ -85,7 +85,7 @@ struct SearchView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16).background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+            .padding(16).background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
         } else if store.searchHits.isEmpty {
             VStack(spacing: 12) {
                 Image(systemName: "magnifyingglass").font(.system(size: 32)).foregroundStyle(ForumChrome.accent)
@@ -96,7 +96,7 @@ struct SearchView: View {
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity).padding(24)
-            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
         }
     }
 
@@ -122,8 +122,8 @@ struct SearchView: View {
                             Image(systemName: "chevron.right").font(.caption.weight(.semibold))
                                 .foregroundStyle(ForumChrome.accent)
                         }
-                        .multilineTextAlignment(.leading).padding(16)
-                        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+                        .multilineTextAlignment(.leading).padding(12)
+                        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
                     }
                     .buttonStyle(.plain)
                     .onAppear {

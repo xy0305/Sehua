@@ -71,7 +71,7 @@ struct ForumDirectory: View {
                     .foregroundStyle(ForumChrome.secondary)
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+                    .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
             }
             ForEach(visibleCategories) { category in
                 ForumCategoryCard(category: category, expanded: expandedIDs.contains(category.id)) {
@@ -193,7 +193,7 @@ private struct ForumCategoryCard: View {
                 }
             }
         }
-        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }

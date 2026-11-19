@@ -270,83 +270,84 @@ struct ThreadCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !item.previewURLs.isEmpty {
-                GeometryReader { geometry in
-                    let height = min(280, max(220, geometry.size.width * 0.72))
-                    ZStack(alignment: .bottom) {
-                        TabView(selection: $previewPage) {
-                            ForEach(Array(item.previewURLs.enumerated()), id: \.offset) { index, url in
-                                SiteImage(url: url, contentMode: .fit, preservesIntrinsicAspectRatio: false, animationBudget: 4 * 1024 * 1024) {
-                                    ZStack { ForumChrome.page; ProgressView() }
+                Color.clear
+                    .aspectRatio(2, contentMode: .fit)
+                    .overlay {
+                        GeometryReader { geometry in
+                            ZStack(alignment: .bottom) {
+                                TabView(selection: $previewPage) {
+                                    ForEach(Array(item.previewURLs.enumerated()), id: \.offset) { index, url in
+                                        SiteImage(url: url, contentMode: .fill, preservesIntrinsicAspectRatio: false, animationBudget: 4 * 1024 * 1024) {
+                                            ZStack { ForumChrome.page; ProgressView() }
+                                        }
+                                        .frame(width: geometry.size.width, height: geometry.size.height)
+                                        .clipped()
+                                        .background(ForumChrome.page)
+                                        .allowsHitTesting(false)
+                                        .accessibilityHidden(true)
+                                        .tag(index)
+                                    }
                                 }
-                                .frame(width: geometry.size.width, height: height)
-                                .background(ForumChrome.page)
+                                .tabViewStyle(.page(indexDisplayMode: .never))
+                                LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .center, endPoint: .bottom)
+                                    .frame(height: 72)
+                                    .allowsHitTesting(false)
+                            }
+                            .simultaneousGesture(DragGesture(minimumDistance: 5)
+                                .updating($draggingPreview) { _, state, _ in state = true })
+                            .onGeometryChange(for: Bool.self) { proxy in
+                                let rect = proxy.frame(in: .global)
+                                let viewport = UIScreen.main.bounds
+                                return rect.intersects(viewport) && rect.width > 0 && rect.height > 0
+                            } action: { intersectsViewport = $0 }
+                            .onAppear { appeared = true }
+                            .onDisappear { appeared = false; intersectsViewport = false }
+                            .task(id: rotationKey) {
+                                guard rotates else { return }
+                                do {
+                                    try await Task.sleep(nanoseconds: UInt64(PresentationTiming.carouselInterval * 1_000_000_000))
+                                    try Task.checkCancellation()
+                                    guard rotates else { return }
+                                    withAnimation(.easeInOut(duration: 0.3)) {
+                                        previewPage = (previewPage + 1) % item.previewURLs.count
+                                    }
+                                } catch { /* Leaving the viewport or manual input cancels the tick. */ }
+                            }
+                            .overlay(alignment: .topLeading) {
+                                if item.isSticky {
+                                    Text("置顶")
+                                        .font(.caption2.weight(.semibold))
+                                        .padding(.horizontal, 8).padding(.vertical, 4)
+                                        .foregroundStyle(.white)
+                                        .background(ForumChrome.accent, in: Capsule())
+                                        .padding(10)
+                                }
+                            }
+                            .overlay(alignment: .bottomLeading) {
+                                HStack(spacing: 5) {
+                                    ForEach(item.previewURLs.indices, id: \.self) { index in
+                                        Capsule().fill(index == previewPage ? Color.white : Color.white.opacity(0.45))
+                                            .frame(width: index == previewPage ? 14 : 5, height: 5)
+                                    }
+                                }
+                                .padding(12)
                                 .allowsHitTesting(false)
-                                .accessibilityHidden(true)
-                                .tag(index)
+                            }
+                            .overlay(alignment: .bottomTrailing) {
+                                Text("\(previewPage + 1)/\(item.previewURLs.count)")
+                                    .font(.caption2.monospacedDigit().weight(.semibold))
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                    .foregroundStyle(.white).background(.black.opacity(0.35), in: Capsule())
+                                    .padding(10).allowsHitTesting(false)
                             }
                         }
-                        .tabViewStyle(.page(indexDisplayMode: .never))
-                        LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .center, endPoint: .bottom)
-                            .frame(height: 72)
-                            .allowsHitTesting(false)
                     }
-                    .simultaneousGesture(DragGesture(minimumDistance: 5)
-                        .updating($draggingPreview) { _, state, _ in state = true })
-                    .onGeometryChange(for: Bool.self) { proxy in
-                        let rect = proxy.frame(in: .global)
-                        let viewport = UIScreen.main.bounds
-                        return rect.intersects(viewport) && rect.width > 0 && rect.height > 0
-                    } action: { intersectsViewport = $0 }
-                    .onAppear { appeared = true }
-                    .onDisappear { appeared = false; intersectsViewport = false }
-                    .task(id: rotationKey) {
-                        guard rotates else { return }
-                        do {
-                            try await Task.sleep(nanoseconds: UInt64(PresentationTiming.carouselInterval * 1_000_000_000))
-                            try Task.checkCancellation()
-                            guard rotates else { return }
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                previewPage = (previewPage + 1) % item.previewURLs.count
-                            }
-                        } catch { /* Leaving the viewport or manual input cancels the tick. */ }
-                    }
-                    .frame(height: height)
-                    .overlay(alignment: .topLeading) {
-                        if item.isSticky {
-                            Text("置顶")
-                                .font(.caption2.weight(.semibold))
-                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                .foregroundStyle(.white)
-                                .background(ForumChrome.accent, in: Capsule())
-                                .padding(10)
-                        }
-                    }
-                    .overlay(alignment: .bottomLeading) {
-                        HStack(spacing: 5) {
-                            ForEach(item.previewURLs.indices, id: \.self) { index in
-                                Capsule().fill(index == previewPage ? Color.white : Color.white.opacity(0.45))
-                                    .frame(width: index == previewPage ? 14 : 5, height: 5)
-                            }
-                        }
-                        .padding(12)
-                        .allowsHitTesting(false)
-                    }
-                    .overlay(alignment: .bottomTrailing) {
-                        Text("\(previewPage + 1)/\(item.previewURLs.count)")
-                            .font(.caption2.monospacedDigit().weight(.semibold))
-                            .padding(.horizontal, 8).padding(.vertical, 4)
-                            .foregroundStyle(.white).background(.black.opacity(0.35), in: Capsule())
-                            .padding(10).allowsHitTesting(false)
-                    }
-                }
-                .aspectRatio(1 / 0.72, contentMode: .fit)
-                .frame(minHeight: 220, maxHeight: 280)
-                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22))
+                    .clipped()
             }
             NavigationLink { destination } label: {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(item.title)
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(ForumChrome.text)
                         .lineSpacing(2)
                         .multilineTextAlignment(.leading)
@@ -373,24 +374,16 @@ struct ThreadCard: View {
                     .font(.caption)
                     .foregroundStyle(ForumChrome.secondary)
                 }
-                .padding(16)
+                .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(ForumPressStyle())
         }
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26))
-        .overlay {
-            RoundedRectangle(cornerRadius: 26)
-                .strokeBorder(
-                    LinearGradient(colors: [.white.opacity(0.72), .white.opacity(0.18)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing),
-                    lineWidth: 0.8
-                )
-        }
-        .shadow(color: .black.opacity(0.08), radius: 18, y: 8)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
     }
 }
 

@@ -263,9 +263,9 @@ struct ThreadDetailView: View {
                 .foregroundStyle(ForumChrome.accent)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
-                .background(ForumChrome.side, in: RoundedRectangle(cornerRadius: 16))
+                .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 16)
-                .padding(.bottom, 16)
+                .padding(.bottom, 12)
 
                 if let post = d.posts.first {
                     authorBar(post)

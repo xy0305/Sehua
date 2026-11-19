@@ -26,9 +26,13 @@ struct MemberSpaceView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
                             header
+                                .padding(.horizontal, 16)
                             if !status.isEmpty {
-                                Text(status).font(.footnote).foregroundStyle(.secondary)
-                                Button("重试加载主题") { Task { await loadMore() } }
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(status).font(.footnote).foregroundStyle(.secondary)
+                                    Button("重试加载主题") { Task { await loadMore() } }
+                                }
+                                .padding(.horizontal, 16)
                             }
                             if let space, !space.threads.isEmpty {
                                 LazyVStack(spacing: 0) {
@@ -39,25 +43,25 @@ struct MemberSpaceView: View {
                                             ThreadCard(item: item)
                                         }
                                         .buttonStyle(.plain)
-                                        Divider().padding(.leading, 76)
                                     }
                                 }
-                                .background(ForumChrome.bar)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
                                 if space.hasNext {
                                     Button(loadingMore ? "正在加载下一页" : "加载更多主题") { Task { await loadMore() } }
                                         .frame(maxWidth: .infinity, minHeight: 44)
                                         .disabled(loadingMore)
+                                        .padding(.horizontal, 16)
                                 } else {
                                     Text("已显示全部 \(space.threads.count) 个主题")
                                         .font(.caption).foregroundStyle(ForumChrome.secondary)
                                         .frame(maxWidth: .infinity)
+                                        .padding(.horizontal, 16)
                                 }
                             } else if state != .loading {
                                 ContentUnavailableView("没有可显示的主题", systemImage: "text.bubble", description: Text("已打开该用户主页。主题可能需要登录，或页面结构未能识别。"))
+                                    .padding(.horizontal, 16)
                             }
                         }
-                        .padding(12)
+                        .padding(.vertical, 12)
                     }
                 }
             }

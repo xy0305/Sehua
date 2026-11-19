@@ -99,7 +99,7 @@ struct ForumLoadStatus: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
         } else if let error = state.errorMessage {
             VStack(alignment: .leading, spacing: 10) {
                 Label("\(title)加载失败", systemImage: "wifi.exclamationmark")
@@ -127,7 +127,7 @@ struct ForumLoadStatus: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 16))
+            .background(ForumChrome.bar, in: RoundedRectangle(cornerRadius: 12))
         }
     }
 }
